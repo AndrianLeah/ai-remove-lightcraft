@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent  # the install folder: airemove/, 
 CONFIG_FILE = ROOT / "airemove.json"  # written by the installer
 DEFAULT_PORT = 7980
 LIGHTCRAFT_ID = "ai.storyteller.lightcraft"  # Flatpak / desktop entry id
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 
 def system():
