@@ -305,3 +305,270 @@ class FLUX:
     def unload(self):
         del self.pipe
         _free_gpu()
+
+
+# ------------------------------------------------------------------------------------------------ effect-aware removal
+# EXPERIMENTAL. These engines remove the object together with its shadow and reflection. Their fill(...) returns
+# (image, effect): effect is the region the model decided to change (object + shadow, L mode, src size), which can
+# reach beyond the mask — the blend must use it as the hole, or the removed shadow is pasted back.
+OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was trained with
+OSOR_T = 0.4  # its single denoising step starts from 40 % noise on the photo itself (object included)
+
+
+def _lora_targets(state, prefix):
+    """PEFT module names of a raw OSOR state dict ("<prefix><module>.lora_A.default.weight")."""
+    return sorted({k[len(prefix):].rsplit(".lora_", 1)[0] for k in state if ".lora_A." in k})
+
+
+class OSORFlux:
+    """OSOR (ECCV 2026) on FLUX.1 Fill [dev]: one step, ~10 GB at the peak (FLUX's quantized transformer). The
+    checkpoint is a rank-64 LoRA plus a widened output layer: 64 velocity channels + 4 for the effect alpha."""
+    name = "OSOR"
+
+    def __init__(self, log=print):
+        dev = device()
+        import torch
+        from diffusers import FluxFillPipeline, FluxTransformer2DModel, GGUFQuantizationConfig
+        from diffusers.utils import logging as dl
+        from peft import LoraConfig, inject_adapter_in_model
+        dl.set_verbosity_error()
+        self.torch, self.dev, self.repo = torch, dev, MODELS / "FLUX.1-Fill-dev"
+        gg = MODELS / "gguf"
+        quant = next(q for q in FLUX_QUANTS if (gg / f"flux1-fill-dev-{q}.gguf").exists())
+        tr = FluxTransformer2DModel.from_single_file(
+            str(gg / f"flux1-fill-dev-{quant}.gguf"),
+            quantization_config=GGUFQuantizationConfig(compute_dtype=torch.bfloat16), config=str(self.repo),
+            subfolder="transformer", torch_dtype=torch.bfloat16)
+        state = torch.load(MODELS / "osor" / "osor-fluxfill" / "weights" / "fluxfill_phase2.pth", map_location="cpu",
+                           weights_only=True)
+        pre = "transformer.base_model.model."
+        targets = _lora_targets(state, pre)
+        inject_adapter_in_model(LoraConfig(r=64, lora_alpha=64, target_modules=targets), tr)
+        old = tr.proj_out
+        tr.proj_out = torch.nn.Linear(old.in_features, 68, dtype=torch.bfloat16)
+        sd = {k[len(pre):]: v.to(torch.bfloat16) for k, v in state.items()}
+        missing, unexpected = tr.load_state_dict(sd, strict=False)
+        if unexpected or any(".lora_" in k or k.startswith("proj_out") for k in missing):
+            raise RuntimeError(f"OSOR: checkpoint does not match ({len(unexpected)} unexpected keys)")
+        for n, p in tr.named_parameters():  # PEFT made them float32: the quantized base has no float dtype to follow
+            if ".lora_" in n:
+                p.data = p.data.to(torch.bfloat16)
+        self.pipe = FluxFillPipeline.from_pretrained(self.repo, transformer=tr, text_encoder=None, text_encoder_2=None,
+                                                     tokenizer=None, tokenizer_2=None,
+                                                     torch_dtype=torch.bfloat16).to(dev)
+        self.pipe.vae.enable_tiling()
+        log(f"OSOR (FLUX) ready ({dev}, {quant}, {len(targets)} LoRA layers)")
+
+    def embeddings(self, log=print):
+        """The fixed prompt, T5 at 512 tokens as in training; encoded once on the processor and cached."""
+        torch = self.torch
+        d = MODELS / "flux_prompts"
+        d.mkdir(exist_ok=True)
+        f = d / "osor_flux.pt"
+        if not f.exists():
+            from diffusers import FluxFillPipeline
+            log("OSOR: encoding the prompt on the processor (once)…")
+            enc = FluxFillPipeline.from_pretrained(self.repo, transformer=None, vae=None, torch_dtype=torch.bfloat16)
+            with torch.no_grad():
+                pe, pooled, _ = enc.encode_prompt(prompt=OSOR_PROMPT, prompt_2=OSOR_PROMPT, device="cpu",
+                                                  max_sequence_length=512)
+            torch.save({"prompt": OSOR_PROMPT, "prompt_embeds": pe, "pooled": pooled}, f)
+            del enc
+            import gc
+            gc.collect()
+        return torch.load(f)
+
+    def fill(self, src: Image.Image, mask: Image.Image, prompt: str = "", seed: int = 0, progress=None, log=print):
+        torch, pipe, dev = self.torch, self.pipe, self.dev
+        emb = self.embeddings(log)
+        S = FLUX_SIZES[0] if src.width <= (FLUX_SIZES[0] + FLUX_SIZES[1]) // 2 else FLUX_SIZES[1]
+        g = torch.Generator("cpu").manual_seed(seed)
+        x = torch.from_numpy(np.array(src.convert("RGB").resize((S, S), Image.LANCZOS))).permute(2, 0, 1)[None]
+        x = (x.float() / 127.5 - 1).to(dev, torch.bfloat16)
+        m = torch.from_numpy(np.asarray(mask.resize((S, S), Image.NEAREST)) > 127).float()[None, None]
+        vae, L = pipe.vae, S // 8
+        with torch.no_grad():
+            z = vae.encode(x).latent_dist.mode().float()
+            z = (z - vae.config.shift_factor) * vae.config.scaling_factor
+            zp = pipe._pack_latents(z, 1, 16, L, L)
+            mp = m.view(1, L, 8, L, 8).permute(0, 2, 4, 1, 3).reshape(1, 64, L, L)
+            mp = pipe._pack_latents(mp, 1, 64, L, L).to(dev)
+            noise = torch.randn(zp.shape, generator=g).to(dev)
+            zt = (1 - OSOR_T) * zp + OSOR_T * noise
+            ids = pipe._prepare_latent_image_ids(1, L // 2, L // 2, dev, torch.bfloat16)
+            pe = emb["prompt_embeds"].to(dev, torch.bfloat16)
+            out = pipe.transformer(
+                hidden_states=torch.cat([zt, zp, mp], dim=2).to(torch.bfloat16),
+                timestep=torch.full((1,), OSOR_T, device=dev, dtype=torch.bfloat16),
+                guidance=torch.full((1,), 30.0, device=dev, dtype=torch.float32),
+                pooled_projections=emb["pooled"].to(dev, torch.bfloat16), encoder_hidden_states=pe,
+                txt_ids=torch.zeros(pe.shape[1], 3, device=dev, dtype=torch.bfloat16), img_ids=ids,
+                return_dict=False)[0].float()
+            if progress:
+                progress(1, 1)
+            v, a = out[..., :64], out[..., 64:]
+
+            def unpack(p, c):  # (1, tokens, 4c) -> (1, c, L, L)
+                return p.view(1, L // 2, L // 2, c, 2, 2).permute(0, 3, 1, 4, 2, 5).reshape(1, c, L, L)
+            alpha = torch.sigmoid(unpack(a, 1))
+            pred = unpack(zt - OSOR_T * v, 16)
+            pred = pred / vae.config.scaling_factor + vae.config.shift_factor
+            base = z / vae.config.scaling_factor + vae.config.shift_factor
+            img = vae.decode((pred * alpha + base * (1 - alpha)).to(torch.bfloat16)).sample.float()
+        img = ((img[0].clamp(-1, 1) + 1) * 127.5).round().byte().permute(1, 2, 0).cpu().numpy()
+        eff = (torch.nn.functional.interpolate(alpha, size=(S, S), mode="bilinear")[0, 0] * 255).byte().cpu().numpy()
+        _free_gpu()
+        return (Image.fromarray(img).resize(src.size, Image.LANCZOS),
+                Image.fromarray(eff).resize(src.size, Image.BILINEAR))
+
+    def unload(self):
+        del self.pipe
+        _free_gpu()
+
+
+class OSORSDXL:
+    """OSOR on SDXL Inpainting: one step at 512 px, ~7 GB at the peak. Rank-256 LoRA on the UNet plus a 5-channel output
+    convolution (4 noise channels + the effect alpha). Licence: CreativeML Open RAIL++-M (commercial use allowed)."""
+    name = "OSOR-SDXL"
+    S = 512  # its training resolution
+
+    def __init__(self, log=print):
+        dev = device()
+        import torch
+        from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
+        from peft import LoraConfig
+        self.torch, self.dev = torch, dev
+        self.dt = dt = torch.float32 if dev == "cpu" else torch.float16
+        unet = UNet2DConditionModel.from_pretrained(MODELS / "sdxl-inpaint", subfolder="unet", variant="fp16",
+                                                    torch_dtype=dt)
+        state = torch.load(MODELS / "osor" / "osor-sdxlinpainting" / "weights" / "sdxlinpainting_phase2.pth",
+                           map_location="cpu", weights_only=True)
+        targets = _lora_targets(state, "unet.")
+        unet.add_adapter(LoraConfig(r=256, lora_alpha=256, target_modules=targets))
+        old = unet.conv_out
+        unet.conv_out = torch.nn.Conv2d(old.in_channels, 5, old.kernel_size, padding=old.padding, dtype=dt)
+        missing, unexpected = unet.load_state_dict({k[5:]: v.to(dt) for k, v in state.items()}, strict=False)
+        if unexpected or any(".lora_" in k or k.startswith("conv_out") for k in missing):
+            raise RuntimeError(f"OSOR-SDXL: checkpoint does not match ({len(unexpected)} unexpected keys)")
+        self.unet = unet.to(dev).eval()
+        self.vae = AutoencoderKL.from_pretrained(MODELS / "sdxl-vae-fp16-fix", torch_dtype=dt).to(dev)
+        self.sched = DDPMScheduler.from_pretrained(MODELS / "sdxl-inpaint", subfolder="scheduler")
+        self.emb = self._embeddings()
+        log(f"OSOR (SDXL) ready ({dev}, {len(targets)} LoRA layers)")
+
+    def _embeddings(self):
+        torch = self.torch
+        from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
+        base = MODELS / "sdxl-inpaint"
+        out = []
+        for sub, cls in (("", CLIPTextModel), ("_2", CLIPTextModelWithProjection)):
+            tok = CLIPTokenizer.from_pretrained(base, subfolder="tokenizer" + sub)
+            enc = cls.from_pretrained(base, subfolder="text_encoder" + sub, variant="fp16", torch_dtype=torch.float32)
+            ids = tok(OSOR_PROMPT, padding="max_length", max_length=tok.model_max_length, truncation=True,
+                      return_tensors="pt").input_ids
+            with torch.no_grad():
+                o = enc(ids, output_hidden_states=True)
+            out.append(o)
+            del enc
+        pe = torch.cat([out[0].hidden_states[-2], out[1].hidden_states[-2]], dim=-1)
+        return pe.to(self.dev, self.dt), out[1].text_embeds.to(self.dev, self.dt)
+
+    def fill(self, src: Image.Image, mask: Image.Image, prompt: str = "", seed: int = 0, progress=None, log=print):
+        torch, dev, dt, S = self.torch, self.dev, self.dt, self.S
+        g = torch.Generator("cpu").manual_seed(seed)
+        x = torch.from_numpy(np.array(src.convert("RGB").resize((S, S), Image.LANCZOS))).permute(2, 0, 1)[None]
+        x = (x.float() / 127.5 - 1).to(dev, dt)
+        m = torch.from_numpy(np.asarray(mask.resize((S, S), Image.NEAREST)) > 127).float()[None, None]
+        sf = self.vae.config.scaling_factor
+        with torch.no_grad():
+            z = self.vae.encode(x).latent_dist.mode() * sf
+            ml = torch.nn.functional.max_pool2d(m, 8).to(dev, dt)
+            t = torch.full((1,), int(OSOR_T * 1000), dtype=torch.long)
+            noise = torch.randn(z.shape, generator=g).to(dev, dt)
+            zt = self.sched.add_noise(z.float().cpu(), noise.float().cpu(), t).to(dev, dt)
+            pe, pooled = self.emb
+            out = self.unet(torch.cat([zt, ml, z], dim=1), t.to(dev), encoder_hidden_states=pe,
+                            added_cond_kwargs={"text_embeds": pooled,
+                                               "time_ids": torch.tensor([[S, S, 0, 0, S, S]], device=dev, dtype=dt)},
+                            return_dict=False)[0].float()
+            if progress:
+                progress(1, 1)
+            eps, alpha = out[:, :4], torch.sigmoid(out[:, 4:])
+            ab = self.sched.alphas_cumprod[t].to(dev).float().view(1, 1, 1, 1)
+            x0 = (zt.float() - (1 - ab).sqrt() * eps) / ab.sqrt()
+            lat = x0 * alpha + z.float() * (1 - alpha)
+            img = self.vae.decode((lat / sf).to(dt)).sample.float()
+        img = ((img[0].clamp(-1, 1) + 1) * 127.5).round().byte().permute(1, 2, 0).cpu().numpy()
+        eff = (torch.nn.functional.interpolate(alpha, size=(S, S), mode="bilinear")[0, 0] * 255).byte().cpu().numpy()
+        _free_gpu()
+        return (Image.fromarray(img).resize(src.size, Image.LANCZOS),
+                Image.fromarray(eff).resize(src.size, Image.BILINEAR))
+
+    def unload(self):
+        del self.unet, self.vae
+        _free_gpu()
+
+
+def _cv2_shim():
+    """ObjectClear's fusion imports OpenCV for five calls; without opencv in the venv, the same with scipy."""
+    import sys
+    import types
+    from scipy import ndimage as ndi
+    cv2 = types.ModuleType("cv2")
+    cv2.THRESH_BINARY, cv2.INTER_NEAREST, cv2.MORPH_ELLIPSE = 0, 0, 2
+    cv2.threshold = lambda a, t, mx, _type: (t, np.where(a > t, mx, 0).astype(a.dtype))
+    cv2.resize = lambda a, size, interpolation=0: np.asarray(
+        Image.fromarray(a.astype(np.float32), "F").resize(size, Image.NEAREST))
+
+    def ellipse(_shape, ksize):
+        w, h = ksize
+        yy, xx = np.mgrid[:h, :w]
+        return ((((xx - (w - 1) / 2) / (w / 2)) ** 2 + ((yy - (h - 1) / 2) / (h / 2)) ** 2) <= 1).astype(np.uint8)
+    cv2.getStructuringElement = ellipse
+    cv2.dilate = lambda a, k, iterations=1: ndi.grey_dilation(a, footprint=k.astype(bool))
+    cv2.GaussianBlur = lambda a, ksize, sigmaX=0: ndi.gaussian_filter(a, sigmaX, truncate=(ksize[0] // 2) / sigmaX)
+    sys.modules["cv2"] = cv2
+
+
+class ObjectClear:
+    """ObjectClear (CVPR 2026, NTU S-Lab): SDXL fine-tuned to remove objects with their effects; the object is also
+    shown to it through a CLIP image encoder, and an attention map of object + effects guides the final fusion.
+    Trained at 512 px, 20 steps. Licence: S-Lab 1.0, NON-commercial. Code: models/objectclear/code."""
+    name = "ObjectClear"
+    S = 512
+
+    def __init__(self, log=print):
+        import sys
+        dev = device()
+        import torch
+        code = str(MODELS / "objectclear" / "code")
+        if code not in sys.path:
+            sys.path.insert(0, code)
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            _cv2_shim()
+        from objectclear.pipelines import ObjectClearPipeline
+        self.torch, self.dev = torch, dev
+        dt = torch.float32 if dev == "cpu" else torch.float16
+        self.pipe = ObjectClearPipeline.from_pretrained_with_custom_modules(
+            str(MODELS / "objectclear"), torch_dtype=dt, variant="fp16" if dt == torch.float16 else None,
+            apply_attention_guided_fusion=True).to(dev)
+        self.pipe.set_progress_bar_config(disable=True)
+        log(f"ObjectClear ready ({dev})")
+
+    def fill(self, src: Image.Image, mask: Image.Image, prompt: str = "", seed: int = 0, steps: int = 20,
+             guidance: float = 2.5, progress=None, log=print):
+        S = self.S
+        res = self.pipe(prompt="remove the instance of object", image=src.convert("RGB").resize((S, S), Image.LANCZOS),
+                        mask_image=mask.resize((S, S), Image.NEAREST), num_inference_steps=steps,
+                        guidance_scale=guidance, height=S, width=S, return_attn_map=True,
+                        generator=self.torch.Generator(self.dev).manual_seed(seed),
+                        callback_on_step_end=_step_callback(progress, steps))
+        eff = res.attns[0].convert("L") if getattr(res, "attns", None) else mask
+        _free_gpu()
+        return res.images[0].resize(src.size, Image.LANCZOS), eff.resize(src.size, Image.BILINEAR)
+
+    def unload(self):
+        del self.pipe
+        _free_gpu()
