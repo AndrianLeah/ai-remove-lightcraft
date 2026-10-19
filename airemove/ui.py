@@ -592,17 +592,17 @@ class App:
         self.zsel.reset()
 
     def refresh_models(self):
-        """Model names with what one variant takes on this PC (from the last runs)."""
+        """The menu says what each model is good for and what one variant takes on this PC (from the last runs); the
+        model's name and the details go under it (show_model_info)."""
         keys = self.model_keys()
         cur = self.model_key() if self.model_var.get() else A.setting("model", keys[0])
         cur = cur if cur in keys else keys[0]
         self.model_labels = {
-            "sdxl": _("SDXL · ~{time}/variant", time=self.fmt_s(A.expected("sdxl_variant"))),
-            "flux": _("FLUX Fill · ~{time}/variant", time=self.fmt_s(A.expected("flux_variant"))),
-            "lama": _("LaMa only · ~{time}", time=self.fmt_s(A.expected("lama"))),
-            "osor": _("OSOR, with its shadow · ~{time}/variant", time=self.fmt_s(A.expected("osor_variant"))),
-            "objectclear": _("ObjectClear, with its shadow · ~{time}/variant",
-                             time=self.fmt_s(A.expected("objectclear_variant")))}
+            "sdxl": _("Generative, varied results · ~{time} each", time=self.fmt_s(A.expected("sdxl_variant"))),
+            "flux": _("Most realistic, large areas · ~{time} each", time=self.fmt_s(A.expected("flux_variant"))),
+            "lama": _("Quick fill, plain backgrounds · ~{time}", time=self.fmt_s(A.expected("lama"))),
+            "osor": _("Object + shadow, softer · ~{time} each", time=self.fmt_s(A.expected("osor_variant"))),
+            "objectclear": _("Object + shadow · ~{time} each", time=self.fmt_s(A.expected("objectclear_variant")))}
         self.model_box.configure(values=[self.model_labels[k] for k in keys])
         self.model_var.set(self.model_labels[cur])
         self.show_model_info()
