@@ -83,7 +83,7 @@ Senza SAM 3 la selezione si fa col pennello, oppure con una maschera chiamata "R
 | Modello | Quando usarlo | Peso | Licenza |
 |---|---|---|---|
 | **LaMa** | Oggetti piccoli e medi su sfondi semplici (muro, cielo, prato, asfalto). Gira sul processore, un solo risultato in pochi secondi. | 0,2 GB | Apache-2.0 |
-| **SDXL** | Aree medie con dettagli: inventa contenuto coerente con la scena e ogni variante è diversa. Circa 15–30 s a variante con una GPU. | 6,9 GB | CreativeML Open RAIL++-M |
+| **SDXL** | Aree medie con dettagli: inventa contenuto coerente con la scena e ogni variante è diversa. Circa 8–15 s a variante con una GPU. | 6,9 GB | CreativeML Open RAIL++-M |
 | **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. | 16,6 GB | FLUX.1 [dev] Non-Commercial |
 | **SAM 3** | La selezione con un clic. | 3,4 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
 

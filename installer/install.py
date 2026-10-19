@@ -58,7 +58,7 @@ MODELS = {  # name: (GB, what (translated where shown), licence, gated repo or N
     "lama": (0.2, N_("LaMa: quick fill on the processor, for small objects on plain backgrounds"), "Apache-2.0", None),
     "sam3": (3.4, N_("SAM 3: one-click selection (the same model as LightCraft's Object masks)"),
              "SAM License (Meta)", "facebook/sam3"),
-    "sdxl": (6.9, N_("SDXL Inpainting: generative variants on the GPU, ~15-30 s each"), "CreativeML Open RAIL++-M",
+    "sdxl": (6.9, N_("SDXL Inpainting: generative variants on the GPU, ~8-15 s each"), "CreativeML Open RAIL++-M",
              None),
     "flux": (16.6, N_("FLUX.1 Fill [dev] + Turbo: the most realistic, needs a 12+ GB GPU"),
              "FLUX.1 [dev] Non-Commercial License", "black-forest-labs/FLUX.1-Fill-dev"),
