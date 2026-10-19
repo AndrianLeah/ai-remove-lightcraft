@@ -128,12 +128,9 @@ def mcp(d):
 
 def uninstall(d):
     shortcut = config(d).get("shortcut")
-    if WIN:
-        cmd = ["cmd", "/c", d / "Uninstall AI Remove.cmd", "--yes"]
-    else:
-        cmd = ["sh", d / ("Uninstall AI Remove.command" if OS == "macos" else "uninstall.sh"), "--yes"]
-    expect(Path(cmd[2]).exists(), f"uninstaller {Path(cmd[2]).name} exists")
-    r = run(cmd)
+    script = d / {"windows": "Uninstall AI Remove.cmd", "macos": "Uninstall AI Remove.command"}.get(OS, "uninstall.sh")
+    expect(script.exists(), f"uninstaller {script.name} exists")
+    r = run((["cmd", "/c"] if WIN else ["sh"]) + [script, "--yes"])
     expect(r.returncode == 0, f"uninstaller exit status 0 (it was {r.returncode})")
     expect(not (d / "venv").exists() and not (d / "airemove.json").exists(), "venv and airemove.json removed")
     expect(not shortcut or not Path(shortcut).exists(), f"menu entry / app removed: {shortcut}")
