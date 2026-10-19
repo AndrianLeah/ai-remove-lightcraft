@@ -80,8 +80,9 @@ BTN, BTN_HI, FG, DIM = "#2f2f2f", "#3c3c3c", "#ececec", "#8e8e8e"
 ACCENT, ACCENT_HI, GREEN, GREEN_HI = "#e8c35a", "#f2d27a", "#3d8a55", "#4a9c63"
 PANEL = CARD
 RED = (235, 64, 52)
+SHADOW_RGB = (56, 198, 244)  # the selection's shadow part ("Include the shadow")
 WHITE = (240, 240, 240)
-MODEL_KEYS = ["sdxl", "flux", "lama"]
+MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "objectclear"]  # the tests' remove:n,i / model:i use these indices
 
 
 def outline(u, width=2):
@@ -442,6 +443,11 @@ class App:
         self.undo_btn.pack(side="left", fill="x", expand=True)
         self.clear_btn = self.button(urow, _("Clear"), self.clear, small=True)
         self.clear_btn.pack(side="left", fill="x", expand=True, padx=(int(6 * k), 0))
+        self.shadow_btn = None
+        if self.s.shadow_model():  # OSOR or ObjectClear installed: they find the object's shadow and reflection
+            self.shadow_btn = self.button(sel, "☀  " + _("Include the shadow"), self.include_shadow, small=True)
+            self.shadow_btn.configure(state="disabled")
+            self.shadow_btn.pack(fill="x", pady=(int(6 * k), 0))
 
         _hdr, gen = self.section(sp, _("Generate"))
         tk.Label(gen, text=_("Model"), font=self.f_small, fg=DIM, bg=CARD).pack(anchor="w")
@@ -593,7 +599,10 @@ class App:
         self.model_labels = {
             "sdxl": _("SDXL · ~{time}/variant", time=self.fmt_s(A.expected("sdxl_variant"))),
             "flux": _("FLUX Fill · ~{time}/variant", time=self.fmt_s(A.expected("flux_variant"))),
-            "lama": _("LaMa only · ~{time}", time=self.fmt_s(A.expected("lama")))}
+            "lama": _("LaMa only · ~{time}", time=self.fmt_s(A.expected("lama"))),
+            "osor": _("OSOR, with its shadow · ~{time}/variant", time=self.fmt_s(A.expected("osor_variant"))),
+            "objectclear": _("ObjectClear, with its shadow · ~{time}/variant",
+                             time=self.fmt_s(A.expected("objectclear_variant")))}
         self.model_box.configure(values=[self.model_labels[k] for k in keys])
         self.model_var.set(self.model_labels[cur])
         self.show_model_info()
@@ -622,7 +631,16 @@ class App:
             "flux": _("FLUX Fill — the most realistic: it respects light, perspective and the lines of architecture; "
                       "best for large or difficult areas and when SDXL invents odd things. ~{time} per variant (Turbo, "
                       "8 steps). It takes almost the whole GPU: switching to FLUX unloads SDXL and SAM (~15 s the first "
-                      "time; SAM reloads by itself at the next click).", time=self.fmt_s(flux))}
+                      "time; SAM reloads by itself at the next click).", time=self.fmt_s(flux)),
+            "osor": _("OSOR — removes the object together with its shadow and reflection, in one step (~{time}): you "
+                      "select only the object, OSOR decides how far its shadow goes. Softer than FLUX on large areas: "
+                      "for the most detail use \"Include the shadow\" and then FLUX. It runs on FLUX's GPU memory. "
+                      "Non-commercial licence, like FLUX.",
+                      time=self.fmt_s(A.expected("osor_variant"))),
+            "objectclear": _("ObjectClear — removes the object together with its shadow and reflection, ~{time} per "
+                             "variant, each one different. It works at 512 px: on large areas the detail is softer. "
+                             "Non-commercial licence (S-Lab).",
+                             time=self.fmt_s(A.expected("objectclear_variant")))}
         if hasattr(self, "model_info"):
             self.model_info.configure(text=info[self.model_key()])
 
@@ -645,6 +663,8 @@ class App:
         on = self.cur is not None and not self.cur.deleted and not self.writing
         self.more_btn.configure(state="normal" if on else "disabled")
         self.del_btn.configure(state="normal" if on else "disabled")
+        if self.shadow_btn is not None:
+            self.shadow_btn.configure(state="normal" if (has and ready) else "disabled")
 
     # ------------------------------------------------------------------------------------------ workers
     def post(self, kind, data=None):
@@ -685,6 +705,13 @@ class App:
                     __, r, n, model, prompt = job
                     if not r.deleted:
                         self.run_job(r, None, n, model, prompt)
+                elif job[0] == "shadow":
+                    __, mask = job
+                    model = s.shadow_model()
+                    secs = (0 if s.engine_loaded(model) else A.expected(f"{model}_load")) + A.expected("shadow")
+                    self.post("job_start", (_("Looking for the shadow"), secs))
+                    self.post("job_part", (_("Looking for the shadow"), 0.0, secs))
+                    self.post("shadow", s.find_shadow(mask))
                 elif job[0] == "save":
                     self.post("job_start", (_("Writing the DNG for LightCraft"), A.expected("save")))
                     self.post("job_part", (_("Saving"), 0.0, A.expected("save")))
@@ -843,9 +870,21 @@ class App:
     def on_job_end(self, _data):
         if self.jobs.qsize() == 0:
             self.busy = False
-            self.set_idle_status(_("Click something else to remove, or \"Save to LightCraft\"")
-                                 if self.s.removals else _("Click what you want to remove"))
+            msg, self.next_status = getattr(self, "next_status", None), None
+            self.set_idle_status(msg or (_("Click something else to remove, or \"Save to LightCraft\"")
+                                         if self.s.removals else _("Click what you want to remove")))
         self.update_buttons()
+
+    def on_shadow(self, m):
+        """The shadow/reflection found by "Include the shadow" joins the selection (one step: Undo takes it out)."""
+        if m is None:
+            self.next_status = _("No shadow or reflection found next to the selection")
+        elif not self.ops:  # the selection was cleared in the meantime
+            return
+        else:
+            self.commit(self.ops + [self.new_op("add", m, shadow=True)])
+            self.next_status = _("Shadow added to the selection (blue): \"Remove selection\" removes both · "
+                                 "{mod}+Z takes it out", mod=MOD)
 
     def on_no_sam(self, _data):
         """No SAM 3 model: selection with the brush (and LightCraft's "Rimuovi" masks) only."""
@@ -971,14 +1010,20 @@ class App:
                     ys, xs = self.outlines[r.id]
                     a[ys, xs] = ACCENT_RGB if r is self.cur else WHITE
         sel = np.zeros(a.shape[:2], bool)
+        shd = np.zeros(a.shape[:2], bool)  # the part "Include the shadow" added: tinted blue, not red
         for op in self.ops:
             if op["kind"] == "erase":
                 sel &= ~op["mask"]
+                shd &= ~op["mask"]
             else:
                 sel |= op["mask"]
+                if op.get("shadow"):
+                    shd |= op["mask"]
         self.sel_mask = sel
         if sel.any() and not self.show_original:
-            a[sel] = ((a[sel].astype(np.uint16) + np.array(RED, np.uint16)) // 2).astype(np.uint8)
+            obj = sel & ~shd
+            a[obj] = ((a[obj].astype(np.uint16) + np.array(RED, np.uint16)) // 2).astype(np.uint8)
+            a[shd] = ((a[shd].astype(np.uint16) + np.array(SHADOW_RGB, np.uint16)) // 2).astype(np.uint8)
             a[outline(sel, 2)] = RED
         if self.dim is not None:
             a[self.dim] = (a[self.dim] * 0.45).astype(np.uint8)
@@ -1165,6 +1210,15 @@ class App:
         self.show_model_info()
         if getattr(self, "model_labels", None):
             A.remember("model", self.model_key())
+
+    def include_shadow(self):
+        """"Include the shadow": OSOR (or ObjectClear) finds what goes with the selected object — its shadow, its
+        reflection — and it is added to the selection, in blue, to check before "Remove selection"."""
+        if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None:
+            return
+        self.jobs.put(("shadow", self.sel_mask.copy()))
+        self.busy = True
+        self.update_buttons()
 
     def remove_selection(self):
         if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None:
@@ -1435,7 +1489,8 @@ class App:
     def run_test_actions(self, actions):
         """Tests: drive the window through the real handlers. Actions (coordinates normalized to the photo):
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
-        snap:n · remove:n[,model 0 sdxl/1 flux/2 lama] · more:n · pick:i · select:id · delete · waitidle · save · quit"""
+        snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear] · more:n · pick:i ·
+        select:id · delete · waitidle · save · quit"""
         if not actions:
             return
         kind, __, arg = actions[0].partition(":")
@@ -1490,6 +1545,9 @@ class App:
                 A.ROOT / "work" / f"shot-{int(vals[0]) if vals else 0}.png")
             r.attributes("-topmost", False)
             delay = 100
+        elif kind == "shadow":
+            self.include_shadow()
+            delay = 500
         elif kind == "remove":
             self.count.delete(0, "end")
             self.count.insert(0, str(int(vals[0]) if vals else 1))

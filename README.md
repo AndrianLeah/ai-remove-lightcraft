@@ -16,7 +16,8 @@ The result goes back into a **RAW DNG**, so you keep developing it like any raw 
 1. In LightCraft, select a raw photo and press **Ctrl+Shift+X** (**Cmd+Shift+X** on a Mac).
 2. Click what should go: SAM 3 selects the whole object. Alt/Option+click takes a part out, Shift+click adds one, and
    the brush and eraser handle the rest.
-3. **Remove selection** generates a few variants with the model you chose. Pick the best one.
+3. **Remove selection** generates a few variants with the model you chose. Pick the best one. To remove the
+   object's shadow or reflection too, press **Include the shadow** first: it adds them to the selection, in blue.
 4. **Save to LightCraft** writes `<name>-AIRemove.dng`, stacked on the original with the same development.
 
 Every removal stays editable: regenerate it, pick another variant or delete it whenever you like. Everything lives in
@@ -27,6 +28,9 @@ one project file next to the raw (`<raw>.airemove`). The original raw is never m
 - **One-click selection** with SAM 3, refined with more clicks, a brush and an eraser.
 - **Three fill models.** LaMa is fast and runs on the processor. SDXL Inpainting makes generative variants. FLUX.1 Fill
   [dev] with Turbo-Alpha is the most realistic.
+- **Shadows and reflections (optional).** OSOR and ObjectClear remove an object together with its shadow and
+  reflection, though only the object is selected. "Include the shadow" uses OSOR to add the shadow to the selection,
+  so every model removes it.
 - **Writes a real RAW.** The fill is converted back into the camera's linear space and re-mosaicked into the Bayer data
   with matching sensor noise, so the DNG develops like the original.
 - **Seamless blending:** a Poisson membrane plus texture transfer from the ring around the hole.
@@ -114,6 +118,8 @@ temporary file, and the installer deletes that file as soon as it has read it.
 | SDXL Inpainting | Medium areas with detail; every variant differs; ~15–30 s each on a GPU | 6.9 GB | CreativeML Open RAIL++-M |
 | FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | 16.6 GB | FLUX.1 [dev] Non-Commercial |
 | SAM 3 | One-click selection | 3.4 GB (0 if LightCraft has it) | SAM License (Meta) |
+| OSOR (optional, on FLUX) | The object with its shadow and reflection, one step (~3–8 s); finds the shadow for "Include the shadow" | 0.6 GB | FLUX.1 [dev] Non-Commercial |
+| ObjectClear (optional) | The object with its shadow and reflection, ~5 s per variant, 512 px | 7.3 GB | S-Lab License 1.0 (non-commercial) |
 
 An optional prompt **in English** guides SDXL and FLUX, for example "old plaster wall" or "dark doorway".
 

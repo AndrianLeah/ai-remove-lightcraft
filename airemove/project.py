@@ -4,7 +4,8 @@ shows (<stem>-AIRemove.dng) is rebuilt from the project on every save, always in
 be regenerated, changed or deleted later without creating a new photo each time.
 
 Layout of the zip: project.json, r<id>/selection.png (1-bit, base.png frame), r<id>/area.png (1-bit, area frame),
-r<id>/NN.png (each variant, render space of the area).
+r<id>/NN.png (each variant, render space of the area), r<id>/NN_hole.png (1-bit, area frame: only for a variant
+that also removed the object's shadow — OSOR, ObjectClear — whose hole is larger than area.png).
 """
 import io
 import json
@@ -62,7 +63,12 @@ def save(s):
         for i, (label, im) in enumerate(cands):
             name = f"r{r.id}/{i:02d}.png"
             files[name] = _variant_bytes(r, label, im)
-            e["variants"].append({"label": label, "file": name})
+            v = {"label": label, "file": name}
+            hole = r.holes.get(label)
+            if hole is not None:
+                v["hole"] = f"r{r.id}/{i:02d}_hole.png"
+                files[v["hole"]] = r.png.setdefault(label + "#hole", mask_png(hole))
+            e["variants"].append(v)
         meta["removals"].append(e)
     tmp = p.with_name(p.name + ".tmp")
     with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:  # PNGs are compressed already
@@ -74,7 +80,8 @@ def save(s):
 
 
 def load(raw_path, log=print):
-    """(meta, [(entry, selection, area, [(label, PIL image, png bytes)])]) or None if there is no usable project."""
+    """(meta, [(entry, selection, area, [(label, PIL image, png bytes, hole or None)])]) or None if there is no
+    usable project."""
     p = path_for(raw_path)
     if not p.exists():
         return None
@@ -91,7 +98,9 @@ def load(raw_path, log=print):
                 vs = []
                 for v in e["variants"]:
                     b = z.read(v["file"])
-                    vs.append((v["label"], Image.open(io.BytesIO(b)).convert("RGB"), b))
+                    hole = (np.asarray(Image.open(io.BytesIO(z.read(v["hole"]))).convert("L")) > 127
+                            if v.get("hole") else None)
+                    vs.append((v["label"], Image.open(io.BytesIO(b)).convert("RGB"), b, hole))
                 out.append((e, sel, area, vs))
         return meta, out
     except (OSError, KeyError, ValueError, zipfile.BadZipFile) as err:

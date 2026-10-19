@@ -76,8 +76,10 @@ Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended 
    Start menu / Applications / app menu (it works on LightCraft's active photo).""",
     "use": """In the AI Remove window: click an object (SAM 3 selects it whole); Alt/Option+click removes a part,
 Shift+click adds one; Brush (B) / Eraser (E) for manual touch-ups. Pick the model (LaMa = fast, small things on plain
-backgrounds; SDXL = generative variants; FLUX = most realistic, large or structured areas), optionally an English
-prompt of what should be there ("old plaster wall"), the number of variants, then "Remove selection" (Enter). Each
+backgrounds; SDXL = generative variants; FLUX = most realistic, large or structured areas; OSOR / ObjectClear = the
+object together with its shadow and reflection), optionally an English prompt of what should be there ("old plaster
+wall"), the number of variants, then "Remove selection" (Enter). "Include the shadow" (when OSOR or ObjectClear is
+installed) adds the selected object's shadow and reflection to the selection first, so any model removes them too. Each
 removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" writes/updates the DNG.
 Zoom: Ctrl/Cmd+wheel or + / -, 0 = fit; pan: wheel, middle button or Space+drag; hold "Originale" (or \\) to compare.
 Headless (no window): put a LightCraft mask named "Remove" (or "Remove: <English prompt>"; "Rimuovi" works too) on the photo — e.g. with
@@ -250,9 +252,11 @@ def open_ai_remove(a):
 def remove_with_masks(a):
     d = install_dir()
     model = str(a.get("model") or "sdxl").lower()
-    if model not in ("lama", "sdxl", "flux"):
-        return {"ok": False, "error": "model: lama | sdxl | flux"}
+    if model not in ("lama", "sdxl", "flux", "osor", "objectclear"):
+        return {"ok": False, "error": "model: lama | sdxl | flux | osor | objectclear"}
     args = ["--auto", model + (str(int(a["variant"])) if a.get("variant") else "")]
+    if a.get("shadow"):
+        args.append("--shadow")
     if a.get("photo_id"):
         args += ["--id", str(int(a["photo_id"]))]
     try:
@@ -326,7 +330,8 @@ TOOLS = [
                 "to the download sizes and model licences shown by check_system. Then poll install_status.",
      {"type": "object", "required": ["accept_licenses"], "properties": {
          "accept_licenses": {"type": "boolean", "description": "true = the user accepted sizes and licences"},
-         "models": {"type": "array", "items": {"type": "string", "enum": ["lama", "sam3", "sdxl", "flux"]},
+         "models": {"type": "array", "items": {"type": "string", "enum": ["lama", "sam3", "sdxl", "flux", "osor",
+                                                                             "objectclear"]},
                     "description": "default: the recommended ones for this computer"},
          "hf_token": {"type": "string", "description": "the user's own Hugging Face Read token; only needed for "
                                                        "sam3 (when LightCraft has not got it) and flux"},
@@ -346,7 +351,10 @@ TOOLS = [
                           "prompt>\") are filled with the model and written into <name>-AIRemove.dng, stacked on the "
                           "original (like the window's Save). Can take minutes. Returns the DNG path and photo id.",
      {"type": "object", "properties": {
-         "model": {"type": "string", "enum": ["lama", "sdxl", "flux"]},
+         "model": {"type": "string", "enum": ["lama", "sdxl", "flux", "osor", "objectclear"],
+                   "description": "osor / objectclear also remove the object's shadow and reflection"},
+         "shadow": {"type": "boolean", "description": "first add the object's shadow and reflection to the masks "
+                                                      "(needs osor or objectclear installed), then fill with model"},
          "variant": {"type": "integer", "description": "generate this many variants and use the last (default 1)"},
          "photo_id": {"type": "integer", "description": "default: LightCraft's active photo"}}},
      remove_with_masks, False),

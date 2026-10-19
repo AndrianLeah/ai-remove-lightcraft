@@ -6,14 +6,15 @@ install folder. Standard library only. What it does, in order (each step can be 
   1. looks at the computer: OS, graphics card -> which PyTorch build (NVIDIA CUDA, AMD ROCm, Intel XPU, Apple MPS, CPU)
   2. copies the app into the install folder (default: ~/AIRemove — outside AppData on Windows on purpose)
   3. makes a private Python environment there (venv) with PyTorch and the other libraries
-  4. downloads the AI models the user chose (LaMa, SAM 3 — or links LightCraft's copy —, SDXL, FLUX)
+  4. downloads the AI models the user chose (LaMa, SAM 3 — or links LightCraft's copy —, SDXL, FLUX, OSOR, ObjectClear)
   5. creates the launcher (AI Remove.exe / app / command) with its icon, a Start menu / Applications / menu entry
   6. sets up LightCraft: its control channel (LIGHTCRAFT_CONTROL_PORT), AI Remove as its external editor and the
      shortcut Ctrl+Shift+X (Cmd+Shift+X on a Mac) for Photo > Edit In > Open Original in Other Editor
   7. checks the result (airemove --check)
 
-  install.py [--dir DIR] [--models lama,sam3,sdxl,flux | recommended | none] [--hf-token TOKEN] [--yes]
-             [--torch auto|cuda|rocm|rocm-win|xpu|mps|cpu] [--models-from DIR] [--port 7980] [--no-lightcraft]
+  install.py [--dir DIR] [--models lama,sam3,sdxl,flux,osor,objectclear | recommended | none] [--yes]
+             [--hf-token TOKEN] [--torch auto|cuda|rocm|rocm-win|xpu|mps|cpu] [--models-from DIR] [--port 7980]
+             [--no-lightcraft]
   install.py --configure-lightcraft [--dir DIR]      only step 6 (e.g. after closing LightCraft)
   install.py --status [--dir DIR]                    JSON: what is installed
   install.py --uninstall [--keep-models] [--yes]     removes AI Remove and its LightCraft settings (not your photos,
@@ -62,6 +63,10 @@ MODELS = {  # name: (GB, what (translated where shown), licence, gated repo or N
              None),
     "flux": (16.6, N_("FLUX.1 Fill [dev] + Turbo: the most realistic, needs a 12+ GB GPU"),
              "FLUX.1 [dev] Non-Commercial License", "black-forest-labs/FLUX.1-Fill-dev"),
+    "osor": (0.6, N_("OSOR: removes an object together with its shadow and reflection, in one step (runs on FLUX)"),
+             "FLUX.1 [dev] Non-Commercial License", None),
+    "objectclear": (7.3, N_("ObjectClear: removes an object together with its shadow and reflection, ~5 s on the GPU"),
+                    "S-Lab License 1.0 (non-commercial)", None),
 }
 SHORTCUT = "Cmd+Shift+X"  # LightCraft's notation: Cmd = Ctrl on Windows and Linux
 EDIT_COMMAND = "photo.openOriginalInExternal"
@@ -741,7 +746,7 @@ def uninstall(d, keep_models, yes):
 def parse():
     ap = argparse.ArgumentParser(description="Install AI Remove for LightCraft")
     ap.add_argument("--dir", help="install folder (default: ~/AIRemove)")
-    ap.add_argument("--models", default=None, help="lama,sam3,sdxl,flux | recommended | none")
+    ap.add_argument("--models", default=None, help="lama,sam3,sdxl,flux,osor,objectclear | recommended | none")
     ap.add_argument("--hf-token", default=None, help="Hugging Face token (only for SAM 3 / FLUX, models with a licence to accept)")
     ap.add_argument("--hf-token-file", default=None, help="file holding the token (read, then deleted: the MCP server uses it)")
     ap.add_argument("--torch", default="auto", choices=["auto"] + list(TORCH_FLAVOURS))
@@ -807,6 +812,13 @@ def main():
             if flavour != "cpu" and ask(_("Install FLUX too ({gb} GB, the most realistic; it needs a Hugging Face "
                                           "token and a 12+ GB GPU)?", gb=MODELS["flux"][0]), False):
                 wanted.append("flux")
+            if "flux" in wanted and ask(_("Install OSOR too ({gb} GB: it removes an object together with its "
+                                          "shadow, on FLUX)?", gb=MODELS["osor"][0]), False):
+                wanted.append("osor")
+            if flavour != "cpu" and ask(_("Install ObjectClear too ({gb} GB: it removes an object together with its "
+                                          "shadow and reflection; non-commercial licence)?",
+                                          gb=MODELS["objectclear"][0]), False):
+                wanted.append("objectclear")
     elif args.models == "none":
         wanted = []
     else:
@@ -816,6 +828,9 @@ def main():
     from fetch_models import complete  # noqa: E402  (next to this file; standard library only)
     have = {m for m in MODELS if complete(d / "models", m) or
             (args.models_from and complete(Path(args.models_from), m)) or (m == "sam3" and lc_sam)}
+    if "osor" in wanted and "flux" not in wanted and "flux" not in have:
+        out.write("  " + _("OSOR runs on FLUX: add flux to the models (it is skipped now)"))
+        wanted.remove("osor")
     need = [m for m in wanted if m not in have]
     total = TORCH_FLAVOURS[flavour][1] + sum(MODELS[m][0] for m in need)
     out.write("  " + _("folder: {dir}  ·  free space {free} GB  ·  needed ~{need} GB", dir=d,

@@ -9,7 +9,8 @@ in Lightroom è "Rimozione generativa", ma tutto gira sul tuo computer.
 
 1. In LightCraft scegli una foto RAW e premi **Ctrl+Shift+X** (**Cmd+Shift+X** su Mac).
 2. Nella finestra di AI Remove clicca su ciò che vuoi togliere: SAM 3 lo seleziona tutto.
-3. Premi **Rimuovi selezione**: vengono generate alcune varianti e tu scegli la migliore.
+3. Premi **Rimuovi selezione**: vengono generate alcune varianti e tu scegli la migliore. Per togliere anche l'ombra
+   o il riflesso dell'oggetto, premi prima **Includi l'ombra**: li aggiunge alla selezione, in blu.
 4. Premi **Salva in LightCraft**: il risultato è un **DNG RAW** (`<nome>-AIRemove.dng`), impilato sopra l'originale e
    con lo stesso sviluppo. Puoi continuare a svilupparlo come un RAW qualsiasi.
 
@@ -86,6 +87,8 @@ Senza SAM 3 la selezione si fa col pennello, oppure con una maschera chiamata "R
 | **SDXL** | Aree medie con dettagli: inventa contenuto coerente con la scena e ogni variante è diversa. Circa 15–30 s a variante con una GPU. | 6,9 GB | CreativeML Open RAIL++-M |
 | **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. | 16,6 GB | FLUX.1 [dev] Non-Commercial |
 | **SAM 3** | La selezione con un clic. | 3,4 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
+| **OSOR** (facoltativo, su FLUX) | Toglie l'oggetto insieme alla sua ombra e al riflesso, in un solo passo (3–8 s). È lui che trova l'ombra per "Includi l'ombra". | 0,6 GB | FLUX.1 [dev] Non-Commercial |
+| **ObjectClear** (facoltativo) | Toglie l'oggetto insieme alla sua ombra e al riflesso, circa 5 s a variante, a 512 px. | 7,3 GB | S-Lab License 1.0 (non commerciale) |
 
 Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plaster wall" o "dark doorway".
 

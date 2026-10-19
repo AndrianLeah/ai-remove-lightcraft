@@ -51,8 +51,9 @@ Setup of the server: `mcp/README.md`.
 - **Headless:**
   1. Put a mask named `Remove` (or `Rimuovi`), or `Remove: <English prompt>`, on the photo in LightCraft. For example, with
      LightCraft's MCP: an Object mask on the thing, then rename it.
-  2. Run `airemove-cli --auto sdxl` (or `lama`, `flux`, `sdxl3` to use the 3rd variant), optionally with
-     `--id PHOTO_ID`.
+  2. Run `airemove-cli --auto sdxl` (or `lama`, `flux`, `osor`, `objectclear`, `sdxl3` to use the 3rd variant),
+     optionally with `--id PHOTO_ID`. Add `--shadow` to remove the object's shadow and reflection too (needs OSOR or
+     ObjectClear installed).
   3. It prints one JSON line with the DNG path and its LightCraft photo id.
 - **Projects:** `<raw>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each
   raw.
