@@ -22,6 +22,8 @@ NEGATIVE = ("person, people, human, man, woman, child, figure, statue, animal, t
 FLUX_QUANTS = ("Q4_K_S", "Q5_K_S")  # first one present is used; Q4_K_S: ~1.4 GB less VRAM, so it does not spill
 FLUX_SIZES, FLUX_STEPS, FLUX_TURBO_STEPS = (512, 768), 16, 8
 FLUX_LORA = MODELS / "flux-turbo-alpha" / "diffusion_pytorch_model.safetensors"  # alimama Turbo-Alpha
+SDXL_STEPS, SDXL_GUIDED_STEPS = 12, 5  # DPM++ steps; classifier-free guidance on the first 5 only
+SDXL_CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids", "mask", "masked_image_latents"]
 SAM3_WEIGHTS = "model.safetensors"
 OSOR_WEIGHTS = Path("osor") / "osor-fluxfill" / "weights" / "fluxfill_phase2.pth"  # in MODELS
 OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was trained with
@@ -197,11 +199,17 @@ class SAM3:
         _free_gpu()
 
 
-def _step_callback(progress, total):
-    """diffusers callback_on_step_end that reports (steps done, total) to `progress`."""
+def _step_callback(progress, total, guided=0):
+    """diffusers callback_on_step_end that reports (steps done, total) to `progress`. With `guided`, SDXL's
+    classifier-free guidance ends after that many steps: by then the negative prompt has done its work (what goes in
+    the hole is decided), and every later step is one UNet pass instead of two — the conditional half of the batched
+    inputs (SDXL_CFG_INPUTS) is kept. Same detail in the result, measured."""
     def cb(pipe, i, t, kw):
         if progress:
             progress(i + 1, total)
+        if guided and i + 1 == guided and pipe.do_classifier_free_guidance:
+            pipe._guidance_scale = 0.0  # set again by the next call
+            return {k: kw[k].chunk(2)[1] for k in SDXL_CFG_INPUTS}
         return kw
     return cb
 
@@ -213,7 +221,7 @@ class SDXL:
     def __init__(self, log=print):
         dev = device()
         import torch
-        from diffusers import StableDiffusionXLInpaintPipeline, AutoencoderKL
+        from diffusers import StableDiffusionXLInpaintPipeline, AutoencoderKL, DPMSolverMultistepScheduler
         self.torch = torch
         dt = torch.float32 if dev == "cpu" else torch.float16  # the fp16-fix VAE makes half precision safe
         vae = AutoencoderKL.from_pretrained(MODELS / "sdxl-vae-fp16-fix", torch_dtype=dt)
@@ -221,20 +229,45 @@ class SDXL:
             MODELS / "sdxl-inpaint", vae=vae, variant="fp16", torch_dtype=dt).to(dev)
         if dev == "mps":
             self.pipe.enable_attention_slicing()  # lower peak memory on unified-memory Macs
+        # DPM++ 2M with Karras sigmas: in 12 steps the same fills (same seed, same picture) the model's own Euler
+        # sampler gives in 25 — measured on the same areas and seeds. Few-step LoRAs (SDXL-Lightning) were faster
+        # still, but with this inpainting UNet they blurred the hole or invented things in it.
+        self.pipe.scheduler = DPMSolverMultistepScheduler.from_config(
+            self.pipe.scheduler.config, algorithm_type="dpmsolver++", use_karras_sigmas=True)
         self.pipe.set_progress_bar_config(disable=True)
+        self.masked = (None, None)  # (key, latents) of the last removal's photo with the hole blanked out
         log(f"SDXL ready ({dev})")
 
-    def fill(self, src: Image.Image, mask: Image.Image, prompt: str, seed: int, steps: int = 25,
+    def masked_latents(self, image: Image.Image, mask: Image.Image):
+        """The VAE latents of the photo with the hole blanked out, which the inpainting UNet sees next to the noise.
+        They are the same for every variant of a removal, so they are encoded once: ~1.3 s of a ~7.3 s variant on an
+        RX 7800 XT. The pipeline would sample the latent distribution; its mean is used here (the spread is below one
+        fp16 step: the fills look the same, measured)."""
+        import hashlib
+        torch, pipe = self.torch, self.pipe
+        key = hashlib.sha1(image.tobytes() + mask.tobytes()).digest()
+        if self.masked[0] != key:
+            init = pipe.image_processor.preprocess(image, height=image.height, width=image.width)
+            hole = pipe.mask_processor.preprocess(mask, height=mask.height, width=mask.width)
+            masked = (init * (hole < 0.5)).to(pipe.device, pipe.vae.dtype)
+            with torch.no_grad():
+                lat = pipe.vae.encode(masked).latent_dist.mode() * pipe.vae.config.scaling_factor
+            self.masked = (key, lat)
+        return self.masked[1]
+
+    def fill(self, src: Image.Image, mask: Image.Image, prompt: str, seed: int, steps: int = SDXL_STEPS,
              strength: float = 0.99, progress=None) -> Image.Image:
         """At strength 1.0 SDXL starts from noise on the photo with the hole masked out (nothing of the removed object
         leaks in); below 1 src must be pre-filled. progress(done, total) per step."""
         S = 1024
+        image = src.resize((S, S), Image.LANCZOS)
+        mask_image = mask.resize((S, S), Image.NEAREST).filter(ImageFilter.MaxFilter(9))
+        cb = _step_callback(progress, max(1, int(steps * strength)), SDXL_GUIDED_STEPS)
         out = self.pipe(prompt=f"{prompt}, {DEFAULT_PROMPT}" if prompt else DEFAULT_PROMPT, negative_prompt=NEGATIVE,
-                        image=src.resize((S, S), Image.LANCZOS),
-                        mask_image=mask.resize((S, S), Image.NEAREST).filter(ImageFilter.MaxFilter(9)),
+                        image=image, mask_image=mask_image, masked_image_latents=self.masked_latents(image, mask_image),
                         height=S, width=S, strength=strength, guidance_scale=7.0, num_inference_steps=steps,
                         generator=self.torch.Generator("cpu").manual_seed(seed),
-                        callback_on_step_end=_step_callback(progress, max(1, int(steps * strength)))).images[0]
+                        callback_on_step_end=cb, callback_on_step_end_tensor_inputs=SDXL_CFG_INPUTS).images[0]
         return out.resize(src.size, Image.LANCZOS)
 
     def unload(self):

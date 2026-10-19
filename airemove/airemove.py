@@ -441,7 +441,7 @@ def unique_path(p):
 
 # ------------------------------------------------------------------------------------------------ timings
 TIMINGS = ROOT / "work" / "timings.json"
-DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 17, "flux_load": 20, "flux_variant": 90,
+DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20, "flux_variant": 90,
                  "osor_load": 25, "osor_variant": 8, "objectclear_load": 20, "objectclear_variant": 5, "shadow": 12,
                  "area": 3, "save": 6}
 

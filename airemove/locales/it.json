@@ -135,7 +135,7 @@
   "SAM click": "Clic SAM",
   "Save to LightCraft": "Salva in LightCraft",
   "Saving": "Salvataggio",
-  "SDXL Inpainting: generative variants on the GPU, ~15-30 s each": "SDXL Inpainting: varianti generative sulla GPU, ~15-30 s l'una",
+  "SDXL Inpainting: generative variants on the GPU, ~8-15 s each": "SDXL Inpainting: varianti generative sulla GPU, ~8-15 s l'una",
   "SDXL · ~{time}/variant": "SDXL · ~{time}/variante",
   "SDXL — on the GPU, ~{time} per variant, each one different.": "SDXL — sulla GPU, ~{time} a variante, ognuna diversa.",
   "SDXL — on the processor (no GPU: slow), ~{time} per variant, each one different.": "SDXL — sul processore (senza GPU: lento), ~{time} a variante, ognuna diversa.",

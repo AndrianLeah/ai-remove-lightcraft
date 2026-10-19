@@ -115,7 +115,7 @@ temporary file, and the installer deletes that file as soon as it has read it.
 | Model | Best for | Size | Licence |
 |---|---|---|---|
 | LaMa | Small and medium objects on plain backgrounds; runs on the processor in seconds | 0.2 GB | Apache-2.0 |
-| SDXL Inpainting | Medium areas with detail; every variant differs; ~15–30 s each on a GPU | 6.9 GB | CreativeML Open RAIL++-M |
+| SDXL Inpainting | Medium areas with detail; every variant differs; ~8–15 s each on a GPU | 6.9 GB | CreativeML Open RAIL++-M |
 | FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | 16.6 GB | FLUX.1 [dev] Non-Commercial |
 | SAM 3 | One-click selection | 3.4 GB (0 if LightCraft has it) | SAM License (Meta) |
 | OSOR (optional, on FLUX) | The object with its shadow and reflection, one step (~3–8 s); finds the shadow for "Include the shadow" | 0.6 GB | FLUX.1 [dev] Non-Commercial |
