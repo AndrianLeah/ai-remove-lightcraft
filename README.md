@@ -1,6 +1,8 @@
-<img src="assets/icon/airemove-256.png" width="112" align="right" alt="AI Remove icon: an engraved raccoon">
+<p align="center">
+  <img src="assets/icon/airemove-256.png" width="128" alt="AI Remove icon: an engraved raccoon">
+</p>
 
-# AI Remove for LightCraft
+<h1 align="center">AI Remove for LightCraft</h1>
 
 Remove objects and people from RAW photos with local AI, from inside
 [LightCraft](https://github.com/storytold/lightcraft) — like Lightroom's Generative Remove, but on your own computer.

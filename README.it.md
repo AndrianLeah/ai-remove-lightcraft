@@ -1,6 +1,8 @@
-<img src="assets/icon/airemove-256.png" width="96" align="right" alt="">
+<p align="center">
+  <img src="assets/icon/airemove-256.png" width="128" alt="Icona di AI Remove: un procione inciso">
+</p>
 
-# AI Remove per LightCraft
+<h1 align="center">AI Remove per LightCraft</h1>
 
 [English](README.md)
 
