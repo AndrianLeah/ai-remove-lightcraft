@@ -1,0 +1,101 @@
+# CI. lint: every Python file compiles, the Italian catalog is complete (tools/i18n_check.py), the shell scripts pass
+# shellcheck. install: on real Windows, macOS (Apple silicon) and Linux runners the installer runs the way a user starts
+# it (bootstrap -> uv -> install.py), light: PyTorch for the processor (Metal on the Mac), LaMa only, LightCraft left
+# alone (it is not on the runners). Then the installed app's --check, the MCP server over stdio, and the uninstaller
+# (tools/ci_smoke.py). No secrets, no photos.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Python files compile
+        run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
+      - name: Translations (tools/i18n_check.py)
+        run: python3 tools/i18n_check.py
+      - name: shellcheck
+        run: shellcheck installer/bootstrap.sh mcp/run_mcp.sh "Install on Mac.command" "Install on Linux.sh"
+
+  install:
+    name: install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            torch: cpu
+          - os: macos-14
+            torch: mps
+          - os: ubuntu-latest
+            torch: cpu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      # runs tools/ci_smoke.py and the MCP server before the install; the installer gets its own Python through uv
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Folders
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then sep="\\"; else sep=/; fi
+          {
+            echo "AIREMOVE_DIR=${RUNNER_TEMP}${sep}AI Remove CI"
+            echo "MCP_BEFORE_DIR=${RUNNER_TEMP}${sep}mcp-before"
+            echo "UV_CACHE_DIR=${RUNNER_TEMP}${sep}uv-cache"
+          } >> "$GITHUB_ENV"
+          echo "uv on the PATH: $(command -v uv || echo none) (the bootstrap must fetch its own)"
+      - name: Restore uv's cache
+        id: uv-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/uv-cache
+          key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('installer/install.py') }}
+          restore-keys: uv-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: MCP server, before the install
+        run: python tools/ci_smoke.py mcp "$MCP_BEFORE_DIR"
+      - name: Install (installer/bootstrap.sh)
+        if: runner.os != 'Windows'
+        run: sh installer/bootstrap.sh --yes --dir "$AIREMOVE_DIR" --models lama --no-lightcraft --torch ${{ matrix.torch }}
+      - name: Install (installer\bootstrap.ps1)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File installer\bootstrap.ps1 --yes --dir "%AIREMOVE_DIR%" --models lama --no-lightcraft --torch ${{ matrix.torch }}
+      - name: Save uv's cache
+        if: always() && steps.uv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/uv-cache
+          key: ${{ steps.uv-cache.outputs.cache-primary-key }}
+      - name: airemove-cli --check
+        run: python tools/ci_smoke.py check "$AIREMOVE_DIR"
+      - name: MCP server, installed
+        run: python tools/ci_smoke.py mcp "$AIREMOVE_DIR"
+      - name: Uninstall
+        run: python tools/ci_smoke.py uninstall "$AIREMOVE_DIR"
+
+      - name: Logs
+        if: failure()
+        run: |
+          du -sh "$UV_CACHE_DIR" 2>/dev/null || true
+          for f in "$AIREMOVE_DIR/install-status.json" "$AIREMOVE_DIR/airemove.json" "$AIREMOVE_DIR/work/last-run.log"; do
+            if [ -f "$f" ]; then echo "=== $f"; cat "$f"; fi
+          done

@@ -310,7 +310,10 @@ def make_venv(d, flavour, reinstall=False):
                      "mps": None}[flavour]
             if flavour == "cuda" and system.system() == "linux":
                 index = None  # PyPI's Linux torch already carries CUDA
-            idx = ["--index-url", index, "--extra-index-url", "https://pypi.org/simple"] if index else []
+            # uv asks an extra index before the default one (PyPI), and takes a package from the first index that has
+            # it: PyTorch's index must be the extra one, else PyPI's torch wins (CUDA on Linux, processor-only on
+            # Windows) whatever the build asked for
+            idx = ["--extra-index-url", index] if index else []
             code, __ = run(pip + idx + [f"torch=={TORCH}", f"torchvision=={TORCHVISION}"], env=env, check=False)
             if code:
                 out.write("  " + _("the pinned version is not available here: trying the newest"))
@@ -708,6 +711,11 @@ def uninstall(d, keep_models, yes):
     left = []
     for item in list(d.iterdir()) if d.exists() else []:
         if item.name in keep:
+            continue
+        if s == "windows" and item.suffix.lower() == ".cmd":
+            # cmd may be running it (Settings > Apps, the MCP server): removed now, cmd would stop with "the batch
+            # file cannot be found" and exit code 1. Removed with what is in use, below
+            left.append(item)
             continue
         try:
             shutil.rmtree(item) if item.is_dir() else item.unlink()
