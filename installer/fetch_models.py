@@ -2,11 +2,15 @@
 (--from) or, for SAM 3, from LightCraft's own copy. Runs in the install's Python (needs huggingface_hub).
 Prints one line per model for the installer: MODEL_OK <name> | MODEL_FAIL <name> <why>.
 
-  fetch_models.py --dest DIR --models lama,sam3,sdxl,flux [--from OTHER_MODELS_DIR]   (HF_TOKEN for gated ones)
+  fetch_models.py --dest DIR --models lama,sam3,sdxl,flux,osor,objectclear [--from OTHER_MODELS_DIR]
+                  (HF_TOKEN for gated ones)
 """
 import argparse
+import io
 import os
 import sys
+import urllib.request
+import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -21,6 +25,11 @@ SDXL_FILES = ["model_index.json", "scheduler/scheduler_config.json",
               "vae/config.json", "vae/diffusion_pytorch_model.fp16.safetensors"]
 FLUX_FILES = ["model_index.json", "LICENSE.md", "scheduler/*", "text_encoder/*", "text_encoder_2/*", "tokenizer/*",
               "tokenizer_2/*", "transformer/config.json", "vae/*"]
+OBJECTCLEAR_FILES = ["model_index.json", "scheduler/*", "tokenizer/*", "tokenizer_2/*", "*/config.json",
+                     "*/model.fp16.safetensors", "*/diffusion_pytorch_model.fp16.safetensors"]
+# ObjectClear's pipeline code (S-Lab License 1.0, non-commercial: fetched here, not shipped with AI Remove), pinned
+OBJECTCLEAR_CODE = "https://codeload.github.com/zjx0101/ObjectClear/zip/c052d91ecd8772744a5ab97527441c813ab83009"
+OBJECTCLEAR_CODE_KEY = "objectclear/code/objectclear/pipelines/pipeline_objectclear.py"
 # model: [(repo, files, sub-folder of models/)], and the file that says it is complete
 SPECS = {
     "lama": ([("Carve/LaMa-ONNX", ["lama_fp32.onnx"], "lama")], "lama/lama_fp32.onnx"),
@@ -32,6 +41,10 @@ SPECS = {
               ("YarvixPA/FLUX.1-Fill-dev-GGUF", ["flux1-fill-dev-Q4_K_S.gguf"], "gguf"),
               ("alimama-creative/FLUX.1-Turbo-Alpha", ["diffusion_pytorch_model.safetensors"], "flux-turbo-alpha")],
              "gguf/flux1-fill-dev-Q4_K_S.gguf"),
+    "osor": ([("QinmingZhou/OSOR", ["osor-fluxfill/weights/fluxfill_phase2.pth", "README.md"], "osor")],
+             "osor/osor-fluxfill/weights/fluxfill_phase2.pth"),
+    # the code comes last: when it is there, the weights are complete
+    "objectclear": ([("jixin0101/ObjectClear", OBJECTCLEAR_FILES, "objectclear")], OBJECTCLEAR_CODE_KEY),
 }
 GATED_HELP = {
     "sam3": N_("accept the SAM License at https://huggingface.co/facebook/sam3 (approval can take a while)"),
@@ -85,6 +98,22 @@ def sam3_to_lightcraft(dest, token):
         print("  " + _("(SAM 3 not shared with LightCraft: {error})", error=type(e).__name__))
 
 
+def objectclear_code(dest):
+    """ObjectClear's package (objectclear/: models, pipelines, utils — not its training dataset code) and its
+    licence, from the pinned commit, into models/objectclear/code."""
+    with urllib.request.urlopen(OBJECTCLEAR_CODE, timeout=120) as resp:
+        z = zipfile.ZipFile(io.BytesIO(resp.read()))
+    code = dest / "objectclear" / "code"
+    for name in z.namelist():
+        rel = name.split("/", 1)[1] if "/" in name else ""
+        keep = rel == "LICENSE" or (rel.startswith("objectclear/") and not rel.startswith("objectclear/dataset/"))
+        if not keep or name.endswith("/") or ".." in rel:
+            continue
+        t = code / rel
+        t.parent.mkdir(parents=True, exist_ok=True)
+        t.write_bytes(z.read(name))
+
+
 def fetch(dest, model, token, other):
     if complete(dest, model):
         print("  " + _("{model}: already there", model=model))
@@ -101,6 +130,9 @@ def fetch(dest, model, token, other):
         snapshot_download(repo, allow_patterns=files, local_dir=str(dest / sub), token=token or None)
     if model == "sam3":
         sam3_to_lightcraft(dest, token)
+    if model == "objectclear":
+        print("  " + _("{model}: downloading its code from GitHub …", model=model), flush=True)
+        objectclear_code(dest)
 
 
 def main():

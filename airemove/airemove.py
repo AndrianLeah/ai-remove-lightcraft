@@ -9,6 +9,8 @@ How to use:
   3. "Rimuovi selezione" makes a removal (like a Lightroom Generative Remove spot) with its own area and variants
      (LaMa + SDXL or FLUX; optional prompt IN ENGLISH). Each removal can get more variants, a different choice or
      be deleted without touching the others; fills are blended seamlessly (blend.py).
+     The object's shadow and reflection: "Includi l'ombra" adds what OSOR removes with the object to the selection
+     (Session.find_shadow), or OSOR / ObjectClear variants remove it by themselves (their hole grows with it).
   4. Everything is kept in ONE project file next to the raw (<raw name>.airemove, see project.py), saved after every
      change; reopening AI Remove on the photo (or on its -AIRemove.dng) brings all removals back.
      "Salva in LightCraft" writes the chosen fills into <name>-AIRemove.dng — created and stacked the first time,
@@ -18,8 +20,10 @@ It talks to the running LightCraft through LightCraft's control channel (JSON li
 LightCraft must be started with it on — the installer sets LIGHTCRAFT_CONTROL_PORT for it on every OS.
 
 usage: airemove.py [RAW] [--id PHOTO_ID] [--variants N]
-       airemove.py --auto lama|sdxl|flux[N] [--id PHOTO_ID]   no window: one removal from the "Rimuovi" masks with
-                                                             that model, variant N used, written into the DNG
+       airemove.py --auto lama|sdxl|flux|osor|objectclear[N] [--shadow] [--id PHOTO_ID]
+                                                             no window: one removal from the "Rimuovi" masks with
+                                                             that model, variant N used, written into the DNG;
+                                                             --shadow: the object's shadow too (as the button)
        airemove.py --check                                   JSON report: GPU, models, LightCraft connection
 """
 import argparse, base64, json, os, re, socket, sys, threading, time, traceback, zlib
@@ -46,6 +50,7 @@ ALL_GROUPS = ["profile", "treatment", "whiteBalance", "light", "toneCurve", "col
 # SDXL starts from pure noise (strength 1.0) on the photo with the hole masked out: nothing of the removed object can
 # leak in, so it needs no LaMa pre-fill (below 1.0 the object shows through as a ghost)
 SDXL_STRENGTH = 1.0
+SHADOW_MARGIN = 1.35  # "Includi l'ombra" looks for the shadow in an area this many times the object's extent
 NEUTRAL_GEOMETRY = {"upright": "off", "vertical": 0, "horizontal": 0, "rotate": 0, "aspect": 0, "scale": 100,
                     "offset_x": 0, "offset_y": 0}
 
@@ -367,7 +372,8 @@ def extract(lc, pid, info, targets, work):
     return mask_e, lum_e, dng
 
 
-def plan_region(raw, mask_e, lum_e, t=None):
+def plan_region(raw, mask_e, lum_e, t=None, margin=1.35):
+    """The square sensor area around mask_e (side = margin x the object's extent) and the object's hole in it."""
     score = 1.0
     if t is None:
         t, score = match_orientation(raw.preview_lum(), lum_e)
@@ -379,7 +385,7 @@ def plan_region(raw, mask_e, lum_e, t=None):
     long_edge = max(h, w)
     g = max(6, int(round(0.004 * long_edge)))  # cover the object's soft edge pixels, nothing more
     by0, by1, bx0, bx1 = ys.min() - g, ys.max() + g, xs.min() - g, xs.max() + g
-    side = int(max(by1 - by0, bx1 - bx0) * 1.35)
+    side = int(max(by1 - by0, bx1 - bx0) * margin)
     side = int(np.clip(max(side, 384), 0, min(h, w)))
     side -= side % 2
     cy, cx = (by0 + by1) // 2, (bx0 + bx1) // 2
@@ -436,6 +442,7 @@ def unique_path(p):
 # ------------------------------------------------------------------------------------------------ timings
 TIMINGS = ROOT / "work" / "timings.json"
 DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20, "flux_variant": 90,
+                 "osor_load": 25, "osor_variant": 8, "objectclear_load": 20, "objectclear_variant": 5, "shadow": 12,
                  "area": 3, "save": 6}
 
 
@@ -497,7 +504,7 @@ def rect_t(r, shape, t):
     return y0, y1, x0, x1
 
 
-MODELS = {"sdxl": "SDXL", "flux": "FLUX", "lama": "LaMa"}
+MODELS = {"sdxl": "SDXL", "flux": "FLUX", "lama": "LaMa", "osor": "OSOR", "objectclear": "ObjectClear"}
 
 
 # ------------------------------------------------------------------------------------------------ removals
@@ -516,6 +523,10 @@ class Removal:
         self.preview = {}  # label -> (patch uint8 HxWx3, alpha float HxW) in base.png's look and frame
         self.png = {}  # encoded images for the project file (label / "selection" / "area" -> PNG bytes)
         self.gain = None  # render gain of this area (set once, stored in the project: variants depend on it)
+        # label -> bool hole of a variant that also removed the object's shadow/reflection (OSOR, ObjectClear):
+        # the area's own hole grown by what the model changed. Other variants use reg_mask.
+        self.holes = {}
+        self.hole_cache = {}  # label -> (mask image, alpha, alpha in base.png's frame)
 
     def chosen_label(self):
         return None if self.chosen is None else self.candidates[self.chosen][0]
@@ -532,7 +543,7 @@ class Session:
 
     def __init__(self, lc, args):
         self.lc, self.args = lc, args
-        self.raw = self.info = self.sam = self.sdxl = self.flux = None
+        self.raw = self.info = self.sam = self.sdxl = self.flux = self.objectclear = None
         self.removals, self.next_id = [], 1
         self.seed = int(time.time()) % 100000
         self._engine_lock = threading.RLock()
@@ -587,9 +598,11 @@ class Session:
             r.box, r.reg_mask = tuple(e["box"]), area
             r.counts, r.user_picked = dict(e.get("counts") or {}), bool(e.get("user_picked"))
             r.gain = e.get("gain") or self.gain
-            for label, im, data in variants:
+            for label, im, data, hole in variants:
                 r.candidates.append((label, im))
                 r.png[label] = data
+                if hole is not None and hole.shape == area.shape:
+                    r.holes[label] = hole
             r.chosen = e.get("chosen") if variants else None
             if r.chosen is not None and not 0 <= r.chosen < len(r.candidates):
                 r.chosen = len(r.candidates) - 1
@@ -773,7 +786,7 @@ class Session:
             cfa = self.raw.cfa.copy()
             for r in rs:
                 y0, y1, x0, x1 = r.box
-                cfa[y0:y1, x0:x1] = self.raw.fill_region(r.box, r.filled(), r.gain, r.alpha, cfa=cfa,
+                cfa[y0:y1, x0:x1] = self.raw.fill_region(r.box, r.filled(), r.gain, self.hole(r)[1], cfa=cfa,
                                                          rng_seed=r.id)
             self._work_cfa, self._work_key = cfa, key
         return self._work_cfa
@@ -797,7 +810,8 @@ class Session:
         r.mask_img = Image.fromarray((r.reg_mask * 255).astype(np.uint8))
         r.alpha = np.asarray(r.mask_img.filter(ImageFilter.GaussianBlur(3))).astype(np.float64) / 255.0
         r.membrane = blend.Membrane(r.reg_mask)
-        r.filled = lambda r=r: np.asarray(Image.composite(r.candidates[r.chosen][1], r.src, r.mask_img)
+        r.hole_cache = {}
+        r.filled = lambda r=r: np.asarray(Image.composite(r.candidates[r.chosen][1], r.src, self.hole(r)[0])
                                           ).astype(np.float64) / 255.0
         self._place(r)
         r.src.save(self.work / f"r{r.id}_src.png")
@@ -814,8 +828,7 @@ class Session:
         Y1, X1 = min(Y1, self.base.height), min(X1, self.base.width)
         r.base_rect = (Y0, Y1, X0, X1)
         size = (max(1, X1 - X0), max(1, Y1 - Y0))
-        r.base_alpha = np.asarray(Image.fromarray(np.ascontiguousarray(apply_t(
-            (r.alpha * 255).astype(np.uint8), self.t))).resize(size, Image.BILINEAR)).astype(np.float32) / 255.0
+        r.base_alpha = self._base_alpha(r, r.alpha)
         src_o = np.asarray(Image.fromarray(np.ascontiguousarray(apply_t(np.asarray(r.src), self.t))).resize(
             size, Image.BILINEAR))
         base_c = self.base_arr[Y0:Y1, X0:X1]
@@ -839,17 +852,37 @@ class Session:
             lut = np.convolve(np.pad(lut, 3, mode="edge"), np.ones(7) / 7, mode="valid")
             r.lut.append(np.clip(np.maximum.accumulate(lut), 0, 255).astype(np.uint8))
 
+    def _base_alpha(self, r, alpha):
+        """An area alpha (render space) in base.png's frame, over r.base_rect."""
+        Y0, Y1, X0, X1 = r.base_rect
+        return np.asarray(Image.fromarray(np.ascontiguousarray(apply_t((alpha * 255).astype(np.uint8), self.t))).resize(
+            (max(1, X1 - X0), max(1, Y1 - Y0)), Image.BILINEAR)).astype(np.float32) / 255.0
+
+    def hole(self, r, label=None):
+        """(mask image, alpha, alpha in base.png) of a variant (default: the chosen one): the area's hole, or for a
+        variant that also removed the object's shadow, that hole grown by what the model changed."""
+        label = r.chosen_label() if label is None else label
+        m = r.holes.get(label)
+        if m is None:
+            return r.mask_img, r.alpha, r.base_alpha
+        if label not in r.hole_cache:
+            mi = Image.fromarray((m * 255).astype(np.uint8))
+            al = np.asarray(mi.filter(ImageFilter.GaussianBlur(3))).astype(np.float64) / 255.0
+            r.hole_cache[label] = (mi, al, self._base_alpha(r, al))
+        return r.hole_cache[label]
+
     def preview(self, r, idx=None):
         """(patch, alpha) of candidate idx (default: chosen) in base.png's frame and look."""
         idx = r.chosen if idx is None else idx
         label, im = r.candidates[idx]
         if label not in r.preview:
-            a = np.asarray(Image.composite(im, r.src, r.mask_img))
+            mi, _al, base_al = self.hole(r, label)
+            a = np.asarray(Image.composite(im, r.src, mi))
             a = np.stack([r.lut[c][a[..., c]] for c in range(3)], -1)
             Y0, Y1, X0, X1 = r.base_rect
             patch = np.asarray(Image.fromarray(np.ascontiguousarray(apply_t(a, self.t))).resize(
                 (max(1, X1 - X0), max(1, Y1 - Y0)), Image.LANCZOS))
-            r.preview[label] = (patch, r.base_alpha)
+            r.preview[label] = (patch, base_al)
         return r.preview[label]
 
     def composite(self, only=None):
@@ -889,31 +922,31 @@ class Session:
             return self.sam
 
     def engine_loaded(self, model):
-        return (model == "sdxl" and self.sdxl is not None) or (model == "flux" and self.flux is not None)
+        if model == "osor":
+            return self.flux is not None and self.flux.osor_loaded()
+        return getattr(self, model, None) is not None
 
     def get_engine(self, model):
-        """SDXL or FLUX on the GPU — never both (16 GB): switching unloads the other (and SAM 3 for FLUX)."""
+        """SDXL, FLUX or ObjectClear on the GPU — one at a time (16 GB): switching unloads the others, and SAM 3 for
+        FLUX. OSOR is FLUX's engine with OSOR's adapter (loaded the first time)."""
         with self._engine_lock:
-            if model == "sdxl":
-                if self.flux is not None:
-                    self.flux.unload()
-                    self.flux = None
-                if self.sdxl is None:
-                    t0 = time.time()
-                    self.sdxl = engines.SDXL(log)
-                    measured("sdxl_load", time.time() - t0)
-                return self.sdxl
-            if self.sdxl is not None:
-                self.sdxl.unload()
-                self.sdxl = None
-            if self.sam is not None:
+            name = "flux" if model == "osor" else model
+            for other in ("sdxl", "flux", "objectclear"):
+                if other != name and getattr(self, other) is not None:
+                    getattr(self, other).unload()
+                    setattr(self, other, None)
+            if name == "flux" and self.sam is not None:
                 self.sam.unload()
                 self.sam = None
-            if self.flux is None:
-                t0 = time.time()
-                self.flux = engines.FLUX(log)
-                measured("flux_load", time.time() - t0)
-            return self.flux
+            t0 = time.time()
+            if getattr(self, name) is None:
+                setattr(self, name, {"sdxl": engines.SDXL, "flux": engines.FLUX,
+                                     "objectclear": engines.ObjectClear}[name](log))
+            if model == "osor" and not self.flux.osor_loaded():
+                self.flux.load_osor(log)
+            if time.time() - t0 > 1:
+                measured(f"{model}_load", time.time() - t0)
+            return getattr(self, name)
 
     def load_sdxl(self):  # the window preloads the default engine
         return self.get_engine("sdxl")
@@ -932,20 +965,119 @@ class Session:
         eng = self.get_engine(model)
         k = r.counts.get(model, 0) + 1
         r.counts[model] = k
-        seed = self.seed + 97 * r.id + 1000 * (model == "flux") + k
+        seed = self.seed + 97 * r.id + {"flux": 1000, "osor": 2000, "objectclear": 3000}.get(model, 0) + k
         if model == "flux":  # the text is encoded once per prompt (CPU, slow): not part of a variant's time
             eng.embeddings(f"{prompt}, {engines.DEFAULT_PROMPT}" if prompt else engines.DEFAULT_PROMPT, log)
+        elif model == "osor":
+            eng.embeddings(engines.OSOR_PROMPT, log, tokens=512)
         t0 = time.time()
+        label = f"{MODELS[model]} {k}"
         if model == "sdxl":
             raw_fill = eng.fill(r.src, r.mask_img, prompt, seed, strength=SDXL_STRENGTH, progress=progress)
-        else:
+        elif model == "flux":
             raw_fill = eng.fill(r.src, r.mask_img, prompt, seed, progress=progress, log=log)
-        im = blend.seamless(raw_fill, r.src, r.reg_mask, r.membrane, seed=seed)
-        label = f"{MODELS[model]} {k}"
+        else:  # OSOR / ObjectClear: no prompt; they also say how far the object's shadow and reflection go
+            raw_fill, effect = self._effect_fill(model, eng, r.src, r.reg_mask, seed, progress)
+            hole = self._effect_hole(r, effect)
+            if hole is not None:
+                r.holes[label] = hole
+        hole = r.holes.get(label)
+        if hole is None:
+            im = blend.seamless(raw_fill, r.src, r.reg_mask, r.membrane, seed=seed)
+        else:
+            im = blend.seamless(raw_fill, r.src, hole, seed=seed)
         self.add_candidate(r, label, im)
         measured(f"{model}_variant", time.time() - t0)
-        log(f"#{r.id} {label} in {time.time() - t0:.0f}s (prompt: {prompt or 'default'})")
+        log(f"#{r.id} {label} in {time.time() - t0:.0f}s"
+            + (f" (prompt: {prompt or 'default'})" if model in ("sdxl", "flux") else "")
+            + (f" | shadow/reflection: +{int((hole & ~r.reg_mask).sum())} px" if hole is not None else ""))
         return label, im
+
+    def _effect_fill(self, model, eng, src, hole, seed, progress=None):
+        """OSOR / ObjectClear on an area (sensor orientation), shown to them upright — as the photo is seen: they
+        recognise a shadow by where the light comes from and where the ground is — and turned back. Returns
+        (image, effect) in the area's orientation."""
+        def up(a):
+            return Image.fromarray(np.ascontiguousarray(apply_t(np.asarray(a), self.t)))
+
+        def back(im):
+            return Image.fromarray(np.ascontiguousarray(invert_t(np.asarray(im), self.t)))
+        fill = eng.fill_osor if model == "osor" else eng.fill
+        img, effect = fill(up(src), up((hole * 255).astype(np.uint8)), seed=seed, progress=progress, log=log)
+        return back(img), back(effect)
+
+    def _effect_hole(self, r, effect):
+        """The hole of an OSOR / ObjectClear variant: the area's hole plus what the model changed beyond it (the
+        object's shadow, its reflection), slightly grown like the object's own hole. None if that adds nothing
+        worth it. The very edge of the area stays out: the blend needs photo all around the hole."""
+        e = np.asarray(effect.convert("L")) > 127
+        side = e.shape[0]
+        e = grow(e, max(3, side // 250))
+        b = max(2, side // 100)
+        e[:b], e[-b:], e[:, :b], e[:, -b:] = False, False, False, False
+        extra = e & ~r.reg_mask
+        if extra.sum() < max(50, 0.02 * r.reg_mask.sum()):
+            return None
+        return r.reg_mask | e
+
+    def shadow_model(self):
+        """The model "Includi l'ombra" uses: OSOR (its effect map is the most precise), else ObjectClear."""
+        return next((m for m in engines.SHADOW_MODELS if engines.usable(m)), None)
+
+    def _shadow_pass(self, model, eng, mask_e, margin, progress=None):
+        """The model's effect map over the area around mask_e (side = margin x the object), on the whole sensor
+        frame, and whether it reaches the area's edge (the shadow goes on beyond it)."""
+        _t, box, hole = plan_region(self.raw, mask_e, self.lum_e, self.t, margin=margin)
+        srgb, __ = self.raw.render(box, None, cfa=self.working_cfa())
+        src = Image.fromarray((srgb * 255).round().astype(np.uint8))
+        __, effect = self._effect_fill(model, eng, src, hole, self.seed, progress)
+        a = np.asarray(effect.convert("L")) > 127
+        b = max(2, a.shape[0] // 50)
+        edge = np.ones_like(a)
+        edge[b:-b, b:-b] = False
+        e = np.zeros(self.raw.cfa.shape, bool)
+        y0, y1, x0, x1 = box
+        e[y0:y1, x0:x1] = a
+        return e, box, (a & edge).sum() > 0.005 * edge.sum()
+
+    def find_shadow(self, mask_e, progress=None, margin=SHADOW_MARGIN):
+        """"Includi l'ombra": what OSOR (or ObjectClear) removes together with the selected object — its shadow,
+        its reflection — as a bool mask in base.png's frame, outside the selection; None if there is nothing.
+        The area is the size of a removal's: the smaller the object is in the model's 512/768 px view, the less it
+        sees of its shadow. When the shadow reaches the area's edge, once more in a larger area."""
+        model = self.shadow_model()
+        if model is None:
+            raise Fail(_("Neither OSOR nor ObjectClear is installed: they find the shadow (see the installer)"))
+        t0 = time.time()
+        eng = self.get_engine(model)
+        e, box, beyond = self._shadow_pass(model, eng, mask_e, margin, progress)
+        if beyond:
+            e2, box2, __ = self._shadow_pass(model, eng, mask_e, margin * 1.6, progress)
+            if box2[1] - box2[0] > box[1] - box[0]:  # not already the whole photo's height or width
+                log("shadow: it goes beyond the area, looked again in a larger one")
+                e, box = e2, box2
+        y0, y1, x0, x1 = box
+        # the effect map is coarse (OSOR: 1/8 of its 512/768 px view, ObjectClear: 1/16 of 512 px): the band of one
+        # or two of its cells around the object is its blur, not a shadow
+        side = y1 - y0
+        view = engines.FLUX_SIZES[0] if side <= sum(engines.FLUX_SIZES) // 2 else engines.FLUX_SIZES[1]
+        cell = side / (view / 8 if model == "osor" else engines.ObjectClear.S / 16)
+        band_px = max(2, int(round(1.5 * cell * self.base_scale)))
+        eff = self._sensor_to_base(e) & ~mask_e
+        band = grow(mask_e, band_px) & ~mask_e
+        m = eff & ~band
+        lab, n = ndi.label(m)
+        if n:  # specks are not a shadow
+            sizes = ndi.sum(m, lab, range(1, n + 1))
+            keep = np.zeros(n + 1, bool)
+            keep[1:] = sizes >= max(30, 0.01 * mask_e.sum())
+            m = keep[lab]
+        if m.any():
+            m |= eff & band & grow(m, band_px)  # the band only where a shadow crosses it, joining it to the object
+        measured("shadow", time.time() - t0)
+        log(f"shadow ({MODELS[model]}): {int(m.sum())} px next to a {int(mask_e.sum())} px selection, "
+            f"in {time.time() - t0:.1f}s")
+        return m if m.any() else None
 
     # -------------------------------------------------------------- output
     def write_all(self):
@@ -1012,17 +1144,20 @@ def check():
     except Exception as e:
         rep["torch_error"] = f"{type(e).__name__}: {e}"
     rep["models"] = engines.available()
-    rep["usable_models"] = [m for m in ("lama", "sdxl", "flux") if engines.usable(m, rep.get("device", "cpu"))]
+    rep["usable_models"] = [m for m in ("lama", "sdxl", "flux", "osor", "objectclear")
+                            if engines.usable(m, rep.get("device", "cpu"))]
     print(json.dumps(rep, indent=1, ensure_ascii=False))
     return 0
 
 
 def auto(args):
     """--auto MODEL[N]: no window. One removal from the photo's "Rimuovi" masks, made with MODEL; variant N (default
-    1) is the one used; the DNG is written and stacked like "Salva in LightCraft". Prints a JSON line."""
-    m = re.fullmatch(r"(lama|sdxl|flux)(\d*)", args.auto.strip().lower())
+    1) is the one used; the DNG is written and stacked like "Salva in LightCraft". --shadow: the object's shadow and
+    reflection are added to the selection first ("Includi l'ombra"). Prints a JSON line."""
+    m = re.fullmatch(r"(lama|sdxl|flux|osor|objectclear)(\d*)", args.auto.strip().lower())
     if not m:
-        raise Fail(_("--auto: lama | sdxl | flux, optionally the number of the variant to use (e.g. sdxl2)"))
+        raise Fail(_("--auto: lama | sdxl | flux | osor | objectclear, optionally the number of the variant to use "
+                     "(e.g. sdxl2)"))
     model, pick = m.group(1), max(1, int(m.group(2) or 1))
     if model != "lama" and not engines.usable(model, engines.device()):
         raise Fail(_("{model} is not installed or does not run on this computer (see --check)", model=MODELS[model]))
@@ -1032,7 +1167,12 @@ def auto(args):
         if s.init_mask is None:
             raise Fail(_("--auto needs a \"Remove\" mask on the photo in LightCraft (e.g. an Object mask renamed "
                          "\"Remove\", or \"Remove: old wooden door\" to guide the fill)"))
-        r = s.new_removal(s.init_mask)
+        sel = s.init_mask
+        if getattr(args, "shadow", False):
+            shadow = s.find_shadow(sel)
+            if shadow is not None:
+                sel = sel | shadow
+        r = s.new_removal(sel)
         if model == "lama":
             s.run_lama(r)
             pick = 1
@@ -1054,7 +1194,8 @@ def main():
     ap.add_argument("raw", nargs="?", help="path passed by LightCraft's external-editor command")
     ap.add_argument("--id", type=int, help="LightCraft photo id (default: the active photo)")
     ap.add_argument("--variants", type=int, default=None, help="variants per removal (window default: last used)")
-    ap.add_argument("--auto", help="no window: lama | sdxl | flux[N] on the photo's Rimuovi masks")
+    ap.add_argument("--auto", help="no window: lama | sdxl | flux | osor | objectclear[N] on the photo's Rimuovi masks")
+    ap.add_argument("--shadow", action="store_true", help="--auto: remove the object's shadow and reflection too")
     ap.add_argument("--check", action="store_true", help="print a JSON report and exit")
     args = ap.parse_args()
     if args.check:

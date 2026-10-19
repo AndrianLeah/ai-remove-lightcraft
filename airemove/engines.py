@@ -1,8 +1,10 @@
-"""Engines for AI Remove: SAM 3 (selection), LaMa (ONNX, processor), SDXL Inpainting and FLUX.1 Fill (diffusers).
+"""Engines for AI Remove: SAM 3 (selection), LaMa (ONNX, processor), SDXL Inpainting and FLUX.1 Fill (diffusers),
+and two that remove an object together with its shadow and reflection: OSOR (a mode of the FLUX engine: the same
+transformer with OSOR's adapter) and ObjectClear (its own SDXL-based pipeline).
 
 The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by torch as "cuda"), Intel Arc (xpu),
-Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL and FLUX don't fit
-together: the session unloads one before loading the other."""
+Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and ObjectClear
+don't fit together: the session unloads one before loading another."""
 import os
 from pathlib import Path
 import numpy as np
@@ -23,6 +25,9 @@ FLUX_LORA = MODELS / "flux-turbo-alpha" / "diffusion_pytorch_model.safetensors" 
 SDXL_STEPS, SDXL_GUIDED_STEPS = 12, 5  # DPM++ steps; classifier-free guidance on the first 5 only
 SDXL_CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids", "mask", "masked_image_latents"]
 SAM3_WEIGHTS = "model.safetensors"
+OSOR_WEIGHTS = Path("osor") / "osor-fluxfill" / "weights" / "fluxfill_phase2.pth"  # in MODELS
+OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was trained with
+OSOR_T = 0.4  # its single denoising step starts from 40 % noise on the photo itself (object included)
 
 _DEVICE = None
 
@@ -84,21 +89,29 @@ def sam3_dir():
 def available():
     """Which models are on disk."""
     m = MODELS
+    flux = ((m / "FLUX.1-Fill-dev" / "model_index.json").exists()
+            and any((m / "gguf" / f"flux1-fill-dev-{q}.gguf").exists() for q in FLUX_QUANTS))
     return {
         "sam3": (sam3_dir() / SAM3_WEIGHTS).exists(),
         "lama": (m / "lama" / "lama_fp32.onnx").exists(),
         "sdxl": (m / "sdxl-inpaint" / "model_index.json").exists() and (m / "sdxl-vae-fp16-fix" / "config.json").exists(),
-        "flux": (m / "FLUX.1-Fill-dev" / "model_index.json").exists()
-        and any((m / "gguf" / f"flux1-fill-dev-{q}.gguf").exists() for q in FLUX_QUANTS),
+        "flux": flux,
+        "osor": flux and (m / OSOR_WEIGHTS).exists(),
+        "objectclear": (m / "objectclear" / "model_index.json").exists()
+        and (m / "objectclear" / "code" / "objectclear" / "pipelines" / "pipeline_objectclear.py").exists(),
     }
 
 
 def usable(model, dev=None):
-    """Installed and sensible on this machine: FLUX needs a GPU; SDXL works on the processor but takes minutes."""
+    """Installed and sensible on this machine: FLUX (and OSOR, which runs on it) needs a GPU; SDXL and ObjectClear
+    work on the processor but take minutes."""
     dev = dev or device()
     if not available().get(model):
         return False
-    return model != "flux" or dev != "cpu"
+    return model not in ("flux", "osor") or dev != "cpu"
+
+
+SHADOW_MODELS = ("osor", "objectclear")  # remove the object together with its shadow and reflection
 
 
 # ------------------------------------------------------------------------------------------------ LaMa
@@ -266,7 +279,11 @@ class SDXL:
 class FLUX:
     """FLUX.1 Fill [dev], GGUF-quantized transformer (diffusers dequantizes it layer by layer). ~12 GB on the GPU:
     SDXL and SAM 3 are unloaded first. Text embeddings are computed once per prompt on the processor and cached on
-    disk (T5-XXL alone would need ~10 GB of VRAM)."""
+    disk (T5-XXL alone would need ~10 GB of VRAM).
+
+    OSOR (ECCV 2026) runs on the same transformer: its adapter (a rank-64 LoRA, loaded next to Turbo) and its own
+    output layer (64 velocity channels + 4 for the "effect" alpha: object + shadow + reflection). Switching between
+    FLUX and OSOR is instant and costs ~0.6 GB more than FLUX alone."""
     name = "FLUX"
 
     def __init__(self, log=print):
@@ -294,25 +311,114 @@ class FLUX:
                 self.steps, self.turbo = FLUX_TURBO_STEPS, True
             except Exception as e:
                 log(f"FLUX: Turbo LoRA not loaded ({type(e).__name__}: {str(e)[:120]}), using {FLUX_STEPS} steps")
+        self.proj_flux = self.proj_osor = None  # output layers of FLUX and of OSOR (once OSOR is loaded)
         log(f"FLUX ready ({dev}, {self.quant}, {self.steps} steps{' turbo' if self.turbo else ''})")
 
-    def embeddings(self, prompt, log=print):
+    def embeddings(self, prompt, log=print, tokens=256):
         import hashlib
         torch = self.torch
         d = MODELS / "flux_prompts"
         d.mkdir(exist_ok=True)
-        f = d / (hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:16] + ".pt")
+        name = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:16] + ("" if tokens == 256 else f"-{tokens}")
+        f = d / (name + ".pt")
         if not f.exists():
             from diffusers import FluxFillPipeline
             log("FLUX: encoding the prompt on the processor (once per prompt)…")
             enc = FluxFillPipeline.from_pretrained(self.repo, transformer=None, vae=None, torch_dtype=torch.bfloat16)
             with torch.no_grad():
-                pe, pooled, _ = enc.encode_prompt(prompt=prompt, prompt_2=prompt, device="cpu", max_sequence_length=256)
+                pe, pooled, _ = enc.encode_prompt(prompt=prompt, prompt_2=prompt, device="cpu",
+                                                  max_sequence_length=tokens)
             torch.save({"prompt": prompt, "prompt_embeds": pe, "pooled": pooled}, f)
             del enc
             import gc
             gc.collect()
         return torch.load(f)
+
+    # -------------------------------------------------------------- OSOR on the same transformer
+    def osor_loaded(self):
+        return self.proj_osor is not None
+
+    def load_osor(self, log=print):
+        """OSOR's adapter and output layer, once. The released checkpoint is a raw PEFT state dict: its LoRA keys
+        become diffusers' ("transformer.<module>.lora_A.weight"), its proj_out a second output layer."""
+        if self.proj_osor is not None:
+            return
+        torch = self.torch
+        state = torch.load(MODELS / OSOR_WEIGHTS, map_location="cpu", weights_only=True)
+        pre = "transformer.base_model.model."
+        lora = {"transformer." + k[len(pre):].replace(".default.", "."): v.to(torch.bfloat16)
+                for k, v in state.items() if ".lora_" in k}
+        self.pipe.load_lora_weights(lora, adapter_name="osor")
+        tr = self.pipe.transformer
+        proj = torch.nn.Linear(tr.proj_out.in_features, 68, dtype=torch.bfloat16)
+        proj.load_state_dict({"weight": state[pre + "proj_out.weight"], "bias": state[pre + "proj_out.bias"]})
+        self.proj_flux, self.proj_osor = tr.proj_out, proj.to(self.dev)
+        self._use(osor=False)
+        log(f"OSOR ready on FLUX ({len(lora) // 2} LoRA layers)")
+
+    def _use(self, osor):
+        """The transformer as FLUX Fill (Turbo) or as OSOR."""
+        if self.proj_osor is None:
+            return
+        pipe = self.pipe
+        pipe.enable_lora()
+        if osor:
+            pipe.set_adapters(["osor"])
+        elif self.turbo:
+            pipe.set_adapters(["turbo"])
+        else:
+            pipe.disable_lora()
+        pipe.transformer.proj_out = self.proj_osor if osor else self.proj_flux
+
+    def fill_osor(self, src: Image.Image, mask: Image.Image, seed: int = 0, progress=None, log=print):
+        """OSOR: one denoising step on the photo with the object still in it. Returns (image, effect): effect (L,
+        src size) is the region OSOR changed — the object with its shadow and reflection — and can reach beyond
+        the mask."""
+        torch, pipe, dev = self.torch, self.pipe, self.dev
+        self.load_osor(log)
+        emb = self.embeddings(OSOR_PROMPT, log, tokens=512)
+        self._use(osor=True)
+        S = FLUX_SIZES[0] if src.width <= (FLUX_SIZES[0] + FLUX_SIZES[1]) // 2 else FLUX_SIZES[1]
+        g = torch.Generator("cpu").manual_seed(seed)
+        x = torch.from_numpy(np.array(src.convert("RGB").resize((S, S), Image.LANCZOS))).permute(2, 0, 1)[None]
+        x = (x.float() / 127.5 - 1).to(dev, torch.bfloat16)
+        m = torch.from_numpy(np.asarray(mask.resize((S, S), Image.NEAREST)) > 127).float()[None, None]
+        vae, L = pipe.vae, S // 8
+        try:
+            with torch.no_grad():
+                z = vae.encode(x).latent_dist.mode().float()
+                z = (z - vae.config.shift_factor) * vae.config.scaling_factor
+                zp = pipe._pack_latents(z, 1, 16, L, L)
+                mp = m.view(1, L, 8, L, 8).permute(0, 2, 4, 1, 3).reshape(1, 64, L, L)  # 8x8 mask pixels per latent
+                mp = pipe._pack_latents(mp, 1, 64, L, L).to(dev)
+                noise = torch.randn(zp.shape, generator=g).to(dev)
+                zt = (1 - OSOR_T) * zp + OSOR_T * noise
+                pe = emb["prompt_embeds"].to(dev, torch.bfloat16)
+                out = pipe.transformer(
+                    hidden_states=torch.cat([zt, zp, mp], dim=2).to(torch.bfloat16),
+                    timestep=torch.full((1,), OSOR_T, device=dev, dtype=torch.bfloat16),
+                    guidance=torch.full((1,), 30.0, device=dev, dtype=torch.float32),
+                    pooled_projections=emb["pooled"].to(dev, torch.bfloat16), encoder_hidden_states=pe,
+                    txt_ids=torch.zeros(pe.shape[1], 3, device=dev, dtype=torch.bfloat16),
+                    img_ids=pipe._prepare_latent_image_ids(1, L // 2, L // 2, dev, torch.bfloat16),
+                    return_dict=False)[0].float()
+                if progress:
+                    progress(1, 1)
+                v, a = out[..., :64], out[..., 64:]
+
+                def unpack(p, c):  # (1, tokens, 4c) -> (1, c, L, L)
+                    return p.view(1, L // 2, L // 2, c, 2, 2).permute(0, 3, 1, 4, 2, 5).reshape(1, c, L, L)
+                alpha = torch.sigmoid(unpack(a, 1))
+                pred = unpack(zt - OSOR_T * v, 16) / vae.config.scaling_factor + vae.config.shift_factor
+                base = z / vae.config.scaling_factor + vae.config.shift_factor
+                img = vae.decode((pred * alpha + base * (1 - alpha)).to(torch.bfloat16)).sample.float()
+        finally:
+            self._use(osor=False)
+        img = ((img[0].clamp(-1, 1) + 1) * 127.5).round().byte().permute(1, 2, 0).cpu().numpy()
+        eff = (torch.nn.functional.interpolate(alpha, size=(S, S), mode="bilinear")[0, 0] * 255).byte().cpu().numpy()
+        _free_gpu()
+        return (Image.fromarray(img).resize(src.size, Image.LANCZOS),
+                Image.fromarray(eff).resize(src.size, Image.BILINEAR))
 
     def fill(self, src: Image.Image, mask: Image.Image, prompt: str, seed: int, steps: int = None,
              progress=None, log=print) -> Image.Image:
@@ -334,6 +440,73 @@ class FLUX:
         # spill into shared memory (3-10x slower)
         _free_gpu()
         return out.resize(src.size, Image.LANCZOS)
+
+    def unload(self):
+        del self.pipe
+        _free_gpu()
+
+
+# ------------------------------------------------------------------------------------------------ ObjectClear
+def _cv2_shim():
+    """ObjectClear's fusion imports OpenCV for five calls; without opencv in the venv, the same with scipy."""
+    import sys
+    import types
+    from scipy import ndimage as ndi
+    cv2 = types.ModuleType("cv2")
+    cv2.THRESH_BINARY, cv2.INTER_NEAREST, cv2.MORPH_ELLIPSE = 0, 0, 2
+    cv2.threshold = lambda a, t, mx, _type: (t, np.where(a > t, mx, 0).astype(a.dtype))
+    cv2.resize = lambda a, size, interpolation=0: np.asarray(
+        Image.fromarray(a.astype(np.float32), "F").resize(size, Image.NEAREST))
+
+    def ellipse(_shape, ksize):
+        w, h = ksize
+        yy, xx = np.mgrid[:h, :w]
+        return ((((xx - (w - 1) / 2) / (w / 2)) ** 2 + ((yy - (h - 1) / 2) / (h / 2)) ** 2) <= 1).astype(np.uint8)
+    cv2.getStructuringElement = ellipse
+    cv2.dilate = lambda a, k, iterations=1: ndi.grey_dilation(a, footprint=k.astype(bool))
+    cv2.GaussianBlur = lambda a, ksize, sigmaX=0: ndi.gaussian_filter(a, sigmaX, truncate=(ksize[0] // 2) / sigmaX)
+    sys.modules["cv2"] = cv2
+
+
+class ObjectClear:
+    """ObjectClear (CVPR 2026, NTU S-Lab): SDXL fine-tuned to remove objects with their effects; the object is also
+    shown to it through a CLIP image encoder, and an attention map of object + effects guides the final fusion.
+    Trained at 512 px, 20 steps, ~3 s on a 7800 XT, ~8 GB. Licence: S-Lab 1.0, NON-commercial. Its pipeline code is
+    downloaded by the installer into models/objectclear/code (not shipped with AI Remove: same licence)."""
+    name = "ObjectClear"
+    S = 512
+
+    def __init__(self, log=print):
+        import sys
+        dev = device()
+        import torch
+        code = str(MODELS / "objectclear" / "code")
+        if code not in sys.path:
+            sys.path.insert(0, code)
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            _cv2_shim()
+        from objectclear.pipelines import ObjectClearPipeline
+        self.torch, self.dev = torch, dev
+        dt = torch.float32 if dev == "cpu" else torch.float16  # only the fp16 files are installed: upcast on the CPU
+        self.pipe = ObjectClearPipeline.from_pretrained_with_custom_modules(
+            str(MODELS / "objectclear"), torch_dtype=dt, variant="fp16", apply_attention_guided_fusion=True).to(dev)
+        self.pipe.set_progress_bar_config(disable=True)
+        log(f"ObjectClear ready ({dev})")
+
+    def fill(self, src: Image.Image, mask: Image.Image, seed: int = 0, steps: int = 20, guidance: float = 2.5,
+             progress=None, log=print):
+        """Returns (image, effect): effect (L, src size) is its attention map of the object and its effects."""
+        S = self.S
+        res = self.pipe(prompt="remove the instance of object", image=src.convert("RGB").resize((S, S), Image.LANCZOS),
+                        mask_image=mask.resize((S, S), Image.NEAREST), num_inference_steps=steps,
+                        guidance_scale=guidance, height=S, width=S, return_attn_map=True,
+                        generator=self.torch.Generator("cpu").manual_seed(seed),
+                        callback_on_step_end=_step_callback(progress, steps))
+        eff = res.attns[0].convert("L") if getattr(res, "attns", None) else mask
+        _free_gpu()
+        return res.images[0].resize(src.size, Image.LANCZOS), eff.resize(src.size, Image.BILINEAR)
 
     def unload(self):
         del self.pipe
