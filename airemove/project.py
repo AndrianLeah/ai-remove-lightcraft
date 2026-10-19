@@ -1,0 +1,99 @@
+"""The AI Remove project of a photo: ONE file next to the raw (<raw name>.airemove, a zip) with every removal — its
+selection, its area, all its variants and the chosen one. The raw itself is never modified; the DNG that LightCraft
+shows (<stem>-AIRemove.dng) is rebuilt from the project on every save, always into the same file, so a removal can
+be regenerated, changed or deleted later without creating a new photo each time.
+
+Layout of the zip: project.json, r<id>/selection.png (1-bit, base.png frame), r<id>/area.png (1-bit, area frame),
+r<id>/NN.png (each variant, render space of the area).
+"""
+import io
+import json
+import os
+import time
+import zipfile
+
+import numpy as np
+from PIL import Image
+
+VERSION = 1
+
+
+def path_for(raw_path):
+    return raw_path.with_name(raw_path.name + ".airemove")
+
+
+def png(im, mode=None):
+    buf = io.BytesIO()
+    (im.convert(mode) if mode else im).save(buf, "PNG", compress_level=1)
+    return buf.getvalue()
+
+
+def mask_png(m):
+    return png(Image.fromarray(m.astype(np.uint8) * 255), "1")
+
+
+def _variant_bytes(r, label, im):
+    b = r.png.get(label)
+    if b is None:
+        b = r.png[label] = png(im)
+    return b
+
+
+def save(s):
+    """Write the session's project (all live removals) next to the raw; atomic (temp file + replace)."""
+    p = path_for(s.src_path)
+    meta = {"app": "AI Remove", "version": VERSION,
+            "raw": {"name": s.src_path.name, "size": s.src_path.stat().st_size},
+            "base_size": list(s.base.size), "orientation": [int(s.t[0]), bool(s.t[1])],
+            "dng": {"path": str(s.dng_path) if s.dng_path else None, "id": s.dng_id},
+            "next_id": s.next_id, "saved": time.strftime("%Y-%m-%d %H:%M:%S"), "removals": []}
+    files = {}
+    for r in list(s.removals):
+        if r.deleted:
+            continue
+        cands = list(r.candidates)
+        e = {"id": r.id, "box": [int(v) for v in r.box], "gain": r.gain, "chosen": r.chosen, "user_picked": r.user_picked,
+             "counts": dict(r.counts), "variants": []}
+        if "selection" not in r.png:
+            r.png["selection"] = mask_png(r.mask_e)
+            r.png["area"] = mask_png(r.reg_mask)
+        files[f"r{r.id}/selection.png"] = r.png["selection"]
+        files[f"r{r.id}/area.png"] = r.png["area"]
+        for i, (label, im) in enumerate(cands):
+            name = f"r{r.id}/{i:02d}.png"
+            files[name] = _variant_bytes(r, label, im)
+            e["variants"].append({"label": label, "file": name})
+        meta["removals"].append(e)
+    tmp = p.with_name(p.name + ".tmp")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:  # PNGs are compressed already
+        z.writestr("project.json", json.dumps(meta, indent=1))
+        for name, data in files.items():
+            z.writestr(name, data)
+    os.replace(tmp, p)
+    return p
+
+
+def load(raw_path, log=print):
+    """(meta, [(entry, selection, area, [(label, PIL image, png bytes)])]) or None if there is no usable project."""
+    p = path_for(raw_path)
+    if not p.exists():
+        return None
+    try:
+        with zipfile.ZipFile(p) as z:
+            meta = json.loads(z.read("project.json"))
+            if meta.get("raw", {}).get("name") != raw_path.name or meta["raw"].get("size") != raw_path.stat().st_size:
+                log(f"project {p.name} belongs to another file: ignored")
+                return None
+            out = []
+            for e in meta["removals"]:
+                sel = np.asarray(Image.open(io.BytesIO(z.read(f"r{e['id']}/selection.png"))).convert("L")) > 127
+                area = np.asarray(Image.open(io.BytesIO(z.read(f"r{e['id']}/area.png"))).convert("L")) > 127
+                vs = []
+                for v in e["variants"]:
+                    b = z.read(v["file"])
+                    vs.append((v["label"], Image.open(io.BytesIO(b)).convert("RGB"), b))
+                out.append((e, sel, area, vs))
+        return meta, out
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile) as err:
+        log(f"project {p.name} unreadable ({type(err).__name__}): ignored")
+        return None

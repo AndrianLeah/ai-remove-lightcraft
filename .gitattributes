@@ -1,0 +1,13 @@
+* text=auto
+
+# shell scripts must keep LF (macOS / Linux), Windows scripts CRLF
+*.sh       text eol=lf
+*.command  text eol=lf
+*.py       text eol=lf
+*.cmd      text eol=crlf
+*.ps1      text eol=crlf
+
+*.png         binary
+*.ico         binary
+*.icns        binary
+*.vectorcraft binary

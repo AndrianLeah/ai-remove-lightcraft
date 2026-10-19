@@ -1,0 +1,24 @@
+# build output (release packages are attached to GitHub releases)
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# what an install puts next to the code when it runs from this folder
+venv/
+python/
+bin/
+models/
+work/
+launcher/
+airemove.json
+install.log
+install-status.json
+run-installer.cmd
+.hf-token
+
+# OS files
+desktop.ini
+Thumbs.db
+.DS_Store
