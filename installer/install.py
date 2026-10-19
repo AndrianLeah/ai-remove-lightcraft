@@ -296,7 +296,9 @@ def make_venv(d, flavour, reinstall=False):
     if py.exists() and not reinstall:
         out.write("  " + _("Python environment already there"))
     else:
-        run([uv, "venv", "--python", PY_VERSION, "--seed", str(d / "venv")], env=env)
+        # replaces a venv already there (--reinstall, or one left broken): newer uv refuses without it. The variable,
+        # not --clear: an older uv on the PATH would reject the flag, and replaced it anyway
+        run([uv, "venv", "--python", PY_VERSION, "--seed", str(d / "venv")], env=dict(env, UV_VENV_CLEAR="1"))
     pip = [uv, "pip", "install", "--python", str(py)]
     have_torch = run([py, "-c", "import torch, sys; sys.exit(0)"], check=False, quiet=True)[0] == 0
     if not have_torch or reinstall:
