@@ -20,7 +20,7 @@ import system  # noqa: E402
 
 VERSION = system.VERSION
 NAME = f"AIRemove-{VERSION}"
-SKIP_DIRS = {"__pycache__", "dist", ".git", "venv", "models", "work", "python", "bin", "launcher", ".idea", ".vscode"}
+SKIP_DIRS = {"__pycache__", "dist", ".git", ".github", "venv", "models", "work", "python", "bin", "launcher", ".idea", ".vscode"}
 LAUNCHERS = {"windows": "Install on Windows.cmd", "macos": "Install on Mac.command", "linux": "Install on Linux.sh"}
 EXEC = (".sh", ".command")
 
