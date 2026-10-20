@@ -636,6 +636,7 @@ class Qwen:
         # the VAE in 512 px tiles: a 1024 px decode in one piece peaks at ~11 GB, which spills the card's memory
         self.pipe.vae.enable_tiling(512, 512, 384, 384)
         self.cond = {}  # key -> condition of the last removals (squares of an oblong area): the encoder runs once
+        self.names = {}  # key -> what Qwen3-VL saw in an oblong area's selection (named once, for all its squares)
         self.what = None  # what Qwen3-VL saw in the last removal's selection
         log(f"Qwen-Image ready ({dev}, {self.quant}, {len(self.pipe.config.sample_sigmas)} steps)")
 
@@ -646,14 +647,21 @@ class Qwen:
         z = pipe._encode_vae_image(x.to(self.dev, pipe.vae.dtype), None)
         return pipe._pack_latents(z, 1, z.shape[1], z.shape[3], z.shape[4])
 
+    @staticmethod
+    def _inputs(src, mask, S):
+        """The picture and the (grown) hole the transformer works on, S x S."""
+        return (src.convert("RGB").resize((S, S), Image.LANCZOS),
+                mask.resize((S, S), Image.NEAREST).filter(ImageFilter.MaxFilter(9)))
+
     def _name(self, te, image, hole):
         """What is selected, in a few words, asked to Qwen3-VL with the selection outlined in red. A red tint over a
         thin pole in front of columns was named "the column base"; outlined, "the floor lamp"."""
         from scipy import ndimage as ndi
         torch, proc = self.torch, self.pipe.processor
-        S = QWEN_NAME_SIZE
-        shown = np.array(image.resize((S, S), Image.LANCZOS))
-        m = np.asarray(hole.resize((S, S), Image.NEAREST)) > 127
+        f = QWEN_NAME_SIZE / max(image.size)  # an oblong area keeps its shape
+        S = (round(image.width * f), round(image.height * f))
+        shown = np.array(image.resize(S, Image.LANCZOS))
+        m = np.asarray(hole.resize(S, Image.NEAREST)) > 127
         shown[ndi.binary_dilation(m, iterations=3) & ~ndi.binary_erosion(m)] = (255, 0, 0)
         shown = Image.fromarray(shown)
         msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": QWEN_ASK}]}]
@@ -669,53 +677,107 @@ class Qwen:
         what = what.strip().splitlines()[0].strip(" .\"'") if what.strip() else "the object"
         return what[0].lower() + what[1:] if what.split(" ", 1)[0] in ("The", "A", "An") else what
 
-    def condition(self, image, hole, prompt, log=print):
-        """Prompt embeddings, image-slot mask, latents and latent shapes of the condition pictures, once per removal
-        (the same for every variant). The transformer waits in RAM while the encoder is on the GPU. A prompt names
-        what to remove (when Qwen3-VL got it wrong); without one Qwen3-VL names it."""
+    def _key(self, image, hole, prompt, what=None):
+        """The cache key of a condition: its pictures, the prompt and the name given for it (None: its own)."""
         import hashlib
-        import time
-        torch, pipe = self.torch, self.pipe
-        key = hashlib.sha1(image.tobytes() + hole.tobytes() + prompt.encode("utf-8")).digest()
+        return hashlib.sha1(image.tobytes() + hole.tobytes() + prompt.encode("utf-8") + b"\0"
+                            + (what or "").encode("utf-8")).digest()
+
+    def condition(self, image, hole, prompt, log=print, what=None):
+        """Prompt embeddings, image-slot mask, latents and latent shapes of the condition pictures, once per removal
+        (the same for every variant). A prompt names what to remove (when Qwen3-VL got it wrong); without one
+        Qwen3-VL names it in this picture, or `what` is the name it gave the whole area (Qwen.prepare)."""
+        key = self._key(image, hole, prompt, what)
         if key not in self.cond:
-            t0 = time.time()
-            C = min(image.width, QWEN_COND_SIZE)
-            photo = image.resize((C, C), Image.LANCZOS)
-            pipe.transformer.to("cpu")
-            _free_gpu()
-            try:
-                te = pipe.text_encoder = _qwen_text_encoder(self.dev)
-                self.what = prompt.strip() or self._name(te, image, hole)
-                M = QWEN_MASK_SIZE
-                images = [photo] + ([Image.merge("RGB", [hole.resize((M, M), Image.BILINEAR)] * 3)] if M else [])
-                text = QWEN_REMOVE.format(what=self.what)
-                with torch.no_grad():
-                    pe, _mask, slots = pipe._get_qwen_prompt_embeds(text, [im.convert("RGBA") for im in images],
-                                                                    self.dev)
-            finally:
-                pipe.text_encoder = te = None  # no reference left: ~8 GB to give back before the transformer returns
-                _free_gpu()
-                pipe.transformer.to(self.dev)
-            with torch.no_grad():
-                lat = torch.cat([self._latents(im) for im in images], dim=1)
-            _free_gpu()
-            f = pipe.vae_scale_factor
-            shapes = [(1, im.height // f, im.width // f) for im in images]
-            self.cond = dict(list(self.cond.items())[-3:])
-            self.cond[key] = (pe.to(torch.bfloat16), slots, lat, shapes, self.what)
-            log(f"Qwen-Image: {text!r}, read in {time.time() - t0:.1f}s")
+            self._read([(image, hole, what)], prompt, log)
         *cond, self.what = self.cond[key]
         return cond
 
+    def _read(self, jobs, prompt, log, name=None):
+        """One encoder session: the transformer waits in RAM while Qwen3-VL is brought to the GPU (~5-7 s) and
+        names the selection in `name` (image, hole) when given, then reads each job (image, hole, what) into
+        self.cond; what None: the name read in `name`, else named in its own picture. Returns the name read in
+        `name`."""
+        import time
+        torch, pipe = self.torch, self.pipe
+        t0 = time.time()
+        pipe.transformer.to("cpu")
+        _free_gpu()
+        named, read = None, []
+        try:
+            te = pipe.text_encoder = _qwen_text_encoder(self.dev)
+            if name is not None:
+                named = self._name(te, *name)
+            for image, hole, what in jobs:
+                key = self._key(image, hole, prompt, what or named)
+                what = prompt.strip() or what or named or self._name(te, image, hole)
+                C = min(image.width, QWEN_COND_SIZE)
+                photo = image.resize((C, C), Image.LANCZOS)
+                M = QWEN_MASK_SIZE
+                images = [photo] + ([Image.merge("RGB", [hole.resize((M, M), Image.BILINEAR)] * 3)] if M else [])
+                text = QWEN_REMOVE.format(what=what)
+                with torch.no_grad():
+                    pe, _mask, slots = pipe._get_qwen_prompt_embeds(text, [im.convert("RGBA") for im in images],
+                                                                    self.dev)
+                read.append((key, images, pe, slots, what))
+        finally:
+            pipe.text_encoder = te = None  # no reference left: ~8 GB to give back before the transformer returns
+            _free_gpu()
+            pipe.transformer.to(self.dev)
+        f = pipe.vae_scale_factor
+        keep = max(0, 4 - len(read))  # the last removals' conditions stay, and all of this one's squares
+        self.cond = dict(list(self.cond.items())[max(0, len(self.cond) - keep):]) if keep else {}
+        for key, images, pe, slots, what in read:
+            with torch.no_grad():
+                lat = torch.cat([self._latents(im) for im in images], dim=1)
+            _free_gpu()
+            shapes = [(1, im.height // f, im.width // f) for im in images]
+            self.cond[key] = (pe.to(torch.bfloat16), slots, lat, shapes, what)
+        if read:
+            n = f" ({len(read)} squares)" if len(read) > 1 else ""
+            log(f"Qwen-Image: {QWEN_REMOVE.format(what=read[-1][-1])!r}, read in {time.time() - t0:.1f}s{n}")
+        else:
+            log(f"Qwen-Image: named {named!r} in {time.time() - t0:.1f}s")
+        return named
+
+    def prepare(self, area, mask, squares, prompt, log=print, size=None):
+        """A removal filled in squares (an area longer than a square): what is selected is named once, in the whole
+        area. Square by square, each one was named for what was left in it ("the woman with a bag", then "the
+        woman with a handbag"), and each square that sees the earlier squares' fill took its own encoder session
+        (~15 s) in every variant. Here each square's condition picture is the area as it is, not the earlier
+        squares' fill, so it is the same for every variant: one encoder session per removal reads them all.
+        Outside its hole a square still follows the squares filled before it (QWEN_LOCK).
+        area, mask: PIL, upright; squares: [(image, mask)], crops of the area as it is. Returns the name, for
+        Qwen.fill(what=)."""
+        S = size or QWEN_SIZE
+        f = S / max(area.size)
+        size = (round(area.width * f), round(area.height * f))
+        whole = area.convert("RGB").resize(size, Image.LANCZOS)
+        hole = mask.resize(size, Image.NEAREST).filter(ImageFilter.MaxFilter(9))
+        nkey = self._key(whole, hole, "")
+        what = prompt.strip() or self.names.get(nkey)
+        jobs = [self._inputs(img, m, S) + (what,) for img, m in squares]
+        missing = [j for j in jobs if what is None or self._key(j[0], j[1], prompt, what) not in self.cond]
+        if missing:
+            named = self._read(missing, prompt, log, name=None if what else (whole, hole))
+            if what is None:
+                what = named
+                self.names = dict(list(self.names.items())[-7:])
+                self.names[nkey] = named
+        self.what = what
+        return what
+
     def fill(self, src: Image.Image, mask: Image.Image, prompt: str, seed: int, progress=None, log=print,
-             size: int = None) -> Image.Image:
+             size: int = None, seen: Image.Image = None, what: str = None) -> Image.Image:
+        """seen: the condition picture when it is not src (a square of an oblong area: the area as it is, while src
+        has the earlier squares' fill); what: the selection's name (Qwen.prepare)."""
         torch, pipe, dev = self.torch, self.pipe, self.dev
         from diffusers.models.transformers.transformer_qwenimage21 import QwenImage21KVCache
         from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_shift, retrieve_timesteps
         S = size or QWEN_SIZE
-        image = src.convert("RGB").resize((S, S), Image.LANCZOS)
-        hole = mask.resize((S, S), Image.NEAREST).filter(ImageFilter.MaxFilter(9))
-        pe, slots, cond_lat, shapes = self.condition(image, hole, prompt, log)
+        image, hole = self._inputs(src, mask, S)
+        pe, slots, cond_lat, shapes = self.condition(image if seen is None else self._inputs(seen, mask, S)[0], hole,
+                                                     prompt, log, what)
         L = S // pipe.vae_scale_factor
         g = torch.Generator("cpu").manual_seed(seed)
         with torch.no_grad():
