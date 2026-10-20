@@ -1054,6 +1054,8 @@ class App:
             parts.append(("area", _("Preparing the area"), A.expected("area")))
         elif s.leaks(r):  # made before an area could hold a long selection: it grows first (Session.fit_area)
             parts.append(("fit", _("Preparing the area"), 2 * A.expected("area")))
+        elif not s.area_ready(r):  # a reopened removal: its area is rendered from the RAW at its first change
+            parts.append(("prep", _("Preparing the area"), A.expected("area")))
         if model == "lama":  # only the model the user picked runs
             if r is None or not any(c[0] == "LaMa" for c in r.candidates):
                 parts.append(("lama", "LaMa", variant_secs("lama")))
@@ -1085,6 +1087,8 @@ class App:
                 parts[i + 1:] = [(k, lb, variant_secs(k) if k in ("lama", "variant") else sec)
                                  for k, lb, sec in parts[i + 1:]]
                 self.post("job_total", done + secs + sum(p[2] for p in parts[i + 1:]))
+            elif kind == "prep":
+                s.ensure_area(r)
             elif kind == "lama":
                 s.run_lama(r)
                 self.post("cand", r)
@@ -1110,6 +1114,10 @@ class App:
     def run_refine(self, r, prompt):
         """"Full detail" on r's chosen variant, with a progress plan in expected seconds."""
         s = self.s
+        if not s.area_ready(r):  # a reopened removal: its area first
+            self.post("job_start", (f"#{r.id} · " + _("Preparing the area"), A.expected("area")))
+            self.post("job_part", (f"#{r.id} · " + _("Preparing the area"), 0.0, A.expected("area")))
+            s.ensure_area(r)
         model = s.refine_model()
         load = 0.0 if s.engine_loaded(model) else A.expected(f"{model}_load")
         secs = s.refine_seconds(r)
@@ -1130,14 +1138,17 @@ class App:
 
     def sam_worker(self):
         try:
+            have_sam = engines.available()["sam3"]
+            if have_sam:
+                self.s.load_sam()  # the model loads while the photo is prepared (~4 s, it used to wait for it)
             self.base_ready.wait()
             if getattr(self.s, "base", None) is None:
                 return
-            if not engines.available()["sam3"]:
+            if not have_sam:
                 self.post("no_sam")
                 threading.Thread(target=self.preload_sdxl, daemon=True).start()
                 return
-            self.s.get_sam()  # loads it and analyses the photo
+            self.s.get_sam()  # analyses the photo
             self.post("sam_ready")
             threading.Thread(target=self.preload_sdxl, daemon=True).start()
         except Exception:
@@ -1316,13 +1327,19 @@ class App:
             if n else (_("Click what you want to remove") if self.sam_ready else
                        _("SAM 3 is getting ready: you can click already")))
         self.update_buttons()
+        self.start_test_actions()
 
     def on_sam_ready(self, _data):
         if not self.task and not self.busy and not self.s.removals:  # keep "Project reopened…" if shown
             self.status.configure(text=_("Click what you want to remove"))
         self.sam_ready = True
-        actions = os.environ.get("AIREMOVE_TEST_ACTIONS")  # tests only, see run_test_actions
-        if actions and hasattr(self, "base_ok"):
+        self.start_test_actions()
+
+    def start_test_actions(self):
+        """Tests only (run_test_actions): once the photo is shown and SAM 3 is ready, whichever comes last."""
+        actions = os.environ.get("AIREMOVE_TEST_ACTIONS")
+        if actions and self.sam_ready and hasattr(self, "base_ok") and not getattr(self, "_tests_started", False):
+            self._tests_started = True
             self.root.after(300, lambda: self.run_test_actions(actions.split(";")))
 
     def on_obj(self, data):

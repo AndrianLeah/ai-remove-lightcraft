@@ -9,6 +9,7 @@ import shutil
 import numpy as np
 import tifffile
 from numpy.lib.stride_tricks import sliding_window_view as swv
+from scipy import ndimage as ndi
 
 XYZD50_TO_SRGB = np.array([[3.1338561, -1.6168667, -0.4906146],
                            [-0.9787684, 1.9161415, 0.0334540],
@@ -126,12 +127,11 @@ class RawDNG:
         v = np.clip((reg - blk) / (self.white - blk), 0, None)
         out = np.zeros(reg.shape + (3,))
         k = np.array([[1, 2, 1], [2, 4, 2], [1, 2, 1]], float)
-        for c in range(3):
-            P = np.pad(np.where(ch == c, v, 0.0), 1, mode="reflect")
-            Wt = np.pad((ch == c).astype(float), 1, mode="reflect")
-            num = (swv(P, (3, 3)) * k).sum(axis=(-1, -2))
-            den = (swv(Wt, (3, 3)) * k).sum(axis=(-1, -2))
-            out[..., c] = np.where(ch == c, v, num / np.maximum(den, 1e-9))
+        for c in range(3):  # bilinear: each colour's weighted mean of its 3x3 neighbours ("mirror" = np.pad's reflect)
+            on = ch == c
+            num = ndi.correlate(np.where(on, v, 0.0), k, mode="mirror")
+            den = ndi.correlate(on.astype(float), k, mode="mirror")
+            out[..., c] = np.where(on, v, num / np.maximum(den, 1e-9))
         return out, ch, blk
 
     @staticmethod

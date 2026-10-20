@@ -618,6 +618,31 @@ class Removal:
         self.plans = {}  # (model, refine?, variant whose hole it is or None) -> (engine size, tiles.Plan) or None
         self.shape = None  # (width, length) of its hole (tiles.shape), once
         self.scale = {}  # label -> how enlarged that variant's fill is (Session.enlarged), for those made here
+        # the area image (render space, earlier removals applied) and its blend solver are made when first needed:
+        # a reopened project shows its removals at once, and an area is rendered from the RAW only to change it or
+        # to write the DNG (_load: Session._load_area)
+        self._src, self._load, self._membrane = None, None, None
+
+    @property
+    def src(self):
+        if self._src is None and self._load is not None:
+            self._load(self)
+        return self._src
+
+    @src.setter
+    def src(self, im):
+        self._src = im
+
+    @property
+    def membrane(self):
+        """blend.Membrane of the area's hole (a sparse factorization, ~0.8 s for a large area), at the first blend."""
+        if self._membrane is None:
+            self._membrane = blend.Membrane(self.reg_mask)
+        return self._membrane
+
+    @membrane.setter
+    def membrane(self, m):
+        self._membrane = m
 
     def chosen_label(self):
         return None if self.chosen is None else self.candidates[self.chosen][0]
@@ -640,6 +665,7 @@ class Session:
         self._engine_lock = threading.RLock()
         self.stop = threading.Event()  # set by the window's Stop: generations end at their next step (Stopped)
         self._proj_lock = threading.Lock()
+        self._area_lock = threading.RLock()  # the working sensor data and the areas rendered from it
         self._work_cfa, self._work_key = None, None
         self.dng_path, self.dng_id, self.restored = None, None, None
 
@@ -698,7 +724,11 @@ class Session:
             r.chosen = e.get("chosen") if variants else None
             if r.chosen is not None and not 0 <= r.chosen < len(r.candidates):
                 r.chosen = len(r.candidates) - 1
-            self._init_area(r)  # rendered with the earlier removals applied, as when it was made
+            # shown from its variants; its area is rendered (with the earlier removals applied, as when it was made)
+            # only when it is needed: more variants, Full detail, the DNG (Removal.src)
+            self._masks(r)
+            r._load = self._load_area
+            self._place(r)
             self.removals.append(r)
         self.next_id = max([meta.get("next_id", 1)] + [r.id + 1 for r in self.removals])
         d = meta.get("dng") or {}
@@ -869,20 +899,42 @@ class Session:
 
     # -------------------------------------------------------------- removals
     def working_cfa(self, upto=None):
-        """The sensor data with the chosen fills of the removals before `upto` (all if None) applied."""
+        """The sensor data with the chosen fills of the removals before `upto` (all if None) applied. When only
+        removals were added after the ones applied already (a project reopened area by area, a new removal), just
+        those are applied: each fill once, not every earlier one again for each removal."""
         rs = self.removals
         if upto is not None and upto in rs:
             rs = rs[:rs.index(upto)]
         rs = [r for r in rs if not r.deleted and r.chosen is not None]
         key = tuple((r.id, r.chosen_label(), tuple(r.box)) for r in rs)
-        if key != self._work_key:
-            cfa = self.raw.cfa.copy()
-            for r in rs:
+        with self._area_lock:
+            done = self._work_key
+            if done is None or key[:len(done)] != done:
+                self._work_cfa, self._work_key = self.raw.cfa.copy(), ()
+            for i in range(len(self._work_key), len(rs)):
+                r = rs[i]
+                fill = r.filled()  # may render r's own area first (Removal.src), from the data before it
                 y0, y1, x0, x1 = r.box
-                cfa[y0:y1, x0:x1] = self.raw.fill_region(r.box, r.filled(), r.gain, self.hole(r)[1], cfa=cfa,
+                cfa = self._work_cfa
+                cfa[y0:y1, x0:x1] = self.raw.fill_region(r.box, fill, r.gain, self.hole(r)[1], cfa=cfa,
                                                          rng_seed=r.id)
-            self._work_cfa, self._work_key = cfa, key
-        return self._work_cfa
+                self._work_key = key[:i + 1]
+            return self._work_cfa
+
+    def area_ready(self, r):
+        """Whether r's area is rendered already (a reopened removal's is, at its first change)."""
+        return r._src is not None
+
+    def ensure_area(self, r):
+        return r.src
+
+    def _load_area(self, r):
+        """Removal.src of a reopened removal: its area rendered from the RAW with the earlier removals applied."""
+        with self._area_lock:
+            if r._src is None:
+                t0 = time.time()
+                self._init_area(r, upto=r)
+                log(f"#{r.id}: area rendered from the RAW in {time.time() - t0:.1f}s")
 
     @staticmethod
     def leaks(r):
@@ -932,6 +984,7 @@ class Session:
     def new_removal(self, mask_e):
         """A removal for mask_e (bool, base.png frame): its area, rendered from the photo as it is now (earlier
         removals applied)."""
+        self.working_cfa()  # a reopened project's areas are rendered once, first: not part of this one's time
         t0 = time.time()
         r = Removal(self.next_id, mask_e)
         self.next_id += 1
@@ -942,20 +995,26 @@ class Session:
         return r
 
     def _init_area(self, r, upto=None):
-        """The area image (photo with the earlier removals applied: those before `upto`, else all), its masks,
-        blending and preview placement."""
-        srgb, r.gain = self.raw.render(r.box, r.gain, cfa=self.working_cfa(upto))  # gain None: from this area
-        r.src = Image.fromarray((srgb * 255).round().astype(np.uint8))
+        """The area image (photo with the earlier removals applied: those before `upto`, else all), its masks and
+        preview placement. Its blend solver is made at the first blend (Removal.membrane)."""
+        with self._area_lock:
+            srgb, r.gain = self.raw.render(r.box, r.gain, cfa=self.working_cfa(upto))  # gain None: from this area
+            r.src = Image.fromarray((srgb * 255).round().astype(np.uint8))
+            self._masks(r)
+            r.membrane = None
+            self._place(r)
+        # for adopting results made before projects existed (_work_areas); quick PNG: they are only read back
+        r.src.save(self.work / f"r{r.id}_src.png", compress_level=1)
+        r.mask_img.save(self.work / f"r{r.id}_mask.png", compress_level=1)
+
+    def _masks(self, r):
+        """r's hole as an image and its feathered alpha (render space), and the chosen fill on its area."""
         r.mask_img = Image.fromarray((r.reg_mask * 255).astype(np.uint8))
         r.alpha = np.asarray(r.mask_img.filter(ImageFilter.GaussianBlur(3))).astype(np.float64) / 255.0
-        r.membrane = blend.Membrane(r.reg_mask)
         r.hole_cache = {}
         r.flat = False
         r.filled = lambda r=r: np.asarray(Image.composite(r.candidates[r.chosen][1], r.src, self.hole(r)[0])
                                           ).astype(np.float64) / 255.0
-        self._place(r)
-        r.src.save(self.work / f"r{r.id}_src.png")
-        r.mask_img.save(self.work / f"r{r.id}_mask.png")
 
     def _place(self, r):
         """Where the removal's area lands in base.png, and a per-channel tone curve from the render space to
@@ -969,19 +1028,28 @@ class Session:
         r.base_rect = (Y0, Y1, X0, X1)
         size = (max(1, X1 - X0), max(1, Y1 - Y0))
         r.base_alpha = self._base_alpha(r, r.alpha)
-        src_o = np.asarray(Image.fromarray(np.ascontiguousarray(apply_t(np.asarray(r.src), self.t))).resize(
-            size, Image.BILINEAR))
-        base_c = self.base_arr[Y0:Y1, X0:X1]
         keep = r.base_alpha < 0.01
+        if r._src is None and r.candidates:  # a reopened removal: outside its hole a variant IS the area
+            label, im = r.candidates[r.chosen if r.chosen is not None else 0]  # (blend.seamless), no render needed
+            area = np.asarray(im.convert("RGB"))
+            if label in r.holes:  # a shadow variant changed more than the area's hole
+                keep = keep & (self.hole(r, label)[2] < 0.01)
+        else:
+            area = np.asarray(r.src)
+        src_o = np.asarray(Image.fromarray(np.ascontiguousarray(apply_t(area, self.t))).resize(size, Image.BILINEAR))
+        base_c = self.base_arr[Y0:Y1, X0:X1]
         r.lut = []
         for c in range(3):
             xs, ys = src_o[..., c][keep], base_c[..., c][keep]
             if xs.size < 500:
                 r.lut.append(np.arange(256, dtype=np.uint8))
                 continue
+            order = np.argsort(xs, kind="stable")  # the pixels of each value together: one pass, not 256 scans
+            xs_s, ys_s = xs[order], ys[order]
+            cuts = np.searchsorted(xs_s, np.arange(257))
             known, vals = [], []
             for v in range(256):
-                sel = ys[xs == v]
+                sel = ys_s[cuts[v]:cuts[v + 1]]
                 if sel.size >= 4:
                     known.append(v)
                     vals.append(float(np.median(sel)))
@@ -1017,7 +1085,8 @@ class Session:
         label, im = r.candidates[idx]
         if label not in r.preview:
             mi, _al, base_al = self.hole(r, label)
-            a = np.asarray(Image.composite(im, r.src, mi))
+            # outside its hole a variant is the area itself (blend.seamless): a reopened removal needs no render
+            a = np.asarray(Image.composite(im, r.src, mi)) if r._src is not None else np.asarray(im.convert("RGB"))
             a = np.stack([r.lut[c][a[..., c]] for c in range(3)], -1)
             Y0, Y1, X0, X1 = r.base_rect
             patch = np.asarray(Image.fromarray(np.ascontiguousarray(apply_t(a, self.t))).resize(
@@ -1062,13 +1131,19 @@ class Session:
         return label
 
     # -------------------------------------------------------------- engines
-    def get_sam(self):
-        """SAM 3 with the photo analysed; reloaded if FLUX pushed it off the GPU."""
+    def load_sam(self):
+        """SAM 3's model on the GPU, without a photo: the window loads it while the photo is being prepared."""
         with self._engine_lock:
             if self.sam is None:
                 t0 = time.time()
                 self.sam = engines.SAM3(log)
                 log(f"SAM 3 loaded in {time.time() - t0:.0f}s")
+            return self.sam
+
+    def get_sam(self):
+        """SAM 3 with the photo analysed; reloaded if FLUX pushed it off the GPU."""
+        with self._engine_lock:
+            self.load_sam()
             if getattr(self.sam, "img", None) is None and getattr(self, "base", None) is not None:
                 t0 = time.time()
                 self.sam.set_image(self.base)
@@ -1550,6 +1625,8 @@ class Session:
         rs = [r for r in self.removals if not r.deleted and r.chosen is not None]
         if not rs:
             raise Fail(_("No removal to save."))
+        for r in rs:  # the areas of a reopened project, rendered now: not part of the save's time
+            self.ensure_area(r)
         t0 = time.time()
         cfa = self.working_cfa()
         update = self.dng_path is not None and self.dng_path.exists()
