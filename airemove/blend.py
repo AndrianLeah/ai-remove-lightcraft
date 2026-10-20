@@ -156,6 +156,72 @@ class Membrane:
         return out
 
 
+def _texture_outside(src, mask, win=9):
+    """Local standard deviation of luminance, from the pixels outside `mask` only (the object does not count)."""
+    w = (~mask).astype(np.float32)
+    lum = src.astype(np.float32) @ LUMA
+    n = np.maximum(ndi.uniform_filter(w, win), 1e-6)
+    m1 = ndi.uniform_filter(lum * w, win) / n
+    m2 = ndi.uniform_filter(lum * lum * w, win) / n
+    return np.sqrt(np.maximum(m2 - m1 * m1, 0.0))
+
+
+def flat_region(src, mask, membrane, flat=4.5, share=0.8, level=0.7):
+    """The part of the hole that continues flat surroundings — sky above all, also a plain wall — and their colours
+    spread into it. Which stretches of the edge are flat (the photo just outside is smooth: under `flat` levels of
+    local deviation over `share` of a small neighbourhood) is spread into the hole harmonically, like the membrane's
+    colour drift: where the edge turns from sky to wall, the line between them inside the hole runs straight across.
+    src: HxWx3 uint8 area, mask: bool hole. Returns (bool HxW region inside the hole, HxWx3 uint8: the photo with
+    the flat colours spread into the hole)."""
+    if not membrane.edge.any():
+        return np.zeros_like(mask), src
+    r = max(8, mask.shape[0] // 60)
+    out = ~mask
+    smooth = (_texture_outside(src, mask) < flat) & out
+    den = np.maximum(ndi.uniform_filter(out.astype(np.float32), 2 * r + 1), 1e-6)
+    f = ndi.uniform_filter(smooth.astype(np.float32), 2 * r + 1) / den
+    f = np.clip((f - share) / (1 - share), 0, 1) * out
+    if not f[membrane.edge].any():
+        return np.zeros_like(mask), src
+    weight = membrane.solve(f)
+    region = mask & (weight > level)
+    col = np.stack([membrane.solve(src[..., c].astype(np.float64) * f) for c in range(3)], -1)
+    col /= np.maximum(weight, 1e-3)[..., None]
+    return region, np.where(mask[..., None], np.clip(col, 0, 255), src).round().astype(np.uint8)
+
+
+def match_flat(blended, field, region, other=40.0):
+    """The colour of a held flat region (flat_region), after seamless(). SDXL renders the whole area in its own
+    colours (a blue sky comes out grey) and seamless() takes that drift out of the fill as a whole — but a held sky
+    did not drift, so it comes out over-corrected (a saturated silhouette of the object, 15–45 levels off, measured).
+    Its low frequencies are brought back to the field's, its fine detail kept; so are the fill's sky pixels just
+    beyond the region. Pixels the fill turned into something else (SDXL may put the wall back where the region went
+    too far) are left alone. blended: PIL area image; field: HxWx3 uint8; region: bool. Returns a PIL image (pixels
+    outside the hole may change too: they are the photo's in every use of a fill)."""
+    out = np.asarray(blended).astype(np.float32)
+    if not region.any():
+        return blended
+    side = region.shape[0]
+    sig = max(4.0, side / 200)
+    reach = max(8, side // 25)  # SDXL continues the held sky's colour a little beyond it: that is over-corrected too
+    b = _box(region, reach + int(3 * sig) + 4)
+    c, reg = out[b], region[b]
+    diff = field[b].astype(np.float32) - c
+    near = np.stack([ndi.gaussian_filter(diff[..., ch], 2.0) for ch in range(3)], -1)
+    over = np.median(near[reg], axis=0)  # the over-correction can be large: what is near it is over-corrected sky
+    to_over = np.linalg.norm(near - over, axis=-1)
+    # beyond the region only smooth pixels (sky, not a stone of a similar colour) that look over-corrected rather
+    # than right (seamless() got the sky SDXL drew itself right)
+    beyond = (_texture_outside(c, np.zeros(reg.shape, bool)) < 6.0) & (to_over < np.linalg.norm(near, axis=-1))
+    zone = ndi.binary_dilation(reg, iterations=reach) & (np.abs(near - over).max(-1) < other) & (reg | beyond)
+    w = zone.astype(np.float32)
+    den = np.maximum(ndi.gaussian_filter(w, sig), 1e-3)
+    low = np.stack([ndi.gaussian_filter(diff[..., ch] * w, sig) for ch in range(3)], -1) / den[..., None]
+    a = ndi.gaussian_filter(w, 1.5) * zone
+    out[b] = c + a[..., None] * low
+    return Image.fromarray(np.clip(out, 0, 255).round().astype(np.uint8))
+
+
 def _band(x, s1=1.2, s2=5.0):
     """Mid-frequency detail (surface mottling), above the scale of single-pixel noise."""
     return ndi.gaussian_filter(x, s1) - ndi.gaussian_filter(x, s2)

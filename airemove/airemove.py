@@ -50,6 +50,11 @@ ALL_GROUPS = ["profile", "treatment", "whiteBalance", "light", "toneCurve", "col
 # SDXL starts from pure noise (strength 1.0) on the photo with the hole masked out: nothing of the removed object can
 # leak in, so it needs no LaMa pre-fill (below 1.0 the object shows through as a ghost)
 SDXL_STRENGTH = 1.0
+# SDXL sees the area upright, as the photo is seen. Sideways (sensor orientation, which a portrait photo has) it took
+# the sky for ground — a mound or a rock where a hat stood against the sky — and filled a person-shaped hole with
+# posts. Upright it fills a hole in the shape of a person with a person if something of theirs is left outside the
+# selection (a bag at their side: 3 variants in 4); with the bag selected too, none.
+SDXL_UPRIGHT = True
 SHADOW_MARGIN = 1.35  # "Includi l'ombra" looks for the shadow in an area this many times the object's extent
 NEUTRAL_GEOMETRY = {"upright": "off", "vertical": 0, "horizontal": 0, "rotate": 0, "aspect": 0, "scale": 100,
                     "offset_x": 0, "offset_y": 0}
@@ -527,6 +532,7 @@ class Removal:
         # the area's own hole grown by what the model changed. Other variants use reg_mask.
         self.holes = {}
         self.hole_cache = {}  # label -> (mask image, alpha, alpha in base.png's frame)
+        self.flat = False  # (region, colours) of the sky its hole continues (blend.flat_region), None: none, False: not yet
 
     def chosen_label(self):
         return None if self.chosen is None else self.candidates[self.chosen][0]
@@ -811,6 +817,7 @@ class Session:
         r.alpha = np.asarray(r.mask_img.filter(ImageFilter.GaussianBlur(3))).astype(np.float64) / 255.0
         r.membrane = blend.Membrane(r.reg_mask)
         r.hole_cache = {}
+        r.flat = False
         r.filled = lambda r=r: np.asarray(Image.composite(r.candidates[r.chosen][1], r.src, self.hole(r)[0])
                                           ).astype(np.float64) / 255.0
         self._place(r)
@@ -973,8 +980,18 @@ class Session:
         t0 = time.time()
         label = f"{MODELS[model]} {k}"
         if model == "sdxl":
-            raw_fill = eng.fill(r.src, r.mask_img, prompt, seed, strength=SDXL_STRENGTH, progress=progress)
+            # upright (SDXL_UPRIGHT); the sky the hole continues is held for the first steps (its colour is fixed
+            # after the blend)
+            up, down = (self._up, self._down) if SDXL_UPRIGHT else (lambda a: a, lambda a: a)
+            flat = self.flat(r)
+            hold = None if flat is None else (up(Image.fromarray(flat[1])), up(flat[0]))
+            raw_fill = down(eng.fill(up(r.src), up(r.mask_img), prompt, seed, strength=SDXL_STRENGTH,
+                                     progress=progress, hold=hold))
         elif model == "flux":
+            # FLUX sees the area as the sensor stores it (a portrait photo on its side), unlike SDXL: sideways it keeps
+            # skies clean, and upright it fills a standing, person-shaped hole with something standing — a signboard
+            # on a path (4 variants in 8), a flag on a tower's edge (2 in 8), a new woman holding the bag left outside
+            # the selection (6 in 8). Sideways: no signboards or flags, and a person once (legs, upside down).
             raw_fill = eng.fill(r.src, r.mask_img, prompt, seed, progress=progress, log=log)
         else:  # OSOR / ObjectClear: no prompt; they also say how far the object's shadow and reflection go
             raw_fill, effect = self._effect_fill(model, eng, r.src, r.reg_mask, seed, progress)
@@ -986,6 +1003,8 @@ class Session:
             im = blend.seamless(raw_fill, r.src, r.reg_mask, r.membrane, seed=seed)
         else:
             im = blend.seamless(raw_fill, r.src, hole, seed=seed)
+        if model == "sdxl" and r.flat is not None:
+            im = blend.match_flat(im, r.flat[1], r.flat[0])
         self.add_candidate(r, label, im)
         measured(f"{model}_variant", time.time() - t0)
         log(f"#{r.id} {label} in {time.time() - t0:.0f}s"
@@ -993,18 +1012,32 @@ class Session:
             + (f" | shadow/reflection: +{int((hole & ~r.reg_mask).sum())} px" if hole is not None else ""))
         return label, im
 
+    def _up(self, a):
+        """An area image or array (sensor orientation) as the photo is seen; PIL in, PIL out."""
+        o = np.ascontiguousarray(apply_t(np.asarray(a), self.t))
+        return Image.fromarray(o) if isinstance(a, Image.Image) else o
+
+    def _down(self, a):
+        """The inverse of _up."""
+        o = np.ascontiguousarray(invert_t(np.asarray(a), self.t))
+        return Image.fromarray(o) if isinstance(a, Image.Image) else o
+
+    def flat(self, r):
+        """The part of r's hole that continues a sky (or another flat surface) and its colours (blend.flat_region),
+        once per removal; None when it is too small to matter."""
+        if r.flat is False:
+            region, field = blend.flat_region(np.asarray(r.src), r.reg_mask, r.membrane)
+            r.flat = (region, field) if region.sum() >= max(400, 0.01 * r.reg_mask.sum()) else None
+        return r.flat
+
     def _effect_fill(self, model, eng, src, hole, seed, progress=None):
         """OSOR / ObjectClear on an area (sensor orientation), shown to them upright — as the photo is seen: they
         recognise a shadow by where the light comes from and where the ground is — and turned back. Returns
         (image, effect) in the area's orientation."""
-        def up(a):
-            return Image.fromarray(np.ascontiguousarray(apply_t(np.asarray(a), self.t)))
-
-        def back(im):
-            return Image.fromarray(np.ascontiguousarray(invert_t(np.asarray(im), self.t)))
         fill = eng.fill_osor if model == "osor" else eng.fill
-        img, effect = fill(up(src), up((hole * 255).astype(np.uint8)), seed=seed, progress=progress, log=log)
-        return back(img), back(effect)
+        img, effect = fill(self._up(src), self._up(Image.fromarray((hole * 255).astype(np.uint8))), seed=seed,
+                           progress=progress, log=log)
+        return self._down(img), self._down(effect)
 
     def _effect_hole(self, r, effect):
         """The hole of an OSOR / ObjectClear variant: the area's hole plus what the model changed beyond it (the

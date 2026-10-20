@@ -24,6 +24,7 @@ FLUX_SIZES, FLUX_STEPS, FLUX_TURBO_STEPS = (512, 768), 16, 8
 FLUX_LORA = MODELS / "flux-turbo-alpha" / "diffusion_pytorch_model.safetensors"  # alimama Turbo-Alpha
 SDXL_STEPS, SDXL_GUIDED_STEPS = 12, 5  # DPM++ steps; classifier-free guidance on the first 5 only
 SDXL_CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids", "mask", "masked_image_latents"]
+SDXL_HOLD = 0.5  # share of the steps a held region (SDXL.fill hold=) follows its pre-fill
 SAM3_WEIGHTS = "model.safetensors"
 OSOR_WEIGHTS = Path("osor") / "osor-fluxfill" / "weights" / "fluxfill_phase2.pth"  # in MODELS
 OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was trained with
@@ -236,6 +237,7 @@ class SDXL:
             self.pipe.scheduler.config, algorithm_type="dpmsolver++", use_karras_sigmas=True)
         self.pipe.set_progress_bar_config(disable=True)
         self.masked = (None, None)  # (key, latents) of the last removal's photo with the hole blanked out
+        self.held = (None, None)  # (key, latents) of the last held pre-fill (fill hold=)
         log(f"SDXL ready ({dev})")
 
     def masked_latents(self, image: Image.Image, mask: Image.Image):
@@ -256,19 +258,54 @@ class SDXL:
         return self.masked[1]
 
     def fill(self, src: Image.Image, mask: Image.Image, prompt: str, seed: int, steps: int = SDXL_STEPS,
-             strength: float = 0.99, progress=None) -> Image.Image:
+             strength: float = 0.99, progress=None, hold=None) -> Image.Image:
         """At strength 1.0 SDXL starts from noise on the photo with the hole masked out (nothing of the removed object
-        leaks in); below 1 src must be pre-filled. progress(done, total) per step."""
+        leaks in); below 1 src must be pre-filled. progress(done, total) per step.
+        hold=(image, region): at strength 1, the region of the hole (bool, src size: the sky it continues) follows
+        `image` for the first SDXL_HOLD of the steps, then SDXL finishes it freely. What goes where is settled in the
+        first steps, so nothing is drawn into that sky (a bush where a hat stood against it, an animal on a
+        skyline, the mottled ghost of the object), and the sky still meets the rest of the fill."""
         S = 1024
         image = src.resize((S, S), Image.LANCZOS)
         mask_image = mask.resize((S, S), Image.NEAREST).filter(ImageFilter.MaxFilter(9))
         cb = _step_callback(progress, max(1, int(steps * strength)), SDXL_GUIDED_STEPS)
+        inputs = SDXL_CFG_INPUTS
+        if hold is not None and strength >= 1.0:
+            cb = self._hold(cb, hold[0].resize((S, S), Image.LANCZOS), hold[1], seed, steps)
+            inputs = SDXL_CFG_INPUTS + ["latents"]
         out = self.pipe(prompt=f"{prompt}, {DEFAULT_PROMPT}" if prompt else DEFAULT_PROMPT, negative_prompt=NEGATIVE,
                         image=image, mask_image=mask_image, masked_image_latents=self.masked_latents(image, mask_image),
                         height=S, width=S, strength=strength, guidance_scale=7.0, num_inference_steps=steps,
                         generator=self.torch.Generator("cpu").manual_seed(seed),
-                        callback_on_step_end=cb, callback_on_step_end_tensor_inputs=SDXL_CFG_INPUTS).images[0]
+                        callback_on_step_end=cb, callback_on_step_end_tensor_inputs=inputs).images[0]
         return out.resize(src.size, Image.LANCZOS)
+
+    def _hold(self, cb, image, region, seed, steps):
+        """The step callback `cb`, which also puts the latents of `region` back on `image`'s — noised to the next
+        step's level — after each of the first SDXL_HOLD of the steps. The pre-fill's latents are encoded once per
+        removal (same image for every variant)."""
+        import hashlib
+        torch, pipe = self.torch, self.pipe
+        S = image.width
+        key = hashlib.sha1(image.tobytes()).digest()
+        if self.held[0] != key:
+            x = pipe.image_processor.preprocess(image, height=S, width=S).to(pipe.device, pipe.vae.dtype)
+            with torch.no_grad():
+                self.held = (key, pipe.vae.encode(x).latent_dist.mode() * pipe.vae.config.scaling_factor)
+        lat = self.held[1]
+        noise = torch.randn(lat.shape, generator=torch.Generator("cpu").manual_seed(seed + 1)).to(lat.device, lat.dtype)
+        k = np.asarray(Image.fromarray(region.astype(np.uint8) * 255).resize((S // 8, S // 8), Image.BILINEAR))
+        km = torch.from_numpy(k.astype(np.float32) / 255.0).to(lat.device, lat.dtype)[None, None]
+        last = int(round(SDXL_HOLD * steps))
+
+        def held(p, i, t, kw):
+            out = cb(p, i, t, kw)
+            if i + 1 < last:
+                # DPM++'s add_noise noises to the scheduler's current step: after step i that is step i + 1
+                ref = p.scheduler.add_noise(lat, noise, p.scheduler.timesteps[i + 1:i + 2])
+                out = dict(out, latents=km * ref + (1 - km) * kw["latents"])
+            return out
+        return held
 
     def unload(self):
         del self.pipe
