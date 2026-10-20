@@ -122,6 +122,22 @@ def main():
                "Full detail is offered on the cord's variant, not on the person's")
     expect(A.Session.long(r_cord) and not A.Session.long(r_person), "the cord is long, the person is not")
 
+    # a selection longer than the photo's short side (a pole from its lamp to its base): the area must hold all of it
+    raw = type("Raw", (), {"frame": (0, 0, 1000, 1500)})()
+    line = np.zeros((1000, 1500), bool)
+    line[480:520, 40:1460] = True
+    __, box, reg = A.plan_region(raw, line, None, (0, False), square=False)
+    __, sbox, __ = A.plan_region(raw, line, None, (0, False))
+    expect(box[3] - box[2] == 1500 and box[1] - box[0] == 1000 and box[2] <= 40 and box[3] >= 1460,
+           f"a 1420 px selection in a 1000 px tall photo: area {box[3] - box[2]}x{box[1] - box[0]} (the square "
+           f"one is {sbox[3] - sbox[2]}x{sbox[1] - sbox[0]} and leaves its ends out)")
+    r_long = A.Removal(5, None)
+    r_long.reg_mask = reg
+    for model in ("sdxl", "lama"):
+        q = s.tile_plan(r_long, model)
+        expect(q is not None and q[1].T <= 1000 and (tiles.owners(reg, q[1].squares, q[1].T)[reg] >= 0).all(),
+               f"{model} fills that oblong area in squares ({len(q[1]) if q else 0} of {q[1].T if q else 0} px)")
+
     s.work = d / "work" / "ci-tiles"
     s.work.mkdir(parents=True, exist_ok=True)
     r = A.Removal(4, None)

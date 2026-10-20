@@ -74,7 +74,8 @@ TILE_WIDE = 0.5
 TILE_BUDGET = 60.0
 REFINE_BUDGET = 150.0
 REFINE_STRENGTH = 0.75  # on the pole: 0.5 kept the variant's blur in places (a grid of strokes on a plain wall)
-TILE_SIZES = {"flux": engines.FLUX_SIZES, "sdxl": (engines.SDXL.S,), "lama": (512,)}
+TILE_SIZES = {"flux": engines.FLUX_SIZES, "sdxl": (engines.SDXL.S,), "lama": (512,), "osor": engines.FLUX_SIZES,
+              "objectclear": (engines.ObjectClear.S,)}
 # SDXL fills a long, thin hole with a long, thin thing (a plank where a cord was, a rod where a pole was), in one pass
 # and more so in squares, measured: its variants stay in one pass. It still redraws for "Full detail" without FLUX.
 TILED_VARIANTS = ("flux", "lama")
@@ -405,8 +406,11 @@ def extract(lc, pid, info, targets, work):
     return mask_e, lum_e, dng
 
 
-def plan_region(raw, mask_e, lum_e, t=None, margin=1.35):
-    """The square sensor area around mask_e (side = margin x the object's extent) and the object's hole in it."""
+def plan_region(raw, mask_e, lum_e, t=None, margin=1.35, square=True):
+    """The sensor area around mask_e (side = margin x the object's extent) and the object's hole in it: a square, at
+    most the photo's short side. square=False: an object longer than that (a pole as tall as a portrait photo, from
+    its lamp to its base) gets an area as long as it needs along that axis — in a square its ends were left out, and
+    never removed. Such an area is filled in squares (Session.tile_plan)."""
     score = 1.0
     if t is None:
         t, score = match_orientation(raw.preview_lum(), lum_e)
@@ -421,12 +425,18 @@ def plan_region(raw, mask_e, lum_e, t=None, margin=1.35):
     side = int(max(by1 - by0, bx1 - bx0) * margin)
     side = int(np.clip(max(side, 384), 0, min(h, w)))
     side -= side % 2
+    H = W = side
+    if not square:  # longer than the square can be: as long as it needs (and the photo allows) along that axis
+        if by1 - by0 > side:
+            H = int(np.clip((by1 - by0) * margin, side, h)) // 2 * 2
+        if bx1 - bx0 > side:
+            W = int(np.clip((bx1 - bx0) * margin, side, w)) // 2 * 2
     cy, cx = (by0 + by1) // 2, (bx0 + bx1) // 2
-    ry0 = int(np.clip(cy - side // 2, 0, h - side)); rx0 = int(np.clip(cx - side // 2, 0, w - side))
+    ry0 = int(np.clip(cy - H // 2, 0, h - H)); rx0 = int(np.clip(cx - W // 2, 0, w - W))
     ry0 -= ry0 % 2; rx0 -= rx0 % 2
-    reg_mask = grow(sensor[ry0:ry0 + side, rx0:rx0 + side], g)
-    box = (y0 + ry0, y0 + ry0 + side, x0 + rx0, x0 + rx0 + side)
-    log(f"area {side}x{side} px | mask {int(reg_mask.sum())} px")
+    reg_mask = grow(sensor[ry0:ry0 + H, rx0:rx0 + W], g)
+    box = (y0 + ry0, y0 + ry0 + H, x0 + rx0, x0 + rx0 + W)
+    log(f"area {W}x{H} px | mask {int(reg_mask.sum())} px")
     return t, box, reg_mask
 
 
@@ -838,7 +848,7 @@ class Session:
         t0 = time.time()
         r = Removal(self.next_id, mask_e)
         self.next_id += 1
-        _, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t)
+        _, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t, square=False)
         self._init_area(r)
         self.removals.append(r)
         measured("area", time.time() - t0)
@@ -998,7 +1008,7 @@ class Session:
         t0 = time.time()
         plan = self.tile_plan(r, "lama")
         raw = engines.lama(r.src, r.mask_img) if plan is None else self._tiled(r, "lama", None, plan, "", r.id)
-        im = blend.seamless(raw, r.src, r.reg_mask, r.membrane, seed=r.id)
+        im = blend.seamless(raw, r.src, r.reg_mask, r.membrane, seed=r.id, texture=self.texture(r, "lama", plan))
         r.prefill = Image.composite(im, r.src, r.mask_img)  # diffusion starts from this, not from the object
         r.scale["LaMa"] = self.enlarged(r, "lama", plan)
         self.add_candidate(r, "LaMa", im)
@@ -1018,8 +1028,14 @@ class Session:
             eng.embeddings(engines.OSOR_PROMPT, log, tokens=512)
         t0 = time.time()
         label = f"{MODELS[model]} {k}"
-        plan = self.tile_plan(r, model) if model in ("sdxl", "flux") else None
-        if plan is not None:  # a long removal: in squares along the hole (tiles.py)
+        plan = self.tile_plan(r, model)
+        if plan is not None and model in ("osor", "objectclear"):  # an oblong area: in squares, effects joined
+            effect = np.zeros(r.reg_mask.shape, np.uint8)
+            raw_fill = self._tiled(r, model, eng, plan, prompt, seed, progress, effect=effect)
+            hole = self._effect_hole(r, Image.fromarray(effect))
+            if hole is not None:
+                r.holes[label] = hole
+        elif plan is not None:  # a long removal: in squares along the hole (tiles.py)
             raw_fill = self._tiled(r, model, eng, plan, prompt, seed, progress)
         elif model == "sdxl":
             # upright (SDXL_UPRIGHT); the sky the hole continues is held for the first steps (its colour is fixed
@@ -1041,10 +1057,11 @@ class Session:
             if hole is not None:
                 r.holes[label] = hole
         hole = r.holes.get(label)
+        texture = self.texture(r, model, plan)
         if hole is None:
-            im = blend.seamless(raw_fill, r.src, r.reg_mask, r.membrane, seed=seed)
+            im = blend.seamless(raw_fill, r.src, r.reg_mask, r.membrane, seed=seed, texture=texture)
         else:
-            im = blend.seamless(raw_fill, r.src, hole, seed=seed)
+            im = blend.seamless(raw_fill, r.src, hole, seed=seed, texture=texture)
         if model == "sdxl" and r.flat is not None:
             im = blend.match_flat(im, r.flat[1], r.flat[0])
         r.scale[label] = self.enlarged(r, model, plan)
@@ -1085,9 +1102,12 @@ class Session:
         """(engine size, tiles.Plan) to fill r's hole in squares, or None for one pass as before. label: the variant
         whose hole it is (OSOR / ObjectClear variants have their own). For a variant: only a thin hole, only when one
         pass would enlarge the fill more than TILE_FROM times, in squares as small as TILE_BUDGET allows. For a
-        refinement ("Full detail"): any hole, as near the engine's size as REFINE_BUDGET allows."""
+        refinement ("Full detail"): any hole, as near the engine's size as REFINE_BUDGET allows. An area longer than
+        a square (plan_region square=False) is always filled in squares, by every engine: at worst squares of its
+        short side, each as one pass would be."""
         sizes = TILE_SIZES.get(model)
-        if not sizes or (not refine and model not in TILED_VARIANTS):
+        oblong = r.reg_mask.shape[0] != r.reg_mask.shape[1]
+        if not sizes or (not refine and not oblong and model not in TILED_VARIANTS):
             return None
         own = label if label in r.holes else None
         key = (model, refine, own)  # decided once per removal: its variants are all made alike
@@ -1096,30 +1116,34 @@ class Session:
         return r.plans[key]
 
     def _tile_plan(self, hole, model, sizes, refine):
-        side = hole.shape[0]
-        one = sizes[0] if side <= sum(sizes) // 2 else sizes[-1]  # the size one pass uses
-        if side <= (1.5 if refine else TILE_FROM) * one:
+        short = min(hole.shape)
+        oblong = hole.shape[0] != hole.shape[1]
+        one = sizes[0] if short <= sum(sizes) // 2 else sizes[-1]  # the size one pass uses
+        if not oblong and short <= (1.5 if refine else TILE_FROM) * one:
             return None
         width, length = tiles.shape(hole)
-        if not refine and length < TILE_LONG * width:
+        if not refine and not oblong and length < TILE_LONG * width:
             return None
         budget = REFINE_BUDGET if refine else TILE_BUDGET
         best = None
-        for size in sizes:
-            secs = self.tile_seconds(model, size, refine)
-            for f in TILE_SCALES:
-                T = int(size * f) // 16 * 16
-                if T >= 0.8 * side:  # hardly better than one pass
-                    break
-                if width > TILE_WIDE * T:  # each square must see the photo across the hole
-                    continue
-                n = len(tiles.squares(hole, T))
-                if n * secs <= budget:
-                    if best is None or (f, n) < best[:2]:
-                        best = (f, n, size, T)
-                    break  # larger squares only enlarge more
+        if refine or model in TILED_VARIANTS:
+            for size in sizes:
+                secs = self.tile_seconds(model, size, refine)
+                for f in TILE_SCALES:
+                    T = int(size * f) // 16 * 16
+                    if T >= 0.8 * short:  # hardly better than one pass
+                        break
+                    if width > TILE_WIDE * T:  # each square must see the photo across the hole
+                        continue
+                    n = len(tiles.squares(hole, T))
+                    if n * secs <= budget:
+                        if best is None or (f, n) < best[:2]:
+                            best = (f, n, size, T)
+                        break  # larger squares only enlarge more
         if best is None:
-            return None
+            if not oblong:
+                return None
+            best = (0, 0, one, short)  # squares of the short side: each as one pass would be
         __, __, size, T = best
         return size, tiles.Plan(hole, T)
 
@@ -1138,14 +1162,15 @@ class Session:
 
     def variant_seconds(self, r, model):
         """What one variant of `model` will take for r (for the progress bar)."""
-        plan = self.tile_plan(r, model) if model in ("sdxl", "flux", "lama") else None
+        plan = self.tile_plan(r, model)
         if plan is None:
             return expected("lama" if model == "lama" else f"{model}_variant")
         return len(plan[1]) * self.tile_seconds(model, plan[0]) + expected("tiled_blend")
 
-    def _tiled(self, r, model, eng, plan, prompt, seed, progress=None, src=None, strength=1.0):
+    def _tiled(self, r, model, eng, plan, prompt, seed, progress=None, src=None, strength=1.0, effect=None):
         """r's raw fill made square by square (tiles.Plan.fill); src (default: the area) and strength < 1 redraw a
-        fill already in the hole. SDXL sees each square upright, with the sky it continues held."""
+        fill already in the hole. SDXL sees each square upright, with the sky it continues held. OSOR / ObjectClear:
+        `effect` (uint8, the area's shape) gets what each square changed (their shadow and reflection maps)."""
         size, P = plan
         up, down = (self._up, self._down) if model == "sdxl" and SDXL_UPRIGHT else (lambda a: a, lambda a: a)
         flat = self.flat(r) if model == "sdxl" and strength >= 1 else None
@@ -1157,6 +1182,10 @@ class Session:
                 out = eng.fill(img, mask, prompt, s, log=log, strength=strength, size=size)
             elif model == "lama":
                 out = engines.lama(img, mask)
+            elif model in ("osor", "objectclear"):
+                out, eff = self._effect_fill(model, eng, img, np.asarray(mask) > 127, s)
+                sl = P.steps[k][0]
+                effect[sl] = np.maximum(effect[sl], np.asarray(eff.convert("L")))
             else:
                 hold = None
                 if flat is not None:
@@ -1175,6 +1204,13 @@ class Session:
         log(f"#{r.id}: {len(P)} squares of {P.T} px ({model} at {size}{redrawn}) in {secs:.0f}s")
         return out
 
+    @staticmethod
+    def texture(r, model, plan):
+        """Whether the blend adds texture copied from around the hole (blend.texture_field): only to a fill made in
+        one pass, or in squares enlarged more than TILE_FROM times, which lost its own. Squares nearer the engine's
+        size have theirs, and the copied patches put streaks on a plain wall (from the column edges next to it)."""
+        return plan is None or plan[1].T / plan[0] > TILE_FROM
+
     def refine_model(self):
         """The engine "Full detail" redraws with: FLUX (the most detail), else SDXL; None without a GPU model."""
         return next((m for m in ("flux", "sdxl") if engines.usable(m)), None)
@@ -1184,7 +1220,7 @@ class Session:
         """How many photo pixels one pixel of a fill of `model` for r covers (1: drawn at the photo's resolution)."""
         if plan is not None:
             return plan[1].T / plan[0]
-        side = r.reg_mask.shape[0]
+        side = max(r.reg_mask.shape)
         if model in ("flux", "osor"):
             return side / (engines.FLUX_SIZES[0] if side <= sum(engines.FLUX_SIZES) // 2 else engines.FLUX_SIZES[1])
         return side / {"sdxl": engines.SDXL.S, "objectclear": engines.ObjectClear.S}.get(model, 512)
@@ -1224,9 +1260,9 @@ class Session:
         raw = self._tiled(r, model, eng, plan, prompt, seed, progress, src=src, strength=REFINE_STRENGTH)
         hole = r.holes.get(label)
         if hole is None:
-            im = blend.seamless(raw, r.src, r.reg_mask, r.membrane, seed=seed)
+            im = blend.seamless(raw, r.src, r.reg_mask, r.membrane, seed=seed, texture=self.texture(r, model, plan))
         else:
-            im = blend.seamless(raw, r.src, hole, seed=seed)
+            im = blend.seamless(raw, r.src, hole, seed=seed, texture=self.texture(r, model, plan))
         labels = {c[0] for c in r.candidates}
         new, n = label + REFINED, 2
         while new in labels:
@@ -1253,7 +1289,7 @@ class Session:
         object's shadow, its reflection), slightly grown like the object's own hole. None if that adds nothing
         worth it. The very edge of the area stays out: the blend needs photo all around the hole."""
         e = np.asarray(effect.convert("L")) > 127
-        side = e.shape[0]
+        side = max(e.shape)
         e = grow(e, max(3, side // 250))
         b = max(2, side // 100)
         e[:b], e[-b:], e[:, :b], e[:, -b:] = False, False, False, False
