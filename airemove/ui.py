@@ -524,6 +524,9 @@ class App:
         head = self.head = tk.Frame(left, bg=BG)
         head.pack(fill="x", pady=(0, int(10 * k)))
         tk.Label(head, text="AI Remove", font=self.font(13, True), fg=ACCENT, bg=BG).pack(side="left")
+        # the version, quiet, on the title's baseline: what the user reports and compares with the releases page
+        tk.Label(head, text=A.system.VERSION, font=self.f_small, fg=DIM, bg=BG).pack(
+            side="left", anchor="s", padx=(int(6 * k), 0), pady=(0, int(2 * k)))
         self.title = tk.Label(head, text="", font=self.font(13), fg=FG, bg=BG)
         self.title.pack(side="left", padx=(int(10 * k), 0))
         # the window's language, far right: as LightCraft's (Auto) or one of ours; it applies at the next opening
