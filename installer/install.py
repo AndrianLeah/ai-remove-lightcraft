@@ -933,6 +933,7 @@ def main():
     kept = {p: f for p, f in (cfg.get("model_paths") or {}).items() if p in mf.PARTS and mf.part_ok(p, f)}
     installed = [m for m in MODELS if mf.has(m, models_dir, kept, optional=True)]
     other = Path(args.models_from).expanduser() if args.models_from else None
+    asked = args.models is None and not args.yes
     given = {}  # model: {part: folder} — what the user already has in a folder of their own
     for spec in args.model_dir or []:
         m, __, folder = spec.partition("=")
@@ -943,7 +944,8 @@ def main():
         if not found:
             raise Stop(why)
         given[m.strip().lower()] = found
-    asked = args.models is None and not args.yes
+        if not asked:  # the questions show it with the model
+            say_found(m.strip().lower(), found)
     if args.models in (None, "recommended"):
         wanted = choose_models(flavour, gpu, installed, given, lc_sam) if asked else recommended_models(flavour, gpu)
     elif args.models == "none":
