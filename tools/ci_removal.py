@@ -4,17 +4,19 @@ app's code is imported from DIR, so its models are DIR's.
 
 The photo is synthetic, made here: a raw DNG laid out like LightCraft's export (dngCompression=uncompressed: one
 16-bit CFA image in strips, optical-black borders, 2x2 black levels, ForwardMatrix, a DefaultCrop, Orientation 6 = a
-portrait photo) with a red disc on a gently textured ground. base.png is that photo as LightCraft would develop and
-export it (upright, half size, its own tone curve), and the selection is the disc in that frame. Then what the window
-does, with the app's own code: airemove.Session as offline scripts use it (orientation matching, the removal's area,
-LaMa on the processor, the blend, the fill put back into the mosaic with sensor-like noise), "Save in LightCraft"
-(Session.write_all: <stem>-AIRemove.dng, imported and stacked through a stand-in for LightCraft's control channel)
-and the .airemove project; then the project reopened in a new session and saved again.
+portrait photo) with a red disc on a gently textured ground and a corner of blown sky. base.png is that photo as
+LightCraft would develop and export it (upright, half size, its own tone curve), and the selection is the disc in that
+frame. Then what the window does, with the app's own code: airemove.Session as offline scripts use it (orientation
+matching, the removal's area, LaMa on the processor, the blend, the fill put back into the mosaic with sensor-like
+noise), "Save in LightCraft" (Session.write_all: <stem>-AIRemove.dng, imported and stacked through a stand-in for
+LightCraft's control channel) and the .airemove project; then the project reopened in a new session and saved again.
 
-Checks: the orientation is found; the DNG reads back with the export's tags; every sensor value of the disc changed
-and the disc is gone (its colour is the ground's around it, with sensor-like noise); nothing changed outside the
-removal's area or farther than a few pixels from the disc; the project lists the removal; reopened, it rebuilds the
-same sensor data, and saving again rewrites the same file. Exit status 1 at the first check that fails.
+Checks: the orientation is found; the blown sky renders neutral white (not the magenta its unequal channel clips
+give after white balance) and, filled with that white, goes back as the sensor's clipped values; the DNG reads back
+with the export's tags; every sensor value of the disc changed and the disc is gone (its colour is the ground's around
+it, with sensor-like noise); nothing changed outside the removal's area or farther than a few pixels from the disc; the
+project lists the removal; reopened, it rebuilds the same sensor data, and saving again rewrites the same file. Exit
+status 1 at the first check that fails.
 
   ci_removal.py DIR [--keep FOLDER]    FOLDER: where the photo, base.png, the DNG and the project are left to look
                                        at (default: a temporary folder, deleted)
@@ -35,10 +37,12 @@ CROP = 8  # DefaultCropOrigin inside the active area
 TOP, LEFT, BOTTOM, RIGHT = 32, 48, 4, 8  # sensor rows / columns around the active area (optical black: read_noise)
 BLACK = np.array([[1022.5, 1024.0], [1023.5, 1025.0]])  # BlackLevel per CFA position (RGGB)
 WHITE = 15600
+SAT = WHITE + 40  # the sensor clips a little above WhiteLevel, as Canon's do
 NEUTRAL = np.array([0.52, 1.0, 0.61])  # AsShotNeutral
 FORWARD = np.array([[0.60, 0.15, 0.2142], [0.25, 0.70, 0.05], [0.02, 0.10, 0.7049]])  # rows sum to D50 white
 NOISE = (0.6, 9.0)  # the sensor's noise: variance = a * signal (DN) + b
 DISC = (620, 1040, 64)  # the object: centre y, x and radius in frame pixels (sensor orientation)
+SKY = (900, 1300)  # the blown sky: frame pixels below and right of this corner (y, x), far from the disc
 PID, LABEL = 1001, "LaMa"  # the photo's id in the stand-in LightCraft; the variant LaMa makes
 
 
@@ -71,12 +75,14 @@ def disc(grow=0.0):
 def scene():
     """Linear sRGB of the active area: a greenish-grey ground with a slow gradient and texture, a band of shadow
     along the top (from black to dim: rawdng.noise_model measures the sensor's noise in the shadows) and a light
-    block, both far from the disc (they also make the orientation unambiguous), the red disc."""
+    block, both far from the disc (they also make the orientation unambiguous), a corner of overcast sky far too
+    bright for the sensor (clipped in all three channels), the red disc."""
     y, x = np.mgrid[-CROP:H + CROP, -CROP:W + CROP].astype(np.float64)  # frame coordinates
     lum = 0.15 + 0.05 * x / W + 0.025 * np.sin(x / 41.0) * np.cos(y / 57.0)
     lum = np.where(y < 330, lum * (0.01 + 0.4 * np.clip(x, 0, W) / W), lum)
     rgb = lum[..., None] * np.array([0.9, 1.0, 0.82])
     rgb[(y >= 760) & (y < 940) & (x >= 200) & (x < 420)] = (0.6, 0.58, 0.5)
+    rgb[(y >= SKY[0]) & (x >= SKY[1])] = (5.6, 6.0, 6.6)
     cy, cx, r = DISC
     rgb[(y - cy) ** 2 + (x - cx) ** 2 <= r * r] = (0.5, 0.05, 0.035)
     return rgb
@@ -95,7 +101,7 @@ def write_raw(path, rgb, srgb_from_xyz):
     act = (slice(TOP, TOP + ah), slice(LEFT, LEFT + aw))
     signal[act] = np.clip(np.take_along_axis(cam, ch[act][..., None], axis=2)[..., 0], 0, None) * (WHITE - black[act])
     noise = np.random.default_rng(1).normal(0, 1, (rows, cols)) * np.sqrt(NOISE[0] * signal + NOISE[1])
-    cfa = np.clip(np.round(black + signal + noise), 0, 65535).astype(np.uint16)
+    cfa = np.clip(np.round(black + signal + noise), 0, SAT).astype(np.uint16)
     cm = np.diag(NEUTRAL) @ np.linalg.inv(FORWARD)  # XYZ -> camera (rawdng only uses it without a ForwardMatrix)
     tags = [(274, 3, 1, 6, True),  # Orientation: shown turned 90 degrees clockwise
             (33421, 3, 2, (2, 2), True), (33422, 1, 4, (0, 1, 1, 2), True),  # CFA: RGGB
@@ -178,6 +184,28 @@ def tags(path):
                 for t in tf.pages[0].tags.values()}
 
 
+def clipped_sky(raw, cfa0):
+    """An area across the blown sky's corner: the sky renders neutral white; that render written back as the fill
+    gives the sky the sensor's own clipped values again, and the ground its values within the noise."""
+    y0, x0 = raw.frame[:2]
+    box = (y0 + SKY[0] - 64, y0 + SKY[0] + 64, x0 + SKY[1] - 64, x0 + SKY[1] + 64)
+    srgb, gain = raw.render(box)
+    sky = np.zeros((128, 128), bool)
+    sky[64 + 3:, 64 + 3:] = True  # away from the edge, where demosaicing mixes sky and ground
+    ground = np.zeros((128, 128), bool)
+    ground[:64 - 3, :64 - 3] = True
+    c = np.median(srgb[sky], axis=0) * 255
+    expect(np.ptp(srgb[sky], axis=-1).max() * 255 < 0.5 and c[0] > 240,
+           f"the blown sky renders neutral white: {c.round(1)} (gain {gain:.2f})")
+    back = raw.fill_region(box, srgb, gain, np.ones((128, 128)))
+    region = cfa0[box[0]:box[1], box[2]:box[3]]
+    d = np.abs(back.astype(np.float64) - region)[ground]
+    expect(np.array_equal(back[sky], region[sky]) and (region[sky] == SAT).all(),
+           f"written back, the sky has the sensor's clipped values again ({SAT})")
+    sigma = np.sqrt(NOISE[0] * np.median(region[ground] - BLACK.mean()) + NOISE[1])
+    expect(d.mean() < 3 * sigma, f"and the ground its values within the noise: {d.mean():.1f} DN (sigma {sigma:.1f})")
+
+
 def run(d, out):
     sys.path.insert(0, str(d / "airemove"))
     import airemove as ar  # the installed app (its system.ROOT is d: models from d/models, log in d/work)
@@ -206,6 +234,7 @@ def run(d, out):
     a, b = s.raw.cached_noise()
     expect(0.3 < a < 1.2 and 4 < b < 30, f"sensor noise measured: variance {a:.2f} * signal + {b:.1f} "
                                           f"(made with {NOISE[0]} * signal + {NOISE[1]})")
+    clipped_sky(s.raw, cfa0)
 
     t0 = time.time()
     r = s.new_removal(sel)

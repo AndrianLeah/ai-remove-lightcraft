@@ -1,5 +1,6 @@
 """Raw DNG helpers for AI Remove: read the CFA mosaic of a LightCraft raw DNG export, render a region with an
-exactly invertible transform, put filled pixels back into the mosaic with sensor-like noise, write a new DNG.
+exactly invertible transform (clipped highlights white, as LightCraft shows them), put filled pixels back into the
+mosaic with sensor-like noise (clipped again where they reach that white), write a new DNG.
 
 Only uncompressed, strip-based CFA DNGs with a 2x2 pattern (what LightCraft writes with
 dngCompression=uncompressed) are supported.
@@ -12,6 +13,8 @@ from numpy.lib.stride_tricks import sliding_window_view as swv
 XYZD50_TO_SRGB = np.array([[3.1338561, -1.6168667, -0.4906146],
                            [-0.9787684, 1.9161415, 0.0334540],
                            [0.0719453, -0.2289914, 1.4052427]])
+CLIP_AT = 0.98  # a CFA value at or above this fraction of WhiteLevel (above black) is clipped
+WHITE_RAMP = (0.90, 0.98)  # fill_region: fill pixels from this fraction of the clipped white's level up become clipped
 
 
 def _rat(v):
@@ -62,9 +65,48 @@ class RawDNG:
         wb = m @ self.neutral
         return m / wb[:, None] if np.all(wb > 0) else m
 
+    def white_cap(self):
+        """Camera values (0..1) of the brightest neutral the sensor records: the white-balance neutral scaled so its
+        largest channel (green, normally: it clips first on grey and white things) is 1. Its render is a neutral
+        white at linear level 1 / max(neutral)."""
+        n = np.linalg.solve(self.cam_to_srgb(), np.ones(3))
+        return n / n.max(), 1.0 / float(n.max())
+
     def _phase(self, yy, xx):
         top, left = self.active[:2]
         return (yy - top) % 2, (xx - left) % 2
+
+    def _layout(self, y0, y1, x0, x1):
+        """Per pixel of a region: its CFA phase (row, column) and colour channel."""
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        py, px = self._phase(yy, xx)
+        return py, px, self.pattern[py, px]
+
+    def _clipped(self, reg, ch, blk):
+        """Pixels of a region (its raw values `reg`) whose demosaiced colour uses a clipped value of the channel that
+        clips first on neutral light: blown sky, white walls in the sun. Highlights where only red or blue clip (a red
+        flower) are left as they are."""
+        first = int(np.argmax(self.white_cap()[0]))
+        hot = (ch == first) & (reg >= blk + CLIP_AT * (self.white - blk))
+        if not hot.any():
+            return hot
+        return swv(np.pad(hot, 1), (3, 3)).any(axis=(-1, -2))  # the 3x3 neighbourhood demosaic reads
+
+    def saturation(self):
+        """The sensor's clipped value per CFA phase: the frame's largest value where that reaches the clip level (it
+        may sit a little above WhiteLevel), else WhiteLevel."""
+        if getattr(self, "_sat", None) is None:
+            y0, x0, h, w = self.frame
+            py0, px0 = self._phase(y0, x0)
+            sat = np.full((2, 2), self.white)
+            for i in (0, 1):
+                for j in (0, 1):
+                    p, q = (py0 + i) % 2, (px0 + j) % 2
+                    m = float(self.cfa[y0 + i:y0 + h:2, x0 + j:x0 + w:2].max())
+                    if m >= self.black[p, q] + CLIP_AT * (self.white - self.black[p, q]):
+                        sat[p, q] = m
+            self._sat = sat
+        return self._sat
 
     # ---------------------------------------------------------------- preview for orientation matching
     def preview_lum(self):
@@ -79,9 +121,7 @@ class RawDNG:
     # ---------------------------------------------------------------- region render
     def demosaic(self, y0, y1, x0, x1, cfa=None):
         reg = (self.cfa if cfa is None else cfa)[y0:y1, x0:x1].astype(np.float64)
-        yy, xx = np.mgrid[y0:y1, x0:x1]
-        py, px = self._phase(yy, xx)
-        ch = self.pattern[py, px]
+        py, px, ch = self._layout(y0, y1, x0, x1)
         blk = self.black[py, px]
         v = np.clip((reg - blk) / (self.white - blk), 0, None)
         out = np.zeros(reg.shape + (3,))
@@ -105,15 +145,30 @@ class RawDNG:
         return np.where(y <= 0.04045, y / 12.92, np.power((y + 0.055) / 1.055, 2.4))
 
     def render(self, box, gain=None, cfa=None):
-        """Region as sRGB-encoded 0..1 (exactly invertible by fill_region). gain=None: from the region's median;
-        pass one gain (global_gain) to keep several regions in the same render space. cfa: a working copy."""
+        """Region as sRGB-encoded 0..1 (exactly invertible by fill_region, but for clipped highlights). gain=None:
+        from the region's median; pass one gain (global_gain) to keep several regions in the same render space.
+        cfa: a working copy.
+        Clipped highlights render as a neutral white, as LightCraft shows them: after white balance the channels
+        that did not clip would tint them (an overcast sky clipped in all three channels comes out magenta)."""
         y0, y1, x0, x1 = box
-        rgb, _, _ = self.demosaic(y0, y1, x0, x1, cfa)
+        rgb, ch, blk = self.demosaic(y0, y1, x0, x1, cfa)
+        hot = self._clipped((self.cfa if cfa is None else cfa)[y0:y1, x0:x1], ch, blk)
+        if hot.any():  # no channel brighter than the one that clips first: next to a clipped sky, a dark pixel gets
+            # red and blue from it through demosaicing, and would be a magenta fringe
+            cap = self.white_cap()[0]
+            v = rgb[hot]
+            rgb[hot] = np.minimum(v, cap * np.minimum(1.0, v[:, [int(np.argmax(cap))]]))
         lin = np.einsum("ij,hwj->hwi", self.cam_to_srgb(), rgb)
         if gain is None:  # mid-tones near 0.45, but the brightest 0.5 % must not clip (detail lost in the raw)
-            lum = np.clip(lin.mean(axis=2), 0, None)
+            lum, top = np.clip(lin.mean(axis=2), 0, None), lin.max(axis=2)
+            if hot.any() and (~hot).sum() > 0.05 * hot.size:
+                # a clipped sky is no mid-tone, and its brightest pixels are its white, not the fringes demosaicing
+                # leaves along its edges
+                lum, top = lum[~hot], top[~hot]
+                if hot.mean() > 0.005:
+                    top = np.append(top, np.full(int(hot.sum()), self.white_cap()[1]))
             gain = min(0.45 / max(1e-6, float(np.percentile(lum, 50))),
-                       0.97 / max(1e-6, float(np.percentile(lin.max(axis=2), 99.5))))
+                       0.97 / max(1e-6, float(np.percentile(top, 99.5))))
             gain = float(np.clip(gain, 0.5, 64))
         return self.oetf(lin * gain), gain
 
@@ -196,9 +251,11 @@ class RawDNG:
     def fill_region(self, box, filled_srgb, gain, alpha, cfa=None, rng_seed=11):
         """Raw values for a filled region: filled_srgb HxWx3 0..1 in render space (same gain as render), alpha HxW
         0..1 where to replace. Re-mosaics with sensor-like noise and blends over `cfa` (default: the original).
+        Where the region has clipped highlights, fill pixels as white as they render become clipped raw values.
         Returns the uint16 region."""
         y0, y1, x0, x1 = box
-        _, ch, blk = self.demosaic(y0, y1, x0, x1)
+        py, px, ch = self._layout(y0, y1, x0, x1)
+        blk = self.black[py, px]
         lin = self.inv_oetf(filled_srgb) / gain
         cam = np.clip(np.einsum("ij,hwj->hwi", np.linalg.inv(self.cam_to_srgb()), lin), 0, None)
         newv = np.take_along_axis(cam, ch[..., None], axis=2)[..., 0]
@@ -207,9 +264,44 @@ class RawDNG:
         a, b = self.cached_noise()
         rng = np.random.default_rng(rng_seed)
         sig = np.sqrt(np.clip(a * np.clip(newv * span, 0, None) + b, 0, None))
-        new_raw = new_raw + rng.normal(0, 1, new_raw.shape) * sig
         old = (self.cfa if cfa is None else cfa)[y0:y1, x0:x1].astype(np.float64)
+        hot = self._clipped(old, ch, blk)
+        t = self._into_white(filled_srgb, gain) if hot.any() else None
+        if t is not None and t.any():  # clipped highlights: fill pixels as white as render shows them clip too
+            up = np.minimum(blk + newv * span / np.maximum(1 - t, 1e-3), self._clipped_values(old, hot, alpha, py, px))
+            new_raw = np.where(t > 0, up, new_raw)
+            sig = np.where((t > 0) & (up >= blk + CLIP_AT * span), 0.0,  # clipped values carry no noise
+                           np.sqrt(np.clip(a * np.clip(new_raw - blk, 0, None) + b, 0, None)))
+        new_raw = new_raw + rng.normal(0, 1, new_raw.shape) * sig
+        if hot.any():
+            new_raw = np.minimum(new_raw, self.saturation()[py, px])
         return np.clip((alpha * new_raw + (1 - alpha) * old).round(), 0, 65535).astype(np.uint16)
+
+    def _into_white(self, filled_srgb, gain):
+        """How far each fill pixel is into the white render gives clipped highlights (0..1), or None when that white
+        is beyond what render shows (a glint in a dark area: render's white is not theirs there).
+        At 1, fill_region gives the pixel the raw values of the clipped pixels around the hole, so that LightCraft's
+        highlight handling treats it as the sky around it. Just below, the pixel climbs towards them as a real
+        highlight does: brighter along its own colour, each channel stopping where it clips."""
+        lo, hi = WHITE_RAMP
+        wr = gain * self.white_cap()[1]  # the clipped white's linear render level
+        if wr > 1 / lo:
+            return None
+        return np.clip((self.inv_oetf(filled_srgb).min(axis=2) / min(wr, 1.0) - lo) / (hi - lo), 0, 1)
+
+    def _clipped_values(self, old, hot, alpha, py, px):
+        """Per pixel, the typical raw value of its CFA phase in the region's clipped highlights (`hot`) outside the
+        hole: the sensor's clip level where all channels clipped, a channel's own level where it did not."""
+        sel = hot & (alpha < 0.01)
+        if sel.sum() < 16:
+            sel = hot
+        out = np.empty_like(old)
+        for i in (0, 1):
+            for j in (0, 1):
+                ph = (py == i) & (px == j)
+                v = old[ph & sel]
+                out[ph] = np.median(v) if v.size else self.saturation()[i, j]
+        return out
 
     def write_cfa(self, out_path, cfa, boxes):
         """Copy the DNG and overwrite, in place, the rows of `boxes` with the values of `cfa`."""
