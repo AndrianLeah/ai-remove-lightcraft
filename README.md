@@ -55,7 +55,8 @@ one project file next to the raw (`<raw>.airemove`). The original raw is never m
 - **macOS 12+** on Apple Silicon (M1 or later; 16 GB of memory recommended). Intel Macs are not supported.
 - **Linux x86-64** with NVIDIA, or AMD with ROCm.
 - **Disk:** 5 to 30 GB, depending on the models.
-- **Internet:** only while installing.
+- **Internet:** while installing. Afterwards only a check for a new AI Remove on GitHub, at most once a day: it
+  sends nothing about you or your photos, and `"update_check": false` in `work/settings.json` turns it off.
 
 ## Install
 
@@ -145,6 +146,9 @@ An optional prompt **in English** guides SDXL and FLUX, for example "old plaster
 | Undo | Ctrl+Z | Cmd+Z |
 | Compare with the original | hold "Original" or `\` | hold "Original" or `\` |
 | Remove selection | Enter | Enter |
+| Stop generating (the variants already made stay) | Esc | Esc |
+| Previous / next variant | ← / → | ← / → |
+| Delete a variant | right-click it | right-click (or Ctrl+click) it |
 
 AI Remove also opens from the Start menu, Applications or the app menu. It always works on LightCraft's active photo.
 
@@ -198,7 +202,8 @@ Uninstalling removes the app, its models and the LightCraft settings it added. Y
 
 ## Privacy and security
 
-Your photos never leave your computer. AI Remove drives LightCraft through LightCraft's control channel. That
+Your photos never leave your computer. The only request to the internet after the install is the daily check for a
+new version (above). AI Remove drives LightCraft through LightCraft's control channel. That
 channel only accepts connections from your own computer (127.0.0.1, port 7980), but it has **no password**: while
 LightCraft runs, any program on your computer can drive it. Uninstalling turns the channel off.
 

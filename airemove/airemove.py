@@ -106,6 +106,10 @@ class Fail(Exception):
     pass
 
 
+class Stopped(Exception):
+    """The window's Stop: the variant under way was dropped, between two of its steps (Session.stop)."""
+
+
 class LC:
     """The running LightCraft, through its control channel: one JSON request per line on 127.0.0.1:<port>, one reply
     per line (LightCraft docs/control-protocol.md). Commands go through engine.execute; replies are
@@ -539,6 +543,26 @@ def remember(key, value):
             pass
 
 
+UPDATE_EVERY = 24 * 3600  # s: GitHub is asked about a new version at most this often
+
+
+def update_available():
+    """(version, release page) when GitHub has a newer AI Remove than this one, else None. Asked at most once a day
+    (the answer is remembered in work/settings.json); off with "update_check": false there, or AIREMOVE_NO_UPDATE_CHECK
+    in the environment."""
+    if os.environ.get("AIREMOVE_NO_UPDATE_CHECK") or setting("update_check", True) is False:
+        return None
+    seen = setting("update_seen") or {}
+    if time.time() - float(seen.get("t", 0)) > UPDATE_EVERY:
+        got = system.latest_release()
+        seen = {"t": time.time(), "version": got[0], "url": got[1]} if got else dict(seen, t=time.time())
+        remember("update_seen", seen)
+    v = seen.get("version")
+    if v and system.version_tuple(v) > system.version_tuple(system.VERSION):
+        return v, seen.get("url") or system.RELEASES
+    return None
+
+
 def rect_t(r, shape, t):
     """Rectangle (y0, y1, x0, x1) of an array with `shape` -> the same rectangle after apply_t(array, t)."""
     y0, y1, x0, x1 = r
@@ -600,6 +624,7 @@ class Session:
         self.removals, self.next_id = [], 1
         self.seed = int(time.time()) % 100000
         self._engine_lock = threading.RLock()
+        self.stop = threading.Event()  # set by the window's Stop: generations end at their next step (Stopped)
         self._proj_lock = threading.Lock()
         self._work_cfa, self._work_key = None, None
         self.dng_path, self.dng_id, self.restored = None, None, None
@@ -1069,8 +1094,10 @@ class Session:
     # -------------------------------------------------------------- generation
     def run_lama(self, r):
         t0 = time.time()
+        self.check_stop()
         plan = self.tile_plan(r, "lama")
-        raw = engines.lama(r.src, r.mask_img) if plan is None else self._tiled(r, "lama", None, plan, "", r.id)
+        raw = (engines.lama(r.src, r.mask_img) if plan is None else
+               self._tiled(r, "lama", None, plan, "", r.id, progress=self.check_stop))
         im = blend.seamless(raw, r.src, r.reg_mask, r.membrane, seed=r.id, texture=self.texture(r, "lama", plan))
         r.prefill = Image.composite(im, r.src, r.mask_img)  # diffusion starts from this, not from the object
         r.scale["LaMa"] = self.enlarged(r, "lama", plan)
@@ -1080,7 +1107,31 @@ class Session:
         log(f"#{r.id} LaMa in {time.time() - t0:.1f}s")
         return "LaMa", im
 
+    def check_stop(self, *__):
+        """Raise Stopped when the window's Stop was pressed (called at every step and square)."""
+        if self.stop.is_set():
+            raise Stopped()
+
     def run_model(self, r, model, prompt, progress=None):
+        """One variant of `model` for r: (label, image). Session.stop ends it at its next step: Stopped, and nothing
+        is added (its number is used again by the next one)."""
+        k = r.counts.get(model, 0)
+
+        def step(i, total):
+            self.check_stop()
+            if progress:
+                progress(i, total)
+        try:
+            self.check_stop()
+            return self._run_model(r, model, prompt, step)
+        except Stopped:
+            r.counts[model] = k
+            r.holes.pop(f"{MODELS[model]} {k + 1}", None)
+            engines._free_gpu()
+            log(f"#{r.id}: stopped, {MODELS[model]} {k + 1} dropped")
+            raise
+
+    def _run_model(self, r, model, prompt, progress):
         eng = self.get_engine(model)
         k = r.counts.get(model, 0) + 1
         r.counts[model] = k
@@ -1242,11 +1293,11 @@ class Session:
         def one(img, mask, k):
             s = seed + 7919 * k
             if model == "flux":
-                out = eng.fill(img, mask, prompt, s, log=log, strength=strength, size=size)
+                out = eng.fill(img, mask, prompt, s, log=log, strength=strength, size=size, progress=self.check_stop)
             elif model == "lama":
                 out = engines.lama(img, mask)
             elif model in ("osor", "objectclear"):
-                out, eff = self._effect_fill(model, eng, img, np.asarray(mask) > 127, s)
+                out, eff = self._effect_fill(model, eng, img, np.asarray(mask) > 127, s, self.check_stop)
                 sl = P.steps[k][0]
                 effect[sl] = np.maximum(effect[sl], np.asarray(eff.convert("L")))
             else:
@@ -1257,7 +1308,7 @@ class Session:
                     if region.sum() >= 400:
                         hold = (up(Image.fromarray(np.ascontiguousarray(flat[1][sl]))), up(region))
                 out = down(eng.fill(up(img), up(mask), prompt, s, strength=SDXL_STRENGTH if strength >= 1 else strength,
-                                    hold=hold))
+                                    hold=hold, progress=self.check_stop))
             return out
         t0 = time.time()
         out = P.fill(r.src if src is None else src, one, progress)
@@ -1320,7 +1371,12 @@ class Session:
         mask_img, __, __ = self.hole(r, label)
         src = Image.composite(r.candidates[r.chosen][1], r.src, mask_img)
         seed = self.seed + 97 * r.id + 5000 + len(r.candidates)
-        raw = self._tiled(r, model, eng, plan, prompt, seed, progress, src=src, strength=REFINE_STRENGTH)
+        try:
+            raw = self._tiled(r, model, eng, plan, prompt, seed, progress, src=src, strength=REFINE_STRENGTH)
+        except Stopped:
+            engines._free_gpu()
+            log(f"#{r.id}: Full detail stopped")
+            raise
         hole = r.holes.get(label)
         if hole is None:
             im = blend.seamless(raw, r.src, r.reg_mask, r.membrane, seed=seed, texture=self.texture(r, model, plan))
