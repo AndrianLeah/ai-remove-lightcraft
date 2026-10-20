@@ -1008,6 +1008,20 @@ class Session:
         if not r.user_picked:
             r.chosen = len(r.candidates) - 1
 
+    def delete_variant(self, r, idx):
+        """Drop variant idx of r for good (the project keeps no copy of it). If it was the chosen one, the variant
+        before it is chosen (none if it was the last). New variants keep counting (FLUX 5 after FLUX 4, even if FLUX
+        4 was deleted): a label is never reused. Returns the label."""
+        label = r.candidates[idx][0]
+        del r.candidates[idx]
+        for d in (r.png, r.preview, r.holes, r.hole_cache, r.scale):
+            d.pop(label, None)
+        r.png.pop(label + "#hole", None)
+        if r.chosen is not None and r.chosen >= idx:
+            r.chosen = max(0, r.chosen - 1) if r.candidates else None
+        log(f"#{r.id}: deleted variant {label}" + (f", chosen {r.chosen_label()}" if r.chosen is not None else ""))
+        return label
+
     # -------------------------------------------------------------- engines
     def get_sam(self):
         """SAM 3 with the photo analysed; reloaded if FLUX pushed it off the GPU."""

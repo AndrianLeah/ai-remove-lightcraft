@@ -1135,11 +1135,14 @@ class App:
         f, th, t1, t2 = self.row_widgets[r.id]
         n = len(r.candidates)
         t1.configure(text=f"#{r.id}" + (f"  ·  {A.label_text(r.chosen_label())}" if r.chosen is not None else ""))
-        t2.configure(text=_n("{n} variant", "{n} variants", n) if n else _("generating…"))
+        t2.configure(text=_n("{n} variant", "{n} variants", n) if n else
+                     (_("generating…") if self.busy else _("no variants")))
         if r.chosen is not None:
             ph = ImageTk.PhotoImage(self.tile_image(r, r.chosen, self.ROWTHUMB, square=True))
-            th.configure(image=ph)
-            th.image = ph
+        else:  # every variant deleted
+            ph = ImageTk.PhotoImage(Image.new("RGB", (self.ROWTHUMB, self.ROWTHUMB), (44, 44, 44)))
+        th.configure(image=ph)
+        th.image = ph
         f.configure(highlightbackground=ACCENT if r is self.cur else CARD)
 
     def tile_image(self, r, idx, size, square=False):
@@ -1174,7 +1177,8 @@ class App:
         if r is None:
             return
         if not r.candidates:
-            tk.Label(self.vars.inner, text=_("Generating the variants…"), font=self.f_small, fg=DIM, bg=CARD).pack(anchor="w")
+            text = _("Generating the variants…") if self.busy else _("No variants: make new ones with \"More variants\"")
+            tk.Label(self.vars.inner, text=text, font=self.f_small, fg=DIM, bg=CARD).pack(anchor="w")
             return
         for c in range(2):
             self.vars.inner.columnconfigure(c, weight=1)
@@ -1193,11 +1197,50 @@ class App:
             for w in (f, lb, cap):
                 w.bind("<Button-1>", lambda e, i=i: self.choose(i))
                 w.bind("<Double-Button-1>", lambda e: self.zoom_to(self.cur))
-                w.bind("<Enter>", lambda e, f=f, i=i: f.configure(
-                    highlightbackground=ACCENT if i == self.cur.chosen else "#5a5a5a"))
-                w.bind("<Leave>", lambda e, f=f, i=i: f.configure(
-                    highlightbackground=ACCENT if i == self.cur.chosen else CARD_HI))
+                w.bind(f"<Button-{RIGHT}>", lambda e, i=i: self.variant_menu(e, i))
+                if MAC:
+                    w.bind("<Control-Button-1>", lambda e, i=i: self.variant_menu(e, i))
+                w.bind("<Enter>", lambda e, f=f, i=i: self.on_variant_hover(f, i, True))
+                w.bind("<Leave>", lambda e, f=f, i=i: self.on_variant_hover(f, i, False))
             self.tiles.append(f)
+
+    def on_variant_hover(self, f, i, inside):
+        if self.cur is None:
+            return
+        f.configure(highlightbackground=ACCENT if i == self.cur.chosen else ("#5a5a5a" if inside else CARD_HI))
+        if inside:  # what the variant's thumbnail does, where the tools' hint is
+            self.hover_hint = self.hint_lbl.cget("text")
+            self.hint_lbl.configure(text=_("Click: use this variant  ·  Double-click: zoom to it  ·  Right-click: delete"))
+        elif getattr(self, "hover_hint", None) is not None:
+            self.hint_lbl.configure(text=self.hover_hint)
+            self.hover_hint = None
+
+    def variant_menu(self, e, i):
+        """Right-click on a variant: a menu to delete it."""
+        m = tk.Menu(self.root, tearoff=0, bg=CARD, fg=FG, activebackground=ACCENT, activeforeground="#1b1b1b", bd=0,
+                    relief="flat", font=self.f_small)
+        m.add_command(label=_("Delete variant"), command=lambda: self.delete_variant(i))
+        m.tk_popup(e.x_root, e.y_root)
+
+    def delete_variant(self, i):
+        """The variant goes for good, from the window and from the project. A generation under way may be adding to
+        the list (its indices would move): not while one runs."""
+        r = self.cur
+        if r is None or i >= len(r.candidates):
+            return
+        if self.busy or self.writing:
+            self.status.configure(text=_("Wait for the generation in progress to finish, then delete the variant"))
+            return
+        was = r.chosen_label()
+        self.s.delete_variant(r, i)
+        if r.chosen_label() != was:
+            self.dng_dirty = True
+        self.comp_key = None
+        self.update_row(r)
+        self.fill_tiles()
+        self.render_main()
+        self.update_buttons()
+        self.autosave()
 
     def choose(self, i):
         r = self.cur
@@ -1553,7 +1596,7 @@ class App:
         """Tests: drive the window through the real handlers. Actions (coordinates normalized to the photo):
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
         snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear] · more:n · pick:i · detail ·
-        select:id · delete · waitidle · save · quit"""
+        dropvar:i · select:id · delete · waitidle · save · quit"""
         if not actions:
             return
         kind, __, arg = actions[0].partition(":")
@@ -1629,6 +1672,9 @@ class App:
         elif kind == "detail":
             self.full_detail()
             delay = 500
+        elif kind == "dropvar":  # as the right-click menu's "Delete variant"
+            self.delete_variant(int(vals[0]))
+            delay = 300
         elif kind == "pick":
             self.choose(int(vals[0]))
             delay = 300
