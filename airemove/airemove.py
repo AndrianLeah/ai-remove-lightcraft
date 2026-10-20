@@ -988,6 +988,10 @@ class Session:
             raw_fill = down(eng.fill(up(r.src), up(r.mask_img), prompt, seed, strength=SDXL_STRENGTH,
                                      progress=progress, hold=hold))
         elif model == "flux":
+            # FLUX sees the area as the sensor stores it (a portrait photo on its side), unlike SDXL: sideways it keeps
+            # skies clean, and upright it fills a standing, person-shaped hole with something standing — a signboard
+            # on a path (4 variants in 8), a flag on a tower's edge (2 in 8), a new woman holding the bag left outside
+            # the selection (6 in 8). Sideways: no signboards or flags, and a person once (legs, upside down).
             raw_fill = eng.fill(r.src, r.mask_img, prompt, seed, progress=progress, log=log)
         else:  # OSOR / ObjectClear: no prompt; they also say how far the object's shadow and reflection go
             raw_fill, effect = self._effect_fill(model, eng, r.src, r.reg_mask, seed, progress)
