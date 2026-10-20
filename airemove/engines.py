@@ -118,9 +118,16 @@ SHADOW_MODELS = ("osor", "objectclear")  # remove the object together with its s
 
 
 # ------------------------------------------------------------------------------------------------ LaMa
+_LAMA = None
+
+
 def lama(src: Image.Image, mask: Image.Image) -> Image.Image:
-    import onnxruntime as ort
-    sess = ort.InferenceSession(str(mf.part_dir("lama") / "lama_fp32.onnx"), providers=["CPUExecutionProvider"])
+    """LaMa at its fixed 512 px. The ONNX session is made once (~12 s of a ~14 s first call; later ones ~1.6 s)."""
+    global _LAMA
+    if _LAMA is None:
+        import onnxruntime as ort
+        _LAMA = ort.InferenceSession(str(mf.part_dir("lama") / "lama_fp32.onnx"), providers=["CPUExecutionProvider"])
+    sess = _LAMA
     img = np.asarray(src.resize((512, 512), Image.LANCZOS)).astype(np.float32) / 255.0
     mk = (np.asarray(mask.resize((512, 512), Image.NEAREST)) > 127).astype(np.float32)
     out = sess.run(None, {"image": (img * (1 - mk[..., None])).transpose(2, 0, 1)[None], "mask": mk[None, None]})[0][0]
@@ -220,6 +227,7 @@ def _step_callback(progress, total, guided=0):
 # ------------------------------------------------------------------------------------------------ SDXL
 class SDXL:
     name = "SDXL"
+    S = 1024  # its working size
 
     def __init__(self, log=print):
         dev = device()
@@ -267,7 +275,7 @@ class SDXL:
         `image` for the first SDXL_HOLD of the steps, then SDXL finishes it freely. What goes where is settled in the
         first steps, so nothing is drawn into that sky (a bush where a hat stood against it, an animal on a
         skyline, the mottled ghost of the object), and the sky still meets the rest of the fill."""
-        S = 1024
+        S = self.S
         image = src.resize((S, S), Image.LANCZOS)
         mask_image = mask.resize((S, S), Image.NEAREST).filter(ImageFilter.MaxFilter(9))
         cb = _step_callback(progress, max(1, int(steps * strength)), SDXL_GUIDED_STEPS)
@@ -461,21 +469,24 @@ class FLUX:
                 Image.fromarray(eff).resize(src.size, Image.BILINEAR))
 
     def fill(self, src: Image.Image, mask: Image.Image, prompt: str, seed: int, steps: int = None,
-             progress=None, log=print) -> Image.Image:
+             progress=None, log=print, strength: float = 1.0, size: int = None) -> Image.Image:
+        """strength < 1: src's hole holds a fill to redraw (its layout stays, its detail is drawn anew). size: one of
+        FLUX_SIZES (default: the one nearer src's)."""
         torch = self.torch
         steps = steps or self.steps
         p = f"{prompt}, {DEFAULT_PROMPT}" if prompt else DEFAULT_PROMPT
         emb = self.embeddings(p, log)
-        # only two working sizes: ROCm compiles GPU kernels (the VAE decoder above all) the first time it meets a
-        # size — minutes — and caches them; with any multiple of 16 nearly every new area paid that again
-        S = FLUX_SIZES[0] if src.width <= (FLUX_SIZES[0] + FLUX_SIZES[1]) // 2 else FLUX_SIZES[1]
+        # only two working sizes, both square: ROCm compiles GPU kernels (the VAE decoder above all) the first time it
+        # meets a size — minutes — and caches them; with any multiple of 16 nearly every new area paid that again.
+        # Oblong sizes (1024 x 512) were also slower per step than 768 x 768 once compiled, measured
+        S = size or (FLUX_SIZES[0] if src.width <= (FLUX_SIZES[0] + FLUX_SIZES[1]) // 2 else FLUX_SIZES[1])
         out = self.pipe(prompt_embeds=emb["prompt_embeds"].to(self.dev, torch.bfloat16),
                         pooled_prompt_embeds=emb["pooled"].to(self.dev, torch.bfloat16),
                         image=src.resize((S, S), Image.LANCZOS),
                         mask_image=mask.resize((S, S), Image.NEAREST).filter(ImageFilter.MaxFilter(9)),
-                        height=S, width=S, guidance_scale=30.0, num_inference_steps=steps,
+                        height=S, width=S, guidance_scale=30.0, num_inference_steps=steps, strength=strength,
                         generator=torch.Generator("cpu").manual_seed(seed),
-                        callback_on_step_end=_step_callback(progress, steps)).images[0]
+                        callback_on_step_end=_step_callback(progress, max(1, int(steps * strength)))).images[0]
         # give the cached blocks back: with ~10 GB at the peak, leftovers from one variant make the next one
         # spill into shared memory (3-10x slower)
         _free_gpu()

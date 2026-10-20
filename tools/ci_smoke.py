@@ -12,7 +12,8 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                initialize, tools/list, check_system (which must see whether DIR is installed),
                                check_system with model_dirs; the install tool's --model-dir arguments
   ci_smoke.py remove DIR       one removal end to end with the install's Python and code, LightCraft left out:
-                               tools/ci_removal.py (a synthetic raw DNG, LaMa, the blend, the DNG and the project)
+                               tools/ci_removal.py (a synthetic raw DNG, LaMa, the blend, the DNG and the project),
+                               then a long one in tiles: tools/ci_tiles.py (a cord across a synthetic area, LaMa)
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
                                app, its menu entry and, on Windows, its Settings > Apps entry are gone; the user's own
                                model folders are still there
@@ -205,6 +206,8 @@ def remove(d):
     expect(py.exists(), f"{py} exists")
     r = run([py, ROOT / "tools" / "ci_removal.py", d])
     expect(r.returncode == 0, f"removal end to end: exit status 0 (it was {r.returncode})")
+    r = run([py, ROOT / "tools" / "ci_tiles.py", d])
+    expect(r.returncode == 0, f"long removal in tiles: exit status 0 (it was {r.returncode})")
 
 
 def uninstall(d):

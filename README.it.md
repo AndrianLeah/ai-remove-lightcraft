@@ -13,6 +13,10 @@ in Lightroom è "Rimozione generativa", ma tutto gira sul tuo computer.
 2. Nella finestra di AI Remove clicca su ciò che vuoi togliere: SAM 3 lo seleziona tutto.
 3. Premi **Rimuovi selezione**: vengono generate alcune varianti e tu scegli la migliore. Per togliere anche l'ombra
    o il riflesso dell'oggetto, premi prima **Includi l'ombra**: li aggiunge alla selezione, in blu.
+   Pali, cavi e cordoni lunghi vengono riempiti a tasselli lungo l'oggetto, ognuno vicino alla misura del modello:
+   il riempimento resta nitido invece di essere un'immagine piccola ingrandita. Per quelli sottili si aggiunge una
+   variante LaMa, che continua meglio ciò che c'è dietro. **Dettaglio pieno** ridisegna la variante scelta alla
+   risoluzione della foto.
 4. Premi **Salva in LightCraft**: il risultato è un **DNG RAW** (`<nome>-AIRemove.dng`), impilato sopra l'originale e
    con lo stesso sviluppo. Puoi continuare a svilupparlo come un RAW qualsiasi.
 
@@ -31,7 +35,7 @@ salvato in un unico file accanto al RAW (`<raw>.airemove`). Il RAW originale non
 | **macOS 12+** | Mac con chip Apple (M1 o successivi); meglio con almeno 16 GB di memoria |
 | **Linux x86-64** | scheda NVIDIA, oppure AMD con ROCm |
 | **Spazio su disco** | da 5 GB (solo LaMa) a circa 30 GB (tutti i modelli) |
-| **Internet** | solo durante l'installazione |
+| **Internet** | durante l'installazione; poi solo un controllo di nuove versioni su GitHub, al massimo una volta al giorno (non invia nulla su di te o sulle foto; si spegne con `"update_check": false` in `work/settings.json`) |
 
 ## Installazione
 
@@ -126,6 +130,9 @@ Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plast
 | Annulla | Ctrl+Z | Cmd+Z |
 | Confronta con l'originale | tieni premuto "Originale" o `\` | tieni premuto "Originale" o `\` |
 | Rimuovi selezione | Invio | Invio |
+| Ferma la generazione (le varianti già fatte restano) | Esc | Esc |
+| Variante precedente / successiva | ← / → | ← / → |
+| Elimina una variante | clic destro sulla variante | clic destro (o Ctrl+clic) sulla variante |
 
 AI Remove si può aprire anche dal menu Start, da Applicazioni o dal menu delle app: lavora sempre sulla foto attiva in
 LightCraft.
@@ -179,7 +186,8 @@ istruzioni in [AGENTS.md](AGENTS.md).
 
 ## Privacy e sicurezza
 
-Le foto non lasciano mai il computer. Per parlare con LightCraft, AI Remove usa il suo canale di controllo:
+Le foto non lasciano mai il computer. Dopo l'installazione l'unica richiesta a internet è il controllo giornaliero
+di nuove versioni (vedi sopra). Per parlare con LightCraft, AI Remove usa il suo canale di controllo:
 un'interfaccia raggiungibile solo dal tuo computer (127.0.0.1, porta 7980), ma **senza password**. Mentre LightCraft è
 aperto, qualunque programma sul tuo computer può comandarlo. La disinstallazione lo disattiva.
 

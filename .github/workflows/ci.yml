@@ -4,8 +4,8 @@
 # alone (it is not on the runners). Then the installed app's --check; the installer again with a model the user already
 # has in a folder of their own (--model-dir: LaMa moved into a Hugging Face cache layout, used from there); one removal
 # end to end with the installed app and that LaMa (tools/ci_removal.py: a synthetic raw DNG made on the runner, LaMa on
-# the processor, the blend, the DNG and the .airemove project, checked pixel by pixel), the MCP server over stdio, and
-# the uninstaller (tools/ci_smoke.py).
+# the processor, the blend, the DNG and the .airemove project, checked pixel by pixel), a long removal in tiles
+# (tools/ci_tiles.py), the MCP server over stdio, and the uninstaller (tools/ci_smoke.py).
 # No secrets, no photos.
 name: CI
 
@@ -93,7 +93,7 @@ jobs:
         run: python tools/ci_smoke.py check "$AIREMOVE_DIR"
       - name: A model from the user's own folder (--model-dir)
         run: python tools/ci_smoke.py folder "$AIREMOVE_DIR"
-      - name: A removal end to end (tools/ci_removal.py)
+      - name: A removal end to end, a long one in tiles (tools/ci_removal.py, tools/ci_tiles.py)
         run: python tools/ci_smoke.py remove "$AIREMOVE_DIR"
       - name: MCP server, installed
         run: python tools/ci_smoke.py mcp "$AIREMOVE_DIR"

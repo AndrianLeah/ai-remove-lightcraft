@@ -20,6 +20,8 @@ The result goes back into a **RAW DNG**, so you keep developing it like any raw 
    the brush and eraser handle the rest.
 3. **Remove selection** generates a few variants with the model you chose. Pick the best one. To remove the
    object's shadow or reflection too, press **Include the shadow** first: it adds them to the selection, in blue.
+   On a long removal (a pole, a cable, a railing), **Full detail** redraws the chosen variant at the photo's own
+   resolution.
 4. **Save to LightCraft** writes `<name>-AIRemove.dng`, stacked on the original with the same development.
 
 Every removal stays editable: regenerate it, pick another variant or delete it whenever you like. Everything lives in
@@ -36,6 +38,10 @@ one project file next to the raw (`<raw>.airemove`). The original raw is never m
 - **Writes a real RAW.** The fill is converted back into the camera's linear space and re-mosaicked into the Bayer data
   with matching sensor noise, so the DNG develops like the original.
 - **Seamless blending:** a Poisson membrane plus texture transfer from the ring around the hole.
+- **Long removals stay sharp.** A pole as tall as the photo, a cable or a railing is filled in tiles along it, each
+  close to the model's own size, so the fill is not a small picture enlarged; thin ones also get a LaMa variant, which
+  continues what is behind them best. **Full detail** redraws the chosen variant the same way, at the photo's
+  resolution, keeping what it shows.
 - **Editable removals,** each with its own variants, kept in a project file; reopening a photo brings them back.
 - **Windows, macOS (Apple Silicon) and Linux,** on NVIDIA, AMD (ROCm), Intel Arc or Apple GPUs. It falls back to
   the processor without one.
@@ -49,7 +55,8 @@ one project file next to the raw (`<raw>.airemove`). The original raw is never m
 - **macOS 12+** on Apple Silicon (M1 or later; 16 GB of memory recommended). Intel Macs are not supported.
 - **Linux x86-64** with NVIDIA, or AMD with ROCm.
 - **Disk:** 5 to 30 GB, depending on the models.
-- **Internet:** only while installing.
+- **Internet:** while installing. Afterwards only a check for a new AI Remove on GitHub, at most once a day: it
+  sends nothing about you or your photos, and `"update_check": false` in `work/settings.json` turns it off.
 
 ## Install
 
@@ -160,6 +167,9 @@ An optional prompt **in English** guides SDXL and FLUX, for example "old plaster
 | Undo | Ctrl+Z | Cmd+Z |
 | Compare with the original | hold "Original" or `\` | hold "Original" or `\` |
 | Remove selection | Enter | Enter |
+| Stop generating (the variants already made stay) | Esc | Esc |
+| Previous / next variant | ← / → | ← / → |
+| Delete a variant | right-click it | right-click (or Ctrl+click) it |
 
 AI Remove also opens from the Start menu, Applications or the app menu. It always works on LightCraft's active photo.
 
@@ -213,7 +223,8 @@ Uninstalling removes the app, its models and the LightCraft settings it added. Y
 
 ## Privacy and security
 
-Your photos never leave your computer. AI Remove drives LightCraft through LightCraft's control channel. That
+Your photos never leave your computer. The only request to the internet after the install is the daily check for a
+new version (above). AI Remove drives LightCraft through LightCraft's control channel. That
 channel only accepts connections from your own computer (127.0.0.1, port 7980), but it has **no password**: while
 LightCraft runs, any program on your computer can drive it. Uninstalling turns the channel off.
 
