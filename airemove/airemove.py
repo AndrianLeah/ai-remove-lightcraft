@@ -11,6 +11,9 @@ How to use:
      be deleted without touching the others; fills are blended seamlessly (blend.py).
      The object's shadow and reflection: "Includi l'ombra" adds what OSOR removes with the object to the selection
      (Session.find_shadow), or OSOR / ObjectClear variants remove it by themselves (their hole grows with it).
+     A long, thin object across a large area (a pole as tall as the photo, a cable) is filled in squares along it,
+     near the engine's own size (tiles.py, Session.tile_plan); "Dettaglio pieno" redraws such a removal's chosen
+     variant that way at the photo's resolution (Session.refine).
   4. Everything is kept in ONE project file next to the raw (<raw name>.airemove, see project.py), saved after every
      change; reopening AI Remove on the photo (or on its -AIRemove.dng) brings all removals back.
      "Salva in LightCraft" writes the chosen fills into <name>-AIRemove.dng — created and stacked the first time,
@@ -38,6 +41,7 @@ sys.path.insert(0, str(HERE))
 from rawdng import RawDNG  # noqa: E402
 import engines  # noqa: E402
 import blend  # noqa: E402
+import tiles  # noqa: E402
 import project  # noqa: E402
 import system  # noqa: E402
 from i18n import _  # noqa: E402
@@ -56,6 +60,30 @@ SDXL_STRENGTH = 1.0
 # selection (a bag at their side: 3 variants in 4); with the bag selected too, none.
 SDXL_UPRIGHT = True
 SHADOW_MARGIN = 1.35  # "Includi l'ombra" looks for the shadow in an area this many times the object's extent
+# Long removals (tiles.py). When one pass would enlarge an engine's fill more than TILE_FROM times and the hole is
+# long and thin (a pole, a cord, a railing — at least TILE_LONG times longer than wide, measured in the area: a pole
+# 21, cords 22, a person 5-7, a person with their shadow 10) so that squares along it see the photo across it (its
+# width at most TILE_WIDE of a square's side), each variant is filled in squares as small as TILE_BUDGET seconds per
+# variant allow on this PC. "Full detail" redraws such a removal's chosen variant in squares as near the engine's own
+# size as REFINE_BUDGET allows, at REFINE_STRENGTH: sharp, and what the variant shows stays where it is.
+# Not for a person or a car: squares through such a hole each drew a piece of something (a wall, a giant bush), and
+# redrawn in squares an invented bush became a felt blob or a dark silhouette, at every strength and size tried.
+TILE_FROM = 3.2
+TILE_LONG = 12.0
+TILE_WIDE = 0.5
+TILE_BUDGET = 60.0
+REFINE_BUDGET = 150.0
+REFINE_STRENGTH = 0.75  # on the pole: 0.5 kept the variant's blur in places (a grid of strokes on a plain wall)
+TILE_SIZES = {"flux": engines.FLUX_SIZES, "sdxl": (engines.SDXL.S,), "lama": (512,)}
+# SDXL fills a long, thin hole with a long, thin thing (a plank where a cord was, a rod where a pole was), in one pass
+# and more so in squares, measured: its variants stay in one pass. It still redraws for "Full detail" without FLUX.
+TILED_VARIANTS = ("flux", "lama")
+# A cord, a cable, a wire, a pole selected closely: a long hole at most THIN px wide. LaMa, in squares at its own
+# size, continues what is behind it best and in seconds (railing cords in front of columns, a doorway, a sign: FLUX
+# redrew a column's base, SDXL drew planks): the window adds a LaMa variant to the generative ones.
+THIN = 128
+TILE_SCALES = (1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0)  # square side / engine size tried, smallest first
+REFINED = " HD"  # label suffix of a variant redrawn by "Full detail"
 NEUTRAL_GEOMETRY = {"upright": "off", "vertical": 0, "horizontal": 0, "rotate": 0, "aspect": 0, "scale": 100,
                     "offset_x": 0, "offset_y": 0}
 
@@ -448,7 +476,10 @@ def unique_path(p):
 TIMINGS = ROOT / "work" / "timings.json"
 DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20, "flux_variant": 90,
                  "osor_load": 25, "osor_variant": 8, "objectclear_load": 20, "objectclear_variant": 5, "shadow": 12,
-                 "area": 3, "save": 6}
+                 "area": 3, "save": 6,
+                 # one square of a tiled fill (tiles.py), one redrawn by "Full detail", the blend of the area after
+                 "flux_tile512": 13, "flux_tile768": 22, "sdxl_tile1024": 7.5, "lama_tile512": 2,
+                 "flux_refine512": 12, "flux_refine768": 21, "sdxl_refine1024": 7, "tiled_blend": 5}
 
 
 def expected(key):
@@ -510,6 +541,7 @@ def rect_t(r, shape, t):
 
 
 MODELS = {"sdxl": "SDXL", "flux": "FLUX", "lama": "LaMa", "osor": "OSOR", "objectclear": "ObjectClear"}
+LABEL_MODELS = {v: k for k, v in MODELS.items()}  # a variant label's first word -> its model
 
 
 # ------------------------------------------------------------------------------------------------ removals
@@ -533,6 +565,9 @@ class Removal:
         self.holes = {}
         self.hole_cache = {}  # label -> (mask image, alpha, alpha in base.png's frame)
         self.flat = False  # (region, colours) of the sky its hole continues (blend.flat_region), None: none, False: not yet
+        self.plans = {}  # (model, refine?, variant whose hole it is or None) -> (engine size, tiles.Plan) or None
+        self.shape = None  # (width, length) of its hole (tiles.shape), once
+        self.scale = {}  # label -> how enlarged that variant's fill is (Session.enlarged), for those made here
 
     def chosen_label(self):
         return None if self.chosen is None else self.candidates[self.chosen][0]
@@ -961,10 +996,14 @@ class Session:
     # -------------------------------------------------------------- generation
     def run_lama(self, r):
         t0 = time.time()
-        im = blend.seamless(engines.lama(r.src, r.mask_img), r.src, r.reg_mask, r.membrane, seed=r.id)
+        plan = self.tile_plan(r, "lama")
+        raw = engines.lama(r.src, r.mask_img) if plan is None else self._tiled(r, "lama", None, plan, "", r.id)
+        im = blend.seamless(raw, r.src, r.reg_mask, r.membrane, seed=r.id)
         r.prefill = Image.composite(im, r.src, r.mask_img)  # diffusion starts from this, not from the object
+        r.scale["LaMa"] = self.enlarged(r, "lama", plan)
         self.add_candidate(r, "LaMa", im)
-        measured("lama", time.time() - t0)
+        if plan is None:
+            measured("lama", time.time() - t0)
         log(f"#{r.id} LaMa in {time.time() - t0:.1f}s")
         return "LaMa", im
 
@@ -979,7 +1018,10 @@ class Session:
             eng.embeddings(engines.OSOR_PROMPT, log, tokens=512)
         t0 = time.time()
         label = f"{MODELS[model]} {k}"
-        if model == "sdxl":
+        plan = self.tile_plan(r, model) if model in ("sdxl", "flux") else None
+        if plan is not None:  # a long removal: in squares along the hole (tiles.py)
+            raw_fill = self._tiled(r, model, eng, plan, prompt, seed, progress)
+        elif model == "sdxl":
             # upright (SDXL_UPRIGHT); the sky the hole continues is held for the first steps (its colour is fixed
             # after the blend)
             up, down = (self._up, self._down) if SDXL_UPRIGHT else (lambda a: a, lambda a: a)
@@ -1005,9 +1047,12 @@ class Session:
             im = blend.seamless(raw_fill, r.src, hole, seed=seed)
         if model == "sdxl" and r.flat is not None:
             im = blend.match_flat(im, r.flat[1], r.flat[0])
+        r.scale[label] = self.enlarged(r, model, plan)
         self.add_candidate(r, label, im)
-        measured(f"{model}_variant", time.time() - t0)
+        if plan is None:  # a tiled variant's time is the squares' (measured each)
+            measured(f"{model}_variant", time.time() - t0)
         log(f"#{r.id} {label} in {time.time() - t0:.0f}s"
+            + (f" ({len(plan[1])} squares of {plan[1].T} px at {plan[0]})" if plan is not None else "")
             + (f" (prompt: {prompt or 'default'})" if model in ("sdxl", "flux") else "")
             + (f" | shadow/reflection: +{int((hole & ~r.reg_mask).sum())} px" if hole is not None else ""))
         return label, im
@@ -1029,6 +1074,170 @@ class Session:
             region, field = blend.flat_region(np.asarray(r.src), r.reg_mask, r.membrane)
             r.flat = (region, field) if region.sum() >= max(400, 0.01 * r.reg_mask.sum()) else None
         return r.flat
+
+    # -------------------------------------------------------------- long removals, in squares (tiles.py)
+    @staticmethod
+    def tile_seconds(model, size, refine=False):
+        """What one square takes on this PC (measured), drawn or redrawn ("Full detail")."""
+        return expected(f"{model}_{'refine' if refine else 'tile'}{size}")
+
+    def tile_plan(self, r, model, label=None, refine=False):
+        """(engine size, tiles.Plan) to fill r's hole in squares, or None for one pass as before. label: the variant
+        whose hole it is (OSOR / ObjectClear variants have their own). For a variant: only a thin hole, only when one
+        pass would enlarge the fill more than TILE_FROM times, in squares as small as TILE_BUDGET allows. For a
+        refinement ("Full detail"): any hole, as near the engine's size as REFINE_BUDGET allows."""
+        sizes = TILE_SIZES.get(model)
+        if not sizes or (not refine and model not in TILED_VARIANTS):
+            return None
+        own = label if label in r.holes else None
+        key = (model, refine, own)  # decided once per removal: its variants are all made alike
+        if key not in r.plans:
+            r.plans[key] = self._tile_plan(r.holes[own] if own else r.reg_mask, model, sizes, refine)
+        return r.plans[key]
+
+    def _tile_plan(self, hole, model, sizes, refine):
+        side = hole.shape[0]
+        one = sizes[0] if side <= sum(sizes) // 2 else sizes[-1]  # the size one pass uses
+        if side <= (1.5 if refine else TILE_FROM) * one:
+            return None
+        width, length = tiles.shape(hole)
+        if not refine and length < TILE_LONG * width:
+            return None
+        budget = REFINE_BUDGET if refine else TILE_BUDGET
+        best = None
+        for size in sizes:
+            secs = self.tile_seconds(model, size, refine)
+            for f in TILE_SCALES:
+                T = int(size * f) // 16 * 16
+                if T >= 0.8 * side:  # hardly better than one pass
+                    break
+                if width > TILE_WIDE * T:  # each square must see the photo across the hole
+                    continue
+                n = len(tiles.squares(hole, T))
+                if n * secs <= budget:
+                    if best is None or (f, n) < best[:2]:
+                        best = (f, n, size, T)
+                    break  # larger squares only enlarge more
+        if best is None:
+            return None
+        __, __, size, T = best
+        return size, tiles.Plan(hole, T)
+
+    @staticmethod
+    def long(r):
+        """Whether r's hole is long and thin (a pole, a cable, a railing; not a person): TILE_LONG."""
+        if r.shape is None:
+            r.shape = tiles.shape(r.reg_mask)
+        width, length = r.shape
+        return length >= TILE_LONG * width
+
+    @classmethod
+    def thin(cls, r):
+        """Whether r's hole is a cord, a cable, a wire or a closely selected pole: long and at most THIN px wide."""
+        return cls.long(r) and r.shape[0] <= THIN
+
+    def variant_seconds(self, r, model):
+        """What one variant of `model` will take for r (for the progress bar)."""
+        plan = self.tile_plan(r, model) if model in ("sdxl", "flux", "lama") else None
+        if plan is None:
+            return expected("lama" if model == "lama" else f"{model}_variant")
+        return len(plan[1]) * self.tile_seconds(model, plan[0]) + expected("tiled_blend")
+
+    def _tiled(self, r, model, eng, plan, prompt, seed, progress=None, src=None, strength=1.0):
+        """r's raw fill made square by square (tiles.Plan.fill); src (default: the area) and strength < 1 redraw a
+        fill already in the hole. SDXL sees each square upright, with the sky it continues held."""
+        size, P = plan
+        up, down = (self._up, self._down) if model == "sdxl" and SDXL_UPRIGHT else (lambda a: a, lambda a: a)
+        flat = self.flat(r) if model == "sdxl" and strength >= 1 else None
+        key = f"{model}_{'tile' if strength >= 1 else 'refine'}{size}"
+
+        def one(img, mask, k):
+            s = seed + 7919 * k
+            if model == "flux":
+                out = eng.fill(img, mask, prompt, s, log=log, strength=strength, size=size)
+            elif model == "lama":
+                out = engines.lama(img, mask)
+            else:
+                hold = None
+                if flat is not None:
+                    sl = P.steps[k][0]
+                    region = flat[0][sl] & (np.asarray(mask) > 127)
+                    if region.sum() >= 400:
+                        hold = (up(Image.fromarray(np.ascontiguousarray(flat[1][sl]))), up(region))
+                out = down(eng.fill(up(img), up(mask), prompt, s, strength=SDXL_STRENGTH if strength >= 1 else strength,
+                                    hold=hold))
+            return out
+        t0 = time.time()
+        out = P.fill(r.src if src is None else src, one, progress)
+        secs = time.time() - t0
+        measured(key, secs / max(1, len(P)))  # a square with its share of the matching (blend.Membrane)
+        redrawn = "" if strength >= 1 else f", redrawn at {strength}"
+        log(f"#{r.id}: {len(P)} squares of {P.T} px ({model} at {size}{redrawn}) in {secs:.0f}s")
+        return out
+
+    def refine_model(self):
+        """The engine "Full detail" redraws with: FLUX (the most detail), else SDXL; None without a GPU model."""
+        return next((m for m in ("flux", "sdxl") if engines.usable(m)), None)
+
+    @staticmethod
+    def enlarged(r, model, plan=None):
+        """How many photo pixels one pixel of a fill of `model` for r covers (1: drawn at the photo's resolution)."""
+        if plan is not None:
+            return plan[1].T / plan[0]
+        side = r.reg_mask.shape[0]
+        if model in ("flux", "osor"):
+            return side / (engines.FLUX_SIZES[0] if side <= sum(engines.FLUX_SIZES) // 2 else engines.FLUX_SIZES[1])
+        return side / {"sdxl": engines.SDXL.S, "objectclear": engines.ObjectClear.S}.get(model, 512)
+
+    def can_refine(self, r):
+        """Whether "Full detail" would redraw r's chosen variant sharper: a long removal's variant drawn smaller than
+        the photo (more than 1.6 times), not redrawn already."""
+        label = r.chosen_label()
+        if label is None or label.endswith(REFINED) or self.refine_model() is None or not self.long(r):
+            return False
+        f = r.scale.get(label)  # unknown for variants of a reopened project: made in one pass
+        if f is None:
+            f = self.enlarged(r, LABEL_MODELS.get(label.split()[0], "lama"))
+        return f > 1.6
+
+    def refine_seconds(self, r):
+        model = self.refine_model()
+        plan = self.tile_plan(r, model, r.chosen_label(), refine=True) if model else None
+        return 0.0 if plan is None else len(plan[1]) * self.tile_seconds(model, plan[0], True) + expected("tiled_blend")
+
+    def refine(self, r, prompt="", progress=None):
+        """"Full detail": r's chosen variant redrawn in squares near the engine's own size (tiles.py), at
+        REFINE_STRENGTH — what it shows stays, its detail is drawn at the photo's resolution. A new variant
+        "<label> HD", chosen. Returns (label, image) or None when there is nothing to gain."""
+        label = r.chosen_label()
+        model = self.refine_model()
+        plan = self.tile_plan(r, model, label, refine=True) if self.can_refine(r) else None
+        if plan is None:
+            return None
+        eng = self.get_engine(model)
+        if model == "flux":
+            eng.embeddings(f"{prompt}, {engines.DEFAULT_PROMPT}" if prompt else engines.DEFAULT_PROMPT, log)
+        t0 = time.time()
+        mask_img, __, __ = self.hole(r, label)
+        src = Image.composite(r.candidates[r.chosen][1], r.src, mask_img)
+        seed = self.seed + 97 * r.id + 5000 + len(r.candidates)
+        raw = self._tiled(r, model, eng, plan, prompt, seed, progress, src=src, strength=REFINE_STRENGTH)
+        hole = r.holes.get(label)
+        if hole is None:
+            im = blend.seamless(raw, r.src, r.reg_mask, r.membrane, seed=seed)
+        else:
+            im = blend.seamless(raw, r.src, hole, seed=seed)
+        labels = {c[0] for c in r.candidates}
+        new, n = label + REFINED, 2
+        while new in labels:
+            new, n = f"{label}{REFINED} {n}", n + 1
+        if hole is not None:
+            r.holes[new] = hole
+        r.scale[new] = self.enlarged(r, model, plan)
+        self.add_candidate(r, new, im)
+        r.chosen = len(r.candidates) - 1
+        log(f"#{r.id} {new} in {time.time() - t0:.0f}s")
+        return new, im
 
     def _effect_fill(self, model, eng, src, hole, seed, progress=None):
         """OSOR / ObjectClear on an area (sensor orientation), shown to them upright — as the photo is seen: they

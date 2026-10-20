@@ -13,6 +13,10 @@ in Lightroom è "Rimozione generativa", ma tutto gira sul tuo computer.
 2. Nella finestra di AI Remove clicca su ciò che vuoi togliere: SAM 3 lo seleziona tutto.
 3. Premi **Rimuovi selezione**: vengono generate alcune varianti e tu scegli la migliore. Per togliere anche l'ombra
    o il riflesso dell'oggetto, premi prima **Includi l'ombra**: li aggiunge alla selezione, in blu.
+   Pali, cavi e cordoni lunghi vengono riempiti a tasselli lungo l'oggetto, ognuno vicino alla misura del modello:
+   il riempimento resta nitido invece di essere un'immagine piccola ingrandita. Per quelli sottili si aggiunge una
+   variante LaMa, che continua meglio ciò che c'è dietro. **Dettaglio pieno** ridisegna la variante scelta alla
+   risoluzione della foto.
 4. Premi **Salva in LightCraft**: il risultato è un **DNG RAW** (`<nome>-AIRemove.dng`), impilato sopra l'originale e
    con lo stesso sviluppo. Puoi continuare a svilupparlo come un RAW qualsiasi.
 

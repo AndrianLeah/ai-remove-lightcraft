@@ -26,8 +26,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LAUNCHERS = {"windows": "Install on Windows.cmd", "macos": "Install on Mac.command", "linux": "Install on Linux.sh"}
 PACKAGES = {"windows": "windows.zip", "macos": "macos.zip", "linux": "linux.tar.gz", "all": "all-platforms.zip"}
-NEEDED = ["airemove/airemove.py", "airemove/ui.py", "airemove/engines.py", "airemove/blend.py", "airemove/rawdng.py",
-          "airemove/project.py", "airemove/system.py", "airemove/i18n.py", "airemove/locales/it.json",
+NEEDED = ["airemove/airemove.py", "airemove/ui.py", "airemove/engines.py", "airemove/blend.py", "airemove/tiles.py",
+          "airemove/rawdng.py", "airemove/project.py", "airemove/system.py", "airemove/i18n.py",
+          "airemove/locales/it.json",
           "installer/install.py", "installer/fetch_models.py", "installer/bootstrap.ps1", "installer/bootstrap.sh",
           "mcp/airemove_mcp.py", "mcp/run_mcp.cmd", "mcp/run_mcp.sh", "README.md", "LICENSE.txt",
           "THIRD-PARTY-NOTICES.md"]

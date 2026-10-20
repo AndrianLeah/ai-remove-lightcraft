@@ -493,6 +493,10 @@ class App:
         self.del_btn = self.button(vb, _("Delete removal"), self.delete_cur, small=True)
         self.del_btn.configure(state="disabled")
         self.del_btn.pack(side="left", fill="x", expand=True, padx=(int(6 * k), 0))
+        # a long removal's variants are drawn smaller than the photo: the chosen one redrawn at its resolution
+        self.hd_btn = self.button(vars_, "✦  " + _("Full detail"), self.full_detail, small=True)
+        self.hd_btn.configure(state="disabled")
+        self.hd_btn.pack(fill="x", pady=(int(6 * k), 0))
 
         foot = tk.Frame(sp, bg=SIDE)
         foot.pack(fill="x", pady=(int(14 * k), 0))
@@ -663,6 +667,7 @@ class App:
         on = self.cur is not None and not self.cur.deleted and not self.writing
         self.more_btn.configure(state="normal" if on else "disabled")
         self.del_btn.configure(state="normal" if on else "disabled")
+        self.hd_btn.configure(state="normal" if on and self.s.can_refine(self.cur) else "disabled")
         if self.shadow_btn is not None:
             self.shadow_btn.configure(state="normal" if (has and ready) else "disabled")
 
@@ -705,6 +710,10 @@ class App:
                     __, r, n, model, prompt = job
                     if not r.deleted:
                         self.run_job(r, None, n, model, prompt)
+                elif job[0] == "refine":
+                    __, r, prompt = job
+                    if not r.deleted and s.can_refine(r):
+                        self.run_refine(r, prompt)
                 elif job[0] == "shadow":
                     __, mask = job
                     model = s.shadow_model()
@@ -725,20 +734,27 @@ class App:
     def run_job(self, r, mask, n, model, prompt):
         """A new removal (r None: from mask) or more variants for r, with a progress plan in expected seconds."""
         s = self.s
+
+        def variant_secs(kind):  # a long removal's variants are filled in squares: known once its area is
+            m = "lama" if kind == "lama" else model
+            return s.variant_seconds(r, m) if r is not None else A.expected("lama" if m == "lama" else f"{m}_variant")
         parts = []
         if r is None:
             parts.append(("area", _("Preparing the area"), A.expected("area")))
         if model == "lama":  # only the model the user picked runs
             if r is None or not any(c[0] == "LaMa" for c in r.candidates):
-                parts.append(("lama", "LaMa", A.expected("lama")))
+                parts.append(("lama", "LaMa", variant_secs("lama")))
         else:
             if not s.engine_loaded(model):
                 parts.append(("load", _("Loading {model}", model=A.MODELS[model]), A.expected(f"{model}_load")))
-            parts += [("variant", f"{A.MODELS[model]} {i + 1}/{n}", A.expected(f"{model}_variant")) for i in range(n)]
+            parts += [("variant", f"{A.MODELS[model]} {i + 1}/{n}", variant_secs("variant")) for i in range(n)]
         total = sum(p[2] for p in parts)
         self.post("job_start", (f"#{r.id}" if r else _("New removal"), total))
         done = 0.0
-        for kind, label, secs in parts:
+        i = -1
+        while i + 1 < len(parts):  # parts may change once the area is known
+            i += 1
+            kind, label, secs = parts[i]
             if r is not None and r.deleted:
                 break
             tag = f"#{r.id} · {label}" if r is not None else label
@@ -746,6 +762,12 @@ class App:
             if kind == "area":
                 r = s.new_removal(mask)
                 self.post("removal_new", r)
+                parts[i + 1:] = [(k, lb, variant_secs(k) if k in ("lama", "variant") else sec)
+                                 for k, lb, sec in parts[i + 1:]]
+                if model != "lama" and s.thin(r):  # a cord, a cable: LaMa in squares is the best fill, in seconds
+                    A.log(f"#{r.id}: long and thin, LaMa too")
+                    parts.insert(i + 1, ("lama", "LaMa", variant_secs("lama")))
+                self.post("job_total", done + secs + sum(p[2] for p in parts[i + 1:]))
             elif kind == "lama":
                 s.run_lama(r)
                 self.post("cand", r)
@@ -754,12 +776,33 @@ class App:
             else:
                 base_done = done
 
-                def prog(i, tot, base_done=base_done, secs=secs, tag=tag):
-                    self.post("job_exact", (_("{task} · step {i}/{total}", task=tag, i=i, total=tot),
-                                            base_done + secs * i / max(1, tot)))
+                def prog(step, tot, base_done=base_done, secs=secs, tag=tag):
+                    self.post("job_exact", (_("{task} · step {i}/{total}", task=tag, i=step, total=tot),
+                                            base_done + secs * step / max(1, tot)))
                 s.run_model(r, model, prompt, progress=prog)
                 self.post("cand", r)
             done += secs
+        self.post("models")
+
+    def run_refine(self, r, prompt):
+        """"Full detail" on r's chosen variant, with a progress plan in expected seconds."""
+        s = self.s
+        model = s.refine_model()
+        load = 0.0 if s.engine_loaded(model) else A.expected(f"{model}_load")
+        secs = s.refine_seconds(r)
+        tag = f"#{r.id} · " + _("Full detail")
+        self.post("job_start", (tag, load + secs))
+        if load:
+            self.post("job_part", (_("Loading {model}", model=A.MODELS[model]), 0.0, load))
+            s.get_engine(model)
+        self.post("job_part", (tag, load, secs))
+
+        def prog(i, tot):
+            self.post("job_exact", (_("{task} · step {i}/{total}", task=tag, i=i, total=tot),
+                                    load + secs * i / max(1, tot)))
+        if s.refine(r, prompt, progress=prog) is not None:
+            r.user_picked = True
+            self.post("cand", r)
         self.post("models")
 
     def sam_worker(self):
@@ -856,6 +899,10 @@ class App:
         self.job = {"label": label, "total": total, "t0": time.time(), "mode": "timed", "base": 0.0, "secs": 1.0,
                     "t_part": time.time(), "exact": 0.0}
         self.update_buttons()
+
+    def on_job_total(self, total):
+        if self.job:
+            self.job["total"] = total
 
     def on_job_part(self, data):
         label, base, secs = data
@@ -1177,6 +1224,16 @@ class App:
         self.busy = True
         self.update_buttons()
 
+    def full_detail(self):
+        """"Full detail": the chosen variant of a long removal, drawn smaller than the photo, redrawn at the photo's
+        resolution (Session.refine) as a new variant."""
+        r = self.cur
+        if r is None or r.deleted or not self.s.can_refine(r):
+            return
+        self.jobs.put(("refine", r, self.prompt.get().strip()))
+        self.busy = True
+        self.update_buttons()
+
     def delete_cur(self):
         r = self.cur
         if r is None:
@@ -1489,7 +1546,7 @@ class App:
     def run_test_actions(self, actions):
         """Tests: drive the window through the real handlers. Actions (coordinates normalized to the photo):
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
-        snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear] · more:n · pick:i ·
+        snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear] · more:n · pick:i · detail ·
         select:id · delete · waitidle · save · quit"""
         if not actions:
             return
@@ -1563,6 +1620,9 @@ class App:
         elif kind == "model":
             self.model_var.set(self.model_labels[MODEL_KEYS[int(vals[0])]])
             delay = 50
+        elif kind == "detail":
+            self.full_detail()
+            delay = 500
         elif kind == "pick":
             self.choose(int(vals[0]))
             delay = 300
