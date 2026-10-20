@@ -1,0 +1,136 @@
+# Release packages, built here instead of on a PC.
+# - A tag vX.Y.Z pushed (vX.Y.Z-rc.1 and the like: a pre-release): the four packages (tools/build_dist.py) built from
+#   that tag, checked (tools/check_dist.py: the tag's version inside, no .github, no ObjectClear code, each system's
+#   launcher, executable bits, line endings), SHA256SUMS, all attached to a DRAFT release. Write its notes on GitHub
+#   (.github/release-notes.md is the start), then publish it.
+# - Run by hand (Actions > Release > Run workflow, or gh workflow run release.yml -f tag=vX.Y.Z): the same for that tag,
+#   built from the tag when it exists, else from the branch the run is on (GitHub makes the tag there when the draft is
+#   published). Run again on a draft: its packages are replaced, its notes kept. A published release is never touched.
+# - Pull requests: the same build and checks, the packages kept as the run's artifact; no release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag: vX.Y.Z (vX.Y.Z-rc.1: a pre-release)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.what.outputs.tag }}
+      sha: ${{ steps.version.outputs.sha }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Which tag, which commit
+        id: what
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag=""; ref="$GITHUB_SHA"
+          case "$EVENT" in
+            push) tag="$GITHUB_REF_NAME"; ref="$GITHUB_REF" ;;
+            workflow_dispatch) tag="$INPUT_TAG" ;;
+          esac
+          if [ -n "$tag" ] && ! printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::$tag is not a release tag (vX.Y.Z or vX.Y.Z-suffix)"
+            exit 1
+          fi
+          if [ "$EVENT" = workflow_dispatch ] &&
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --silent 2>/dev/null; then
+            ref="refs/tags/$tag"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "release: ${tag:-none (pull request)}, built from $ref"
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.what.outputs.ref }}
+          persist-credentials: false
+      - name: Version
+        id: version
+        run: |
+          echo "version=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' airemove/system.py)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+      - name: Build the packages (tools/build_dist.py)
+        run: python3 tools/build_dist.py
+      - name: Check the packages (tools/check_dist.py)
+        env:
+          TAG: ${{ steps.what.outputs.tag }}
+        run: python3 tools/check_dist.py ${TAG:+--tag "$TAG"} dist
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum AIRemove-* > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum -c SHA256SUMS
+      - name: Release notes (from .github/release-notes.md)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMIT: ${{ steps.version.outputs.sha }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          sed -e "s|@VERSION@|$VERSION|g" -e "s|@COMMIT@|$COMMIT|g" -e "s|@RUN@|$RUN|g" \
+            .github/release-notes.md > release-notes.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ steps.version.outputs.version }}
+          path: |
+            dist/
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ needs.build.outputs.version }}
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+          SHA: ${{ needs.build.outputs.sha }}
+        run: |
+          (cd dist && sha256sum -c SHA256SUMS)
+          files=(dist/AIRemove-* dist/SHA256SUMS)
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::release $TAG is published already: left as it is"
+              exit 1
+            fi
+            gh release upload "$TAG" "${files[@]}" --clobber
+            gh release edit "$TAG" --target "$SHA"
+            echo "draft $TAG: packages replaced, notes kept"
+          else
+            pre=()
+            case "$TAG" in *-*) pre=(--prerelease) ;; esac
+            gh release create "$TAG" "${files[@]}" --draft "${pre[@]}" --target "$SHA" \
+              --title "AI Remove for LightCraft ${TAG#v}" --notes-file release-notes.md --generate-notes
+          fi
+          gh release view "$TAG" --json url,isDraft,isPrerelease,assets \
+            --jq '"\(.url) draft=\(.isDraft) prerelease=\(.isPrerelease)", (.assets[] | "  \(.name) \(.size) bytes")'
