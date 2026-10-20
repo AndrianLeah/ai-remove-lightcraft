@@ -99,12 +99,20 @@ class Out:
                 f.write(text + "\n")
 
     def status(self, state, message="", **extra):
+        """install-status.json, replaced whole: a reader never sees half of it. On Windows the replace fails while
+        another program has the file open (the MCP server's install_status, a Get-Content poll; sharing delete does not
+        help): tried again for half a second, then left for the next status — install.log has everything."""
         if self.status_file:
             data = {"state": state, "step": list(self.step), "message": message, "version": VERSION,
                     "updated": time.strftime("%Y-%m-%d %H:%M:%S"), **extra}
             tmp = self.status_file.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, self.status_file)
+            for __ in range(10):
+                try:
+                    os.replace(tmp, self.status_file)
+                    return
+                except PermissionError:
+                    time.sleep(0.05)
 
     def title(self, n, text):
         self.step = (n, 7)

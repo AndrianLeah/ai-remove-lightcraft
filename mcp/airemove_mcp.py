@@ -38,10 +38,19 @@ def installer():
 
 
 def read_json(p):
-    try:
-        return json.loads(Path(p).read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return None
+    """p's JSON; None when it is missing or stays unreadable. The installer replaces install-status.json and rewrites
+    airemove.json while this reads them: on Windows the open can be refused for a moment, a rewrite can show half a
+    file, so read again for up to half a second. The file is open only while it is read, which leaves the installer's
+    replace room between two reads."""
+    for i in range(10):
+        try:
+            return json.loads(Path(p).read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            if i == 9:
+                return None
+            time.sleep(0.05)
 
 
 def venv_python(d):
@@ -182,8 +191,14 @@ def _launch_installer(args, d):
     LightCraft and the Start menu see what it does. A console window shows the progress."""
     d.mkdir(parents=True, exist_ok=True)
     st = d / "install-status.json"
-    if st.exists():
-        st.unlink()
+    for i in range(10):  # a program reading it refuses the delete for a moment (Windows)
+        try:
+            st.unlink(missing_ok=True)
+            break
+        except PermissionError:
+            if i == 9:
+                raise
+            time.sleep(0.05)
     if WIN:
         cmd = d / "run-installer.cmd"
         quoted = " ".join('"%s"' % a if (" " in a or not a) else a for a in _bootstrap_cmd(args))
