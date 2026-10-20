@@ -6,7 +6,8 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
   ci_smoke.py mcp DIR          the MCP server over stdio through its launcher (mcp/run_mcp.cmd|sh), AIREMOVE_HOME=DIR:
                                initialize, tools/list, check_system (which must see whether DIR is installed)
   ci_smoke.py remove DIR       one removal end to end with the install's Python and code, LightCraft left out:
-                               tools/ci_removal.py (a synthetic raw DNG, LaMa, the blend, the DNG and the project)
+                               tools/ci_removal.py (a synthetic raw DNG, LaMa, the blend, the DNG and the project),
+                               then a long one in tiles: tools/ci_tiles.py (a cord across a synthetic area, LaMa)
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
                                app, its menu entry and, on Windows, its Settings > Apps entry are gone
 Exit status 1 at the first check that fails. Standard library only.
@@ -133,6 +134,8 @@ def remove(d):
     expect(py.exists(), f"{py} exists")
     r = run([py, ROOT / "tools" / "ci_removal.py", d])
     expect(r.returncode == 0, f"removal end to end: exit status 0 (it was {r.returncode})")
+    r = run([py, ROOT / "tools" / "ci_tiles.py", d])
+    expect(r.returncode == 0, f"long removal in tiles: exit status 0 (it was {r.returncode})")
 
 
 def uninstall(d):

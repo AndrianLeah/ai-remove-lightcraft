@@ -310,16 +310,17 @@ def texture_field(src, out, mask, rng, block=32, nearest=12):
     return full
 
 
-def seamless(cand, src, mask, membrane=None, seed=0):
+def seamless(cand, src, mask, membrane=None, seed=0, texture=True):
     """cand, src: PIL RGB area images; mask: bool hole (the grown removal mask). Returns the blended PIL image
-    (equal to src outside the mask)."""
+    (equal to src outside the mask). texture=False: no texture match (a fill drawn near the photo's resolution has
+    its own; the copied patches can carry an edge next to the hole into it as streaks)."""
     c = np.asarray(cand).astype(np.float32)
     s = np.asarray(src).astype(np.float32)
     membrane = membrane or Membrane(mask)
     d = ndi.gaussian_filter(s - c, (1.2, 1.2, 0))  # edge differences, lightly denoised
     out = c + membrane.field(d, s)
     out = np.where(mask[..., None], out, s)
-    tex = texture_field(s, out, mask, np.random.default_rng(seed))
+    tex = texture_field(s, out, mask, np.random.default_rng(seed)) if texture else None
     if tex is not None:
         fade = ndi.gaussian_filter(mask.astype(np.float32), 2.0) * mask  # no texture step at the very edge
         out += (tex * fade)[..., None]
