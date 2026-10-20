@@ -1,6 +1,7 @@
 """Engines for AI Remove: SAM 3 (selection), LaMa (ONNX, processor), SDXL Inpainting and FLUX.1 Fill (diffusers),
-and two that remove an object together with its shadow and reflection: OSOR (a mode of the FLUX engine: the same
-transformer with OSOR's adapter) and ObjectClear (its own SDXL-based pipeline).
+two that remove an object together with its shadow and reflection: OSOR (a mode of the FLUX engine: the same
+transformer with OSOR's adapter) and ObjectClear (its own SDXL-based pipeline), and Qwen-Image 2.1, which removes the
+selection by name.
 
 The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by torch as "cuda"), Intel Arc (xpu),
 Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and ObjectClear
@@ -27,6 +28,14 @@ SDXL_HOLD = 0.5  # share of the steps a held region (SDXL.fill hold=) follows it
 SAM3_WEIGHTS = mf.SAM3_WEIGHTS
 OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was trained with
 OSOR_T = 0.4  # its single denoising step starts from 40 % noise on the photo itself (object included)
+QWEN_SIZE = 1024
+QWEN_COND_SIZE, QWEN_MASK_SIZE, QWEN_NAME_SIZE = 1024, 512, 768  # the photo, the hole and the picture it is named in
+QWEN_ASK = ("The area outlined in red in this photo will be erased. Name the object that the red outline traces "
+            "(not what is behind it). Answer with a short noun phrase only, such as \"the man with a backpack\", "
+            "\"the street sign\" or \"the parked car\".")
+QWEN_REMOVE = ("Remove {what} from the photo and fill the area with the background that naturally continues the "
+               "surrounding scene. Keep everything else exactly as it is. Do not add any person or object.")
+QWEN_LOCK = True  # outside the hole the latents follow the photo's at every step (the edit cannot drift there)
 
 _DEVICE = None
 
@@ -106,12 +115,12 @@ def model_folders():
 
 
 def usable(model, dev=None):
-    """Installed and sensible on this machine: FLUX (and OSOR, which runs on it) needs a GPU; SDXL and ObjectClear
-    work on the processor but take minutes."""
+    """Installed and sensible on this machine: FLUX (and OSOR, which runs on it) and Qwen-Image need a GPU; SDXL and
+    ObjectClear work on the processor but take minutes."""
     dev = dev or device()
     if not installed(model):
         return False
-    return model not in ("flux", "osor") or dev != "cpu"
+    return model not in ("flux", "osor", "qwen") or dev != "cpu"
 
 
 SHADOW_MODELS = ("osor", "objectclear")  # remove the object together with its shadow and reflection
@@ -494,6 +503,263 @@ class FLUX:
 
     def unload(self):
         del self.pipe
+        _free_gpu()
+
+
+# ------------------------------------------------------------------------------------------------ Qwen-Image 2.1
+_QWEN_LAYERS = None
+
+
+def _qwen_layers():
+    """(FP8Linear, InRAM) for Qwen3-VL. FP8Linear: nn.Linear stored as FP8 (e4m3) with one scale per 128 x 128 block —
+    the format of Qwen's FP8 releases — and computed in bfloat16: half the memory of bf16 weights, and no FP8
+    arithmetic needed on the GPU."""
+    global _QWEN_LAYERS
+    if _QWEN_LAYERS is None:
+        import torch
+
+        class FP8Linear(torch.nn.Module):
+            def __init__(self, weight, scale):
+                super().__init__()
+                self.register_buffer("weight", weight)
+                self.register_buffer("scale", scale)
+
+            def forward(self, x):
+                o, i = self.weight.shape
+                w = self.weight.to(x.dtype)
+                if o % 128 == 0 and i % 128 == 0:  # every layer of Qwen3-VL-8B: one temporary, not a scale matrix too
+                    w = (w.view(o // 128, 128, i // 128, 128) * self.scale.to(x.dtype)[:, None, :, None]).view(o, i)
+                else:
+                    w = w * self.scale.to(x.dtype).repeat_interleave(128, 0)[:o].repeat_interleave(128, 1)[:, :i]
+                return torch.nn.functional.linear(x, w)
+
+        class InRAM(torch.nn.Module):
+            """A token embedding (ids -> vectors) or an output head (vector -> logits) kept in RAM: 1.2 GB each that
+            the GPU does not need — a lookup, and the head only for the last token while generating."""
+            def __init__(self, weight, head):
+                super().__init__()
+                self.w, self.head = weight, head  # a plain attribute: .to(device) leaves it in RAM
+
+            def forward(self, x):
+                if self.head:
+                    return torch.nn.functional.linear(x.to("cpu", self.w.dtype), self.w).to(x.device)
+                return torch.nn.functional.embedding(x.cpu(), self.w).to(x.device)
+        _QWEN_LAYERS = FP8Linear, InRAM
+    return _QWEN_LAYERS
+
+
+def _qwen_text_encoder(dev):
+    """Qwen3-VL-8B-Instruct from Qwen's FP8 files onto the GPU (~8 GB): FP8 layers stay FP8, the rest is bfloat16,
+    the token embedding and the output head stay in RAM (te.lm_head is the identity: the pipeline reads hidden states;
+    te.head is the real one, for naming). Read through RAM: safetensors straight onto the GPU stalled on ROCm/Windows.
+    Its peak is what decides the card: with the head and the embedding on the GPU (~12 GB) next to what the desktop
+    keeps there, an RX 7800 XT spilled into shared memory and the reading took 50 s instead of 15."""
+    import json
+    from contextlib import ExitStack
+    import torch
+    from accelerate import init_empty_weights
+    from accelerate.utils import set_module_tensor_to_device
+    from safetensors import safe_open
+    from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
+    d = mf.part_dir("qwen3-vl-8b-fp8")
+    cfg = json.loads((d / "config.json").read_text(encoding="utf-8"))
+    cfg.pop("quantization_config", None)  # loaded here, not by transformers (its FP8 path wants FP8 maths)
+    with init_empty_weights():
+        te = Qwen3VLForConditionalGeneration._from_config(Qwen3VLConfig.from_dict(cfg), dtype=torch.bfloat16)
+    where = json.loads((d / "model.safetensors.index.json").read_text(encoding="utf-8"))["weight_map"]
+    fp8, in_ram = _qwen_layers()
+    ram = {"lm_head.weight": ("lm_head", True), "model.language_model.embed_tokens.weight":
+           ("model.language_model.embed_tokens", False)}
+    with ExitStack() as stack:
+        files = {f: stack.enter_context(safe_open(str(d / f), framework="pt", device="cpu"))
+                 for f in sorted(set(where.values()))}
+        for k, f in where.items():
+            if k.endswith("_scale_inv"):
+                continue
+            if k in ram:
+                parent, child = ram[k][0].rpartition(".")[::2]
+                setattr(te.get_submodule(parent) if parent else te, child,
+                        in_ram(files[f].get_tensor(k).to(torch.bfloat16), ram[k][1]))
+                continue
+            t = files[f].get_tensor(k).to(dev)
+            if k + "_scale_inv" in where:
+                parent, child = k[:-len(".weight")].rsplit(".", 1)
+                scale = files[where[k + "_scale_inv"]].get_tensor(k + "_scale_inv").to(dev)
+                setattr(te.get_submodule(parent), child, fp8(t, scale))
+            else:
+                set_module_tensor_to_device(te, k, dev, value=t.to(torch.bfloat16) if t.is_floating_point() else t)
+    te.head, te.lm_head = te.lm_head, torch.nn.Identity()
+    return te.to(dev).eval()
+
+
+class Qwen:
+    """Qwen-Image-2.1-Turbo (Alibaba, 2026): a 7B image model that generates and edits at up to 2048 px, distilled to
+    8 steps. Its transformer is GGUF-quantized (~4.2 GB at Q4_K_M); its text encoder, Qwen3-VL-8B (~8 GB on the GPU in
+    FP8), reads the prompt and the condition pictures together. The two don't fit on a 16 GB card at once: the encoder runs once per
+    removal while the transformer waits in RAM, then is freed.
+
+    It has no inpainting mode, so a removal is an edit: Qwen3-VL first names what is selected ("the woman and her
+    handbag"), then the transformer is told to remove that, seeing the photo and the hole as a second picture. Told only
+    to fill a grey hole, or to remove "what the mask marks", it drew a person back into a person-shaped hole or copied
+    the object. Outside the hole the latents are held on the photo's at every step (QWEN_LOCK). One latent is 16 x 16
+    px: its working size of 1024 px is 1.8x FLUX's 768.
+    Licence: Qwen Research License, NON-commercial (like FLUX.1 Fill dev). Qwen3-VL: Apache 2.0."""
+    name = "Qwen"
+
+    def __init__(self, log=print):
+        dev = device()
+        import torch
+        from diffusers import GGUFQuantizationConfig, QwenImage21Pipeline, QwenImage21Transformer2DModel
+        from diffusers.quantizers.gguf.utils import GGUFLinear, GGUFParameter, dequantize_gguf_tensor
+        from diffusers.utils import logging as dl
+        from transformers.utils import logging as hf_logging
+        dl.set_verbosity_error()
+        hf_logging.set_verbosity_error()
+        self.torch, self.dev, self.repo = torch, dev, mf.part_dir("qwen-image-2.1-turbo")
+        gg = mf.part_dir("qwen-image-2.1-turbo-gguf")
+        self.quant = next(q for q in mf.QWEN_QUANTS if (gg / mf.QWEN_GGUF.format(q)).exists())
+        tr = QwenImage21Transformer2DModel.from_single_file(
+            str(gg / mf.QWEN_GGUF.format(self.quant)),
+            quantization_config=GGUFQuantizationConfig(compute_dtype=torch.bfloat16), config=str(self.repo),
+            subfolder="transformer", torch_dtype=torch.bfloat16)
+        # diffusers dequantizes GGUF weights only inside Linear layers; a bf16 norm weight (txt_in.text_norm) would
+        # stay raw bytes
+        for mod in tr.modules():
+            if not isinstance(mod, GGUFLinear):
+                for n, p in list(mod.named_parameters(recurse=False)):
+                    if isinstance(p, GGUFParameter):
+                        setattr(mod, n, torch.nn.Parameter(dequantize_gguf_tensor(p).to(torch.bfloat16),
+                                                           requires_grad=False))
+        self.pipe = QwenImage21Pipeline.from_pretrained(self.repo, transformer=tr, text_encoder=None,
+                                                        torch_dtype=torch.bfloat16).to(dev)
+        self.pipe.set_progress_bar_config(disable=True)
+        # the VAE in 512 px tiles: a 1024 px decode in one piece peaks at ~11 GB, which spills the card's memory
+        self.pipe.vae.enable_tiling(512, 512, 384, 384)
+        self.cond = {}  # key -> condition of the last removals (squares of an oblong area): the encoder runs once
+        self.what = None  # what Qwen3-VL saw in the last removal's selection
+        log(f"Qwen-Image ready ({dev}, {self.quant}, {len(self.pipe.config.sample_sigmas)} steps)")
+
+    def _latents(self, img):
+        """An RGB(A) PIL image -> its packed, normalized latents (1, tokens, 64)."""
+        pipe = self.pipe
+        x = pipe.image_processor.preprocess(img.convert("RGBA"), width=img.width, height=img.height).unsqueeze(2)
+        z = pipe._encode_vae_image(x.to(self.dev, pipe.vae.dtype), None)
+        return pipe._pack_latents(z, 1, z.shape[1], z.shape[3], z.shape[4])
+
+    def _name(self, te, image, hole):
+        """What is selected, in a few words, asked to Qwen3-VL with the selection outlined in red. A red tint over a
+        thin pole in front of columns was named "the column base"; outlined, "the floor lamp"."""
+        from scipy import ndimage as ndi
+        torch, proc = self.torch, self.pipe.processor
+        S = QWEN_NAME_SIZE
+        shown = np.array(image.resize((S, S), Image.LANCZOS))
+        m = np.asarray(hole.resize((S, S), Image.NEAREST)) > 127
+        shown[ndi.binary_dilation(m, iterations=3) & ~ndi.binary_erosion(m)] = (255, 0, 0)
+        shown = Image.fromarray(shown)
+        msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": QWEN_ASK}]}]
+        inputs = proc(text=[proc.apply_chat_template(msgs, add_generation_prompt=True)], images=[shown],
+                      return_tensors="pt").to(self.dev)
+        te.lm_head = te.head  # logits, for the last token only (generate asks for no more)
+        try:
+            with torch.no_grad():
+                ids = te.generate(**inputs, max_new_tokens=16, do_sample=False)
+        finally:
+            te.lm_head = torch.nn.Identity()
+        what = proc.batch_decode(ids[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+        what = what.strip().splitlines()[0].strip(" .\"'") if what.strip() else "the object"
+        return what[0].lower() + what[1:] if what.split(" ", 1)[0] in ("The", "A", "An") else what
+
+    def condition(self, image, hole, prompt, log=print):
+        """Prompt embeddings, image-slot mask, latents and latent shapes of the condition pictures, once per removal
+        (the same for every variant). The transformer waits in RAM while the encoder is on the GPU. A prompt names
+        what to remove (when Qwen3-VL got it wrong); without one Qwen3-VL names it."""
+        import hashlib
+        import time
+        torch, pipe = self.torch, self.pipe
+        key = hashlib.sha1(image.tobytes() + hole.tobytes() + prompt.encode("utf-8")).digest()
+        if key not in self.cond:
+            t0 = time.time()
+            C = min(image.width, QWEN_COND_SIZE)
+            photo = image.resize((C, C), Image.LANCZOS)
+            pipe.transformer.to("cpu")
+            _free_gpu()
+            try:
+                te = pipe.text_encoder = _qwen_text_encoder(self.dev)
+                self.what = prompt.strip() or self._name(te, image, hole)
+                M = QWEN_MASK_SIZE
+                images = [photo] + ([Image.merge("RGB", [hole.resize((M, M), Image.BILINEAR)] * 3)] if M else [])
+                text = QWEN_REMOVE.format(what=self.what)
+                with torch.no_grad():
+                    pe, _mask, slots = pipe._get_qwen_prompt_embeds(text, [im.convert("RGBA") for im in images],
+                                                                    self.dev)
+            finally:
+                pipe.text_encoder = te = None  # no reference left: ~8 GB to give back before the transformer returns
+                _free_gpu()
+                pipe.transformer.to(self.dev)
+            with torch.no_grad():
+                lat = torch.cat([self._latents(im) for im in images], dim=1)
+            _free_gpu()
+            f = pipe.vae_scale_factor
+            shapes = [(1, im.height // f, im.width // f) for im in images]
+            self.cond = dict(list(self.cond.items())[-3:])
+            self.cond[key] = (pe.to(torch.bfloat16), slots, lat, shapes, self.what)
+            log(f"Qwen-Image: {text!r}, read in {time.time() - t0:.1f}s")
+        *cond, self.what = self.cond[key]
+        return cond
+
+    def fill(self, src: Image.Image, mask: Image.Image, prompt: str, seed: int, progress=None, log=print,
+             size: int = None) -> Image.Image:
+        torch, pipe, dev = self.torch, self.pipe, self.dev
+        from diffusers.models.transformers.transformer_qwenimage21 import QwenImage21KVCache
+        from diffusers.pipelines.qwenimage21.pipeline_qwenimage21 import calculate_shift, retrieve_timesteps
+        S = size or QWEN_SIZE
+        image = src.convert("RGB").resize((S, S), Image.LANCZOS)
+        hole = mask.resize((S, S), Image.NEAREST).filter(ImageFilter.MaxFilter(9))
+        pe, slots, cond_lat, shapes = self.condition(image, hole, prompt, log)
+        L = S // pipe.vae_scale_factor
+        g = torch.Generator("cpu").manual_seed(seed)
+        with torch.no_grad():
+            noise = pipe._pack_latents(torch.randn((1, 1, 64, L, L), generator=g), 1, 64, L, L).to(dev, torch.bfloat16)
+            z0 = self._latents(image) if QWEN_LOCK else None
+            # a latent is free where any pixel of its 16 x 16 cell is in the (grown) hole
+            k = torch.from_numpy(np.asarray(hole) > 127).float()[None, None]
+            free = torch.nn.functional.max_pool2d(k, pipe.vae_scale_factor).reshape(1, L * L, 1).to(dev, torch.bfloat16)
+            _free_gpu()
+            sc = pipe.scheduler.config
+            mu = calculate_shift(L * L, sc.get("base_image_seq_len", 256), sc.get("max_image_seq_len", 4096),
+                                 sc.get("base_shift", 0.5), sc.get("max_shift", 1.15))
+            timesteps, n = retrieve_timesteps(pipe.scheduler, None, dev, sigmas=pipe.config.sample_sigmas, mu=mu)
+            pipe.scheduler.set_begin_index(0)
+            slots = torch.cat([slots, slots.new_ones(1, L * L // 4)], dim=1)
+            cache = QwenImage21KVCache(len(pipe.transformer.transformer_blocks))
+            latents = noise
+            for i, t in enumerate(timesteps):
+                v = pipe.transformer(hidden_states=torch.cat([cond_lat, latents], dim=1),
+                                     timestep=t.expand(1).to(torch.bfloat16) / 1000, encoder_hidden_states=pe,
+                                     img_shapes=[shapes + [(1, L, L)]], img_mask=slots, kv_cache=cache,
+                                     kv_cache_mode="extract" if i == 0 else "cached", return_dict=False)[0]
+                latents = pipe.scheduler.step(v[:, -L * L:], t, latents, return_dict=False)[0]
+                if i == 0:  # the first step ran the whole sequence (text, pictures, target): give its memory back
+                    _free_gpu()
+                if z0 is not None:
+                    s = pipe.scheduler.sigmas[i + 1].to(dev, torch.bfloat16)
+                    latents = free * latents + (1 - free) * ((1 - s) * z0 + s * noise)
+                if progress:
+                    progress(i + 1, n)
+            del cache
+            _free_gpu()
+            vae = pipe.vae
+            z = pipe._unpack_latents(latents, S, S, pipe.vae_scale_factor).to(vae.dtype)
+            mean = torch.tensor(vae.config.latents_mean).view(1, -1, 1, 1, 1).to(dev, z.dtype)
+            std = torch.tensor(vae.config.latents_std).view(1, -1, 1, 1, 1).to(dev, z.dtype)
+            out = vae.decode(z * std + mean, return_dict=False)[0][:, :, 0]
+            out = pipe.image_processor.postprocess(out, output_type="pil")[0].convert("RGB")
+        _free_gpu()
+        return out.resize(src.size, Image.LANCZOS)
+
+    def unload(self):
+        del self.pipe
+        self.cond = {}
         _free_gpu()
 
 

@@ -35,6 +35,8 @@ one project file next to the raw (`<raw>.airemove`). The original raw is never m
 - **Shadows and reflections (optional).** OSOR and ObjectClear remove an object together with its shadow and
   reflection, though only the object is selected. "Include the shadow" uses OSOR to add the shadow to the selection,
   so every model removes it.
+- **Large areas on complex backgrounds (optional, 16 GB GPUs).** Qwen-Image 2.1 first recognises what is selected
+  ("the woman with a handbag", "the floor lamp"), then removes it by name and redraws the scene behind it.
 - **Writes a real RAW.** The fill is converted back into the camera's linear space and re-mosaicked into the Bayer data
   with matching sensor noise, so the DNG develops like the original.
 - **Seamless blending:** a Poisson membrane plus texture transfer from the ring around the hole.
@@ -148,16 +150,18 @@ Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache
 | SAM 3 | One-click selection (without it: the brush) | 3.2 GB (0 if LightCraft has it) | SAM License (Meta) |
 | OSOR (optional, on FLUX) | The object with its shadow and reflection, one step (~3–8 s); finds the shadow for "Include the shadow" | 0.6 GB | FLUX.1 [dev] Non-Commercial |
 | ObjectClear (optional) | The object with its shadow and reflection, ~5 s per variant, 512 px | 7.3 GB | S-Lab License 1.0 (non-commercial) |
+| Qwen-Image 2.1 Turbo (optional) | Large areas on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~45 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
 
 The installer shows the same descriptions, sizes and licences (from `airemove/model_files.py`).
 
-**Commercial use.** FLUX, OSOR and ObjectClear are for non-commercial use only. They are fine for your own photos, but
-not for paid work or clients without a licence from their makers: Black Forest Labs for FLUX and OSOR, S-Lab for
-ObjectClear. For paid work, use LaMa or SDXL (SDXL with its usage restrictions). FLUX's licence also asks you to check
-its results before sharing them, and to say they were edited with AI where the law requires it. This is a summary, not
-legal advice: the licences themselves decide.
+**Commercial use.** FLUX, OSOR, ObjectClear and Qwen-Image are for non-commercial use only. They are fine for your own
+photos, but not for paid work or clients without a licence from their makers: Black Forest Labs for FLUX and OSOR,
+S-Lab for ObjectClear, Alibaba's Qwen team for Qwen-Image. For paid work, use LaMa or SDXL (SDXL with its usage
+restrictions). FLUX's licence also asks you to check its results before sharing them, and to say they were edited with
+AI where the law requires it. This is a summary, not legal advice: the licences themselves decide.
 
-An optional prompt **in English** guides SDXL and FLUX, for example "old plaster wall" or "dark doorway".
+An optional prompt **in English** guides SDXL and FLUX, for example "old plaster wall" or "dark doorway". For
+Qwen-Image it names what to remove, when it recognised it wrongly ("the lamp post").
 
 ## Using it
 

@@ -19,6 +19,8 @@ import system
 from i18n import N_
 
 FLUX_QUANTS = ("Q4_K_S", "Q5_K_S")  # first one present is used; Q4_K_S: ~1.4 GB less VRAM, so it does not spill
+QWEN_QUANTS = ("Q4_K_M", "Q5_K_M", "Q6_K", "Q8_0")  # Qwen-Image's transformer: the first one present is used
+QWEN_GGUF = "qwen-image-2.1-turbo-{}.gguf"
 TURBO_WEIGHTS = "diffusion_pytorch_model.safetensors"  # alimama's FLUX.1-Turbo-Alpha LoRA
 OSOR_WEIGHTS = "osor-fluxfill/weights/fluxfill_phase2.pth"
 SAM3_WEIGHTS = "model.safetensors"
@@ -52,6 +54,20 @@ def _fp16_vae(d):
     """SDXL's VAE fixed for half precision (madebyollin): the original overflows in fp16, so it asks for an upcast."""
     c = _json(d / "config.json")
     return c.get("_class_name") == "AutoencoderKL" and c.get("latent_channels") == 4 and c.get("force_upcast") is False
+
+
+def _qwen_turbo(d):
+    """Qwen-Image-2.1-Turbo's diffusers folder: its 8-step schedule is in model_index.json (the base model has none)."""
+    i = _json(d / "model_index.json")
+    return i.get("_class_name") == "QwenImage21Pipeline" and bool(i.get("sample_sigmas"))
+
+
+def _qwen3_vl_fp8(d):
+    """Qwen's FP8 release of Qwen3-VL-8B-Instruct: Qwen-Image-2.1's text encoder is that model, unchanged."""
+    c = _json(d / "config.json")
+    return ("Qwen3VLForConditionalGeneration" in (c.get("architectures") or [])
+            and (c.get("quantization_config") or {}).get("quant_method") == "fp8"
+            and (c.get("text_config") or {}).get("hidden_size") == 4096)
 
 
 def _sam3(d):
@@ -128,6 +144,17 @@ PARTS = {p.name: p for p in (
          "jixin0101/ObjectClear", OBJECTCLEAR_FILES, check=_pipeline("ObjectClearPipeline")),
     # its pipeline code, from GitHub (S-Lab licence: not shipped with AI Remove)
     Part("objectclear/code", 0.0, ["objectclear/pipelines/pipeline_objectclear.py"]),
+    # Qwen-Image 2.1 Turbo: the configs, processor and VAE (the transformer is the GGUF, the text encoder Qwen's own
+    # FP8 Qwen3-VL — byte for byte the bf16 one inside Qwen-Image's repo, at 10 GB instead of 17.5)
+    Part("qwen-image-2.1-turbo", 0.64, ["model_index.json", "processor/tokenizer.json", "transformer/config.json",
+                                        "vae/diffusion_pytorch_model.safetensors"],
+         "Qwen/Qwen-Image-2.1-Turbo", ["model_index.json", "LICENSE", "scheduler/*", "processor/*", "vae/*",
+                                       "transformer/config.json"], check=_qwen_turbo),
+    Part("qwen-image-2.1-turbo-gguf", 3.91, [tuple(QWEN_GGUF.format(q) for q in QWEN_QUANTS)],
+         "unsloth/Qwen-Image-2.1-Turbo-GGUF", [QWEN_GGUF.format(QWEN_QUANTS[0])]),
+    Part("qwen3-vl-8b-fp8", 9.88, ["config.json", "model.safetensors.index.json", "model-00001-of-00002.safetensors",
+                                   "model-00002-of-00002.safetensors"],
+         "Qwen/Qwen3-VL-8B-Instruct-FP8", ["*.json", "*.safetensors", "*.txt"], check=_qwen3_vl_fp8),
 )}
 # the same words as the README's model table and the window's texts (ui.py show_model_info)
 MODELS = {
@@ -150,6 +177,12 @@ MODELS = {
     "objectclear": Model("ObjectClear", N_("Removes an object together with its shadow and reflection, ~5 s per "
                                            "variant, at 512 px (softer detail on large areas)."),
                          "S-Lab License 1.0 (non-commercial)", ["objectclear", "objectclear/code"]),
+    "qwen": Model("Qwen-Image 2.1 Turbo", N_("Removes what you select by name: it recognises the object and redraws "
+                                             "the scene behind it, at 1024 px. For large areas on complex "
+                                             "backgrounds (a person in front of steps, a pole across columns). Needs "
+                                             "a GPU with 16 GB or more; ~45 s per variant."),
+                  "Qwen Research License (non-commercial); Qwen3-VL: Apache-2.0",
+                  ["qwen-image-2.1-turbo", "qwen-image-2.1-turbo-gguf", "qwen3-vl-8b-fp8"]),
 }
 
 
