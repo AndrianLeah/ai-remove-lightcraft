@@ -18,7 +18,6 @@ user's choice, after showing each licence. Using a model means accepting its lic
 | FLUX.1 Turbo-Alpha LoRA | [alimama-creative/FLUX.1-Turbo-Alpha](https://huggingface.co/alimama-creative/FLUX.1-Turbo-Alpha) | as FLUX.1 [dev] |
 | OSOR (FLUX Fill, phase II) — optional | [QinmingZhou/OSOR](https://huggingface.co/QinmingZhou/OSOR), from [Zhouqm-Git/osor](https://github.com/Zhouqm-Git/osor) (ECCV 2026) | as FLUX.1 [dev] (non-commercial); OSOR's code is MIT, but AI Remove uses none of it: it loads the weights itself |
 | ObjectClear — optional | [jixin0101/ObjectClear](https://huggingface.co/jixin0101/ObjectClear), from [zjx0101/ObjectClear](https://github.com/zjx0101/ObjectClear) (CVPR 2026) | [S-Lab License 1.0](https://github.com/zjx0101/ObjectClear/blob/main/LICENSE): non-commercial use only |
-
 | Qwen-Image 2.1 Turbo — optional | [Qwen/Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) (configs, processor, VAE), from [QwenLM/Qwen-Image-2.1](https://github.com/QwenLM/Qwen-Image-2.1) | [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/LICENSE): research and evaluation only; commercial use needs a separate licence from Qwen |
 | Qwen-Image 2.1 Turbo GGUF Q4_K_M — optional | [unsloth/Qwen-Image-2.1-Turbo-GGUF](https://huggingface.co/unsloth/Qwen-Image-2.1-Turbo-GGUF) | as Qwen-Image 2.1 |
 | Qwen3-VL-8B-Instruct FP8 — optional, Qwen-Image's text encoder | [Qwen/Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) | Apache-2.0 |
@@ -64,8 +63,14 @@ The icon uses the same three-colour engraving style as the Crafting Apps icons, 
 was made in three steps (details in `assets/icon/README.md`):
 
 1. A portrait was generated on this machine with FLUX.1 Fill [dev] (GGUF), the Turbo-Alpha LoRA and the
-   [Perfect Ink Drawing (Engraving Style)](https://huggingface.co/Muapi/perfect-ink-drawing-engraving-style) LoRA
-   (openrail++). This portrait was used only for its tones.
+   [Perfect Ink Drawing (Engraving Style)](https://civitai.com/models/1717646) LoRA by deep_synth (Flux v1.0).
+   - Its author's permissions on Civitai allow commercial use of the images made with it and derivatives, with no
+     credit required.
+   - It was downloaded from a copy on Hugging Face,
+     [Muapi/perfect-ink-drawing-engraving-style](https://huggingface.co/Muapi/perfect-ink-drawing-engraving-style),
+     which is labelled openrail++. The original author's terms are the ones that apply.
+   - FLUX.1 [dev]'s licence lets its outputs be used for any purpose, except training competing models. The
+     portrait was used only for its tones.
 2. AI Remove's own engraving algorithm drew the lines.
 3. VectorCraft traced the result into vectors.
 

@@ -115,6 +115,12 @@ Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/hug
 | **ObjectClear** (facoltativo) | Toglie l'oggetto insieme alla sua ombra e al riflesso, circa 5 s a variante, a 512 px. | 7,3 GB | S-Lab License 1.0 (non commerciale) |
 | **Qwen-Image 2.1 Turbo** (facoltativo) | Aree grandi su sfondi complessi (una persona davanti a una scalinata, un palo davanti alle colonne): riconosce cosa hai selezionato e lo toglie chiamandolo per nome. Circa 45 s a variante a 1024 px. Serve una GPU NVIDIA o AMD da 16 GB. | 14,4 GB | Qwen Research License (non commerciale); il suo encoder del testo Qwen3-VL: Apache-2.0 |
 
+**Uso commerciale.** FLUX, OSOR, ObjectClear e Qwen-Image sono solo per uso non commerciale. Vanno bene per le tue foto,
+ma non per lavori pagati o per clienti senza una licenza dei loro autori: Black Forest Labs per FLUX e OSOR, S-Lab per
+ObjectClear, il team Qwen di Alibaba per Qwen-Image. Per i lavori pagati usa LaMa o SDXL (SDXL con le sue limitazioni
+d'uso). La licenza di FLUX chiede anche di controllare i risultati prima di condividerli, e di dire che sono stati
+modificati con l'AI dove la legge lo richiede. È un riassunto, non un parere legale: valgono le licenze.
+
 Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plaster wall" o "dark doorway". Con
 Qwen-Image dice cosa togliere, se lo ha riconosciuto male ("the lamp post").
 

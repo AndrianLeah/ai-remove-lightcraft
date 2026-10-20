@@ -30,7 +30,8 @@ The icon is drawn on `viewBox="0 0 512 512"`, as a rounded-square tile with `rx=
 ## How it was made
 
 1. **Tone.** A raccoon portrait was generated locally with FLUX.1 Fill [dev] (GGUF Q4_K_S + Turbo-Alpha) and the
-   "Perfect Ink Drawing (Engraving Style)" LoRA (openrail++). This is `source/flux-raccoon.png`, made by
+   [Perfect Ink Drawing (Engraving Style)](https://civitai.com/models/1717646) LoRA by deep_synth, whose permissions
+   allow commercial use of its images (see THIRD-PARTY-NOTICES.md). This is `source/flux-raccoon.png`, made by
    `source/flux_ink.py`. Its fur is a fine stipple, so it is used **only for its tones**.
 2. **Figure.** SAM 3 cut the figure out (`source/sam_mask.py`). It was then cropped tight, as in the family:
    - ears near the top;

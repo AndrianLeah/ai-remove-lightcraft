@@ -154,6 +154,12 @@ Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache
 
 The installer shows the same descriptions, sizes and licences (from `airemove/model_files.py`).
 
+**Commercial use.** FLUX, OSOR, ObjectClear and Qwen-Image are for non-commercial use only. They are fine for your own
+photos, but not for paid work or clients without a licence from their makers: Black Forest Labs for FLUX and OSOR,
+S-Lab for ObjectClear, Alibaba's Qwen team for Qwen-Image. For paid work, use LaMa or SDXL (SDXL with its usage
+restrictions). FLUX's licence also asks you to check its results before sharing them, and to say they were edited with
+AI where the law requires it. This is a summary, not legal advice: the licences themselves decide.
+
 An optional prompt **in English** guides SDXL and FLUX, for example "old plaster wall" or "dark doorway". For
 Qwen-Image it names what to remove, when it recognised it wrongly ("the lamp post").
 
