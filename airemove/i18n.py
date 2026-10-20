@@ -7,6 +7,7 @@ falls back to the English text, so a half-done translation never breaks anything
     _("Loading {model}", model="SDXL")             -> placeholders are str.format fields, kept in translations
     _n("{n} variant", "{n} variants", n)           -> the singular or plural text, then translated
     N_("text")                                     -> marks a text defined in a table, translated later with _()
+    num(6.8)                                       -> "6,8": a number with the language's decimal separator
 
 The language: AIREMOVE_LANG, else the one picked in AI Remove's window (work/settings.json "language"), else
 LightCraft's own (its ui.json), else the system's, else English. Adding a language = a locales/<code>.json catalog
@@ -137,3 +138,11 @@ def N_(text):
 def _n(singular, plural, n, **fields):
     """Singular for n == 1, plural otherwise (English and Italian agree on this), translated; n is a field too."""
     return _(singular if n == 1 else plural, n=n, **fields)
+
+
+DECIMAL = {"it": ","}  # the decimal separator, where it is not a point
+
+
+def num(x, digits=1):
+    """A number written the language's way: 6.8 -> "6,8" in Italian."""
+    return f"{round(x, digits):g}".replace(".", DECIMAL.get(language(), "."))

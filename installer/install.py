@@ -6,15 +6,16 @@ install folder. Standard library only. What it does, in order (each step can be 
   1. looks at the computer: OS, graphics card -> which PyTorch build (NVIDIA CUDA, AMD ROCm, Intel XPU, Apple MPS, CPU)
   2. copies the app into the install folder (default: ~/AIRemove — outside AppData on Windows on purpose)
   3. makes a private Python environment there (venv) with PyTorch and the other libraries
-  4. downloads the AI models the user chose (LaMa, SAM 3 — or links LightCraft's copy —, SDXL, FLUX, OSOR, ObjectClear)
+  4. downloads the AI models the user chose (LaMa, SAM 3 — or links LightCraft's copy —, SDXL, FLUX, OSOR, ObjectClear);
+     a model the user already has in a folder of their own is used from there (airemove.json "model_paths")
   5. creates the launcher (AI Remove.exe / app / command) with its icon, a Start menu / Applications / menu entry
   6. sets up LightCraft: its control channel (LIGHTCRAFT_CONTROL_PORT), AI Remove as its external editor and the
      shortcut Ctrl+Shift+X (Cmd+Shift+X on a Mac) for Photo > Edit In > Open Original in Other Editor
   7. checks the result (airemove --check)
 
   install.py [--dir DIR] [--models lama,sam3,sdxl,flux,osor,objectclear | recommended | none] [--yes]
-             [--hf-token TOKEN] [--torch auto|cuda|rocm|rocm-win|xpu|mps|cpu] [--models-from DIR] [--port 7980]
-             [--no-lightcraft]
+             [--model-dir MODEL=FOLDER ...] [--hf-token TOKEN] [--torch auto|cuda|rocm|rocm-win|xpu|mps|cpu]
+             [--models-from DIR] [--port 7980] [--no-lightcraft]
   install.py --configure-lightcraft [--dir DIR]      only step 6 (e.g. after closing LightCraft)
   install.py --status [--dir DIR]                    JSON: what is installed
   install.py --uninstall [--keep-models] [--yes]     removes AI Remove and its LightCraft settings (not your photos,
@@ -35,8 +36,9 @@ from pathlib import Path
 
 PKG = Path(__file__).resolve().parent.parent  # the unzipped package (or the install itself, for repairs)
 sys.path.insert(0, str(PKG / "airemove"))
+import model_files as mf  # noqa: E402  (standard library only, shared with the app: the same checks)
 import system  # noqa: E402  (standard library only, shared with the app)
-from i18n import _, N_  # noqa: E402
+from i18n import _, N_, num  # noqa: E402
 
 VERSION = system.VERSION
 PY_VERSION = "3.12"
@@ -55,19 +57,8 @@ AMD_WIN_OK = re.compile(r"RX\s*[79]\d{3}|PRO\s*W7\d{3}|AI\s*PRO|Radeon\s*(8060S|
 TORCH_FLAVOURS = {
     "cuda": ("NVIDIA (CUDA)", 4.5), "rocm": ("AMD (ROCm, Linux)", 9.0), "rocm-win": (N_("AMD (ROCm for Windows)"), 6.0),
     "xpu": ("Intel Arc (XPU)", 3.5), "mps": ("Apple Silicon (Metal)", 1.0), "cpu": (N_("processor only"), 1.0)}
-MODELS = {  # name: (GB, what (translated where shown), licence, gated repo or None)
-    "lama": (0.2, N_("LaMa: quick fill on the processor, for small objects on plain backgrounds"), "Apache-2.0", None),
-    "sam3": (3.4, N_("SAM 3: one-click selection (the same model as LightCraft's Object masks)"),
-             "SAM License (Meta)", "facebook/sam3"),
-    "sdxl": (6.9, N_("SDXL Inpainting: generative variants on the GPU, ~8-15 s each"), "CreativeML Open RAIL++-M",
-             None),
-    "flux": (16.6, N_("FLUX.1 Fill [dev] + Turbo: the most realistic, needs a 12+ GB GPU"),
-             "FLUX.1 [dev] Non-Commercial License", "black-forest-labs/FLUX.1-Fill-dev"),
-    "osor": (0.6, N_("OSOR: removes an object together with its shadow and reflection, in one step (runs on FLUX)"),
-             "FLUX.1 [dev] Non-Commercial License", None),
-    "objectclear": (7.3, N_("ObjectClear: removes an object together with its shadow and reflection, ~5 s on the GPU"),
-                    "S-Lab License 1.0 (non-commercial)", None),
-}
+MODELS = mf.MODELS  # what each model is for, its download and licence, its files (airemove/model_files.py)
+GPU_ONLY = ("flux", "osor", "objectclear")  # not offered without a GPU (FLUX and OSOR do not run, ObjectClear crawls)
 SHORTCUT = "Cmd+Shift+X"  # LightCraft's notation: Cmd = Ctrl on Windows and Linux
 EDIT_COMMAND = "photo.openOriginalInExternal"
 APP_NAME = "AI Remove"
@@ -95,6 +86,10 @@ class Out:
 
     def write(self, text):
         print(text, flush=True)
+        self.note(text)
+
+    def note(self, text):
+        """To the log only (what the user typed is on the screen already)."""
         if self.log_file:
             with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(text + "\n")
@@ -364,9 +359,134 @@ def make_launcher_pkg(d):
 
 
 # ------------------------------------------------------------------------------------------------ 4. models
-def get_models(d, wanted, token, models_from):
+YES, NO = ("y", "yes", "s", "si", "sì", "j", "ja"), ("n", "no", "nein")
+FOLDER = ("f", "folder", "c", "cartella", "d", "dir")
+
+
+def para(text, first="  ", rest="    "):
+    """A paragraph wrapped to the console."""
+    import textwrap
+    width = max(60, min(shutil.get_terminal_size((100, 20)).columns, 110) - 1)
+    out.write(textwrap.fill(text, width, initial_indent=first, subsequent_indent=rest))
+
+
+def prompt(text):
+    try:
+        a = input(text).strip()
+    except EOFError:
+        a = ""
+    out.note(text + a)
+    return a
+
+
+def clean_path(text):
+    """A folder as typed, pasted or dragged into the console: without quotes, file:// and (macOS, Linux) the
+    backslashes before spaces; a file stands for the folder it is in."""
+    t = text.strip()
+    if len(t) > 1 and t[0] == t[-1] and t[0] in "'\"":
+        t = t[1:-1]
+    if t.startswith("file://"):
+        from urllib.parse import unquote, urlparse
+        t = unquote(urlparse(t).path)
+        if re.match(r"/[A-Za-z]:", t):
+            t = t[1:]
+    elif system.system() != "windows":
+        t = re.sub(r"\\(.)", r"\1", t)
+    p = Path(os.path.abspath(Path(t).expanduser()))
+    return p.parent if p.is_file() else p
+
+
+def look(model, folder):
+    """The model's parts in a folder of the user's: ({part: folder}, "") — or ({}, why not)."""
+    f, name = clean_path(str(folder)), MODELS[model].name
+    if not f.is_dir():
+        return {}, _("{model}: {folder} is not a folder", model=name, folder=f)
+    out.write("    " + _("looking for {model} in {folder} …", model=name, folder=f))
+    found = mf.find_model(model, f)
+    if not found:
+        return {}, _("{model}: nothing of it in {folder} (it looks for files like {files}, there or a few levels "
+                     "below)", model=name, folder=f, files=mf.looks_for(model))
+    return found, ""
+
+
+def say_found(model, found):
+    for p in MODELS[model].parts:
+        out.write("    " + (_("found: {part} in {folder}", part=p, folder=found[p]) if p in found else
+                            _("not in that folder, to download: {part} ({gb} GB)", part=p, gb=num(mf.PARTS[p].gb))))
+
+
+def ask_model(model, default, required):
+    """y / n / the folder where the user already has the model. Returns None (no), {} (download it) or
+    {part: folder} (use it from there)."""
+    hint = _("[Y/folder]") if required else _("[Y/n/folder]") if default else _("[y/N/folder]")
+    while True:
+        a = prompt("    " + _("Install {model}?", model=MODELS[model].name) + f" {hint} ")
+        if not a:
+            return {} if default or required else None
+        if a.lower() in YES:
+            return {}
+        if a.lower() in NO:
+            if not required:
+                return None
+            out.write("    " + _("LaMa is always installed: it is the window's quick fill"))
+            return {}
+        if a.lower() in FOLDER:
+            a = prompt("    " + _("Folder (you can drag it here): "))
+            if not a:
+                continue
+        found, why = look(model, a)
+        if found:
+            say_found(model, found)
+            return found
+        para(why, "    ! ", "      ")
+
+
+def choose_models(flavour, gpu, installed, given, lc_sam):
+    """The questions, model by model: what it is for, its download and its licence; y, n, or the folder where the
+    user already has it (what is there goes into given). Returns the models wanted."""
+    rec = recommended_models(flavour, gpu)
+    out.write("")
+    para(_("The AI models: what each one is for, its download and its licence. Answer y to install it or n to skip "
+           "it, or give the folder where you already have it (another AI Remove, a Hugging Face cache, ComfyUI's "
+           "models; you can drag the folder into this window): it is used from there, not downloaded again."),
+         "  ", "  ")
+    wanted = []
+    for m, mod in MODELS.items():
+        if m in GPU_ONLY and flavour == "cpu" and m not in given and m not in installed:
+            continue
+        if m == "osor" and "flux" not in wanted + installed:
+            continue  # it runs on FLUX
+        lc = m == "sam3" and lc_sam
+        out.write("")
+        para(f"{mod.name} — {_(mod.what)}")
+        notes = [f"{num(mod.gb)} GB", _("licence {licence}", licence=mod.licence)]
+        if mod.gated and not lc and m not in installed:
+            notes.append(_("needs a free Hugging Face token (its licence accepted)"))
+        para(" · ".join(notes), "    ", "      ")
+        if m in installed:
+            out.write("    " + _("already installed, kept"))
+        elif m in given:
+            say_found(m, given[m])
+            wanted.append(m)
+        elif lc:
+            out.write("    " + _("already in LightCraft: linked, nothing to download"))
+            wanted.append(m)
+        else:
+            ans = ask_model(m, m in ("lama", "sam3") or m in rec, m == "lama")
+            if ans is not None:
+                wanted.append(m)
+                given.update({m: ans} if ans else {})
+    if flavour == "cpu":
+        out.write("")
+        para(_("FLUX, OSOR and ObjectClear need a graphics card: not offered on this computer (--models installs "
+               "them anyway)."))
+    return wanted
+
+
+def get_models(d, wanted, token, models_from, paths):
     py = venv_python(d)
-    cmd = [py, str(d / "installer" / "fetch_models.py"), "--dest", str(d / "models"), "--models", ",".join(wanted)]
+    cmd = [py, str(d / "installer" / "fetch_models.py"), "--dest", str(d / "models"), "--models", ",".join(wanted),
+           "--paths", json.dumps({p: str(f) for p, f in paths.items()})]
     if models_from:
         cmd += ["--from", str(models_from)]
     env = dict(os.environ)
@@ -740,6 +860,9 @@ def uninstall(d, keep_models, yes):
         subprocess.Popen(["cmd", "/c", str(bat)], creationflags=0x00000008 | 0x00000200)  # detached
     out.write(_("AI Remove uninstalled.") + (" " + _("The models stay in {dir}.", dir=d / "models")
                                               if keep_models else ""))
+    mine = sorted(set((cfg.get("model_paths") or {}).values()))
+    if mine:
+        out.write(_("Your own model folders are left as they are: {dirs}", dirs=", ".join(mine)))
 
 
 # ------------------------------------------------------------------------------------------------ main
@@ -750,7 +873,10 @@ def parse():
     ap.add_argument("--hf-token", default=None, help="Hugging Face token (only for SAM 3 / FLUX, models with a licence to accept)")
     ap.add_argument("--hf-token-file", default=None, help="file holding the token (read, then deleted: the MCP server uses it)")
     ap.add_argument("--torch", default="auto", choices=["auto"] + list(TORCH_FLAVOURS))
-    ap.add_argument("--models-from", default=None, help="another install's models/ folder to reuse")
+    ap.add_argument("--models-from", default=None, help="another install's models/ folder to reuse (linked)")
+    ap.add_argument("--model-dir", action="append", metavar="MODEL=FOLDER",
+                    help="a model you already have on disk (another install, a Hugging Face cache, ComfyUI's models): "
+                         "used from there, not downloaded; once per model")
     ap.add_argument("--port", type=int, default=None, help="port of LightCraft's control channel (7980)")
     ap.add_argument("--no-lightcraft", action="store_true", help="leave LightCraft's settings alone")
     ap.add_argument("--yes", "-y", action="store_true", help="no questions (recommended choices)")
@@ -791,7 +917,7 @@ def main():
     out.title(1, _("The computer"))
     gpus = detect_gpus()
     for g in gpus:
-        out.write("  " + _("graphics: {name}", name=g[1]) + (f" ({g[2]:g} GB)" if g[2] else ""))
+        out.write("  " + _("graphics: {name}", name=g[1]) + (f" ({num(g[2])} GB)" if g[2] else ""))
     flavour, gpu = choose_torch(gpus) if args.torch == "auto" else (args.torch, gpus[0] if gpus else None)
     out.write(f"  PyTorch: {_(TORCH_FLAVOURS[flavour][0])}")
     if flavour == "cpu":
@@ -799,55 +925,56 @@ def main():
     lc = system.lightcraft_app()
     out.write("  LightCraft: " + (lc or _("not found (install it from getartcraft.com: AI Remove works inside "
                                             "LightCraft)")))
-    lc_sam = (system.lightcraft_sam3_dir() / "model.safetensors").exists()
+    lc_sam = (system.lightcraft_sam3_dir() / mf.SAM3_WEIGHTS).exists()
 
-    # models: what this folder has already (a re-run keeps it and does not ask about it again), then what to download
-    from fetch_models import complete  # noqa: E402  (next to this file; standard library only)
-    installed = [m for m in MODELS if complete(d / "models", m)]
-    have = set(installed) | {m for m in MODELS if (args.models_from and complete(Path(args.models_from), m)) or
-                             (m == "sam3" and lc_sam)}
+    # models: what this install has already — in its models/ or, from an earlier run, in the user's own folders (a
+    # re-run keeps it and does not ask about it again) —, the folders given with --model-dir, then the questions
+    models_dir = d / "models"
+    kept = {p: f for p, f in (cfg.get("model_paths") or {}).items() if p in mf.PARTS and mf.part_ok(p, f)}
+    installed = [m for m in MODELS if mf.has(m, models_dir, kept, optional=True)]
+    other = Path(args.models_from).expanduser() if args.models_from else None
+    given = {}  # model: {part: folder} — what the user already has in a folder of their own
+    for spec in args.model_dir or []:
+        m, __, folder = spec.partition("=")
+        if m.strip().lower() not in MODELS or not folder.strip():
+            raise Stop(_("--model-dir wants MODEL=FOLDER, MODEL one of {models} (it was: {value})",
+                         models=", ".join(MODELS), value=spec))
+        found, why = look(m.strip().lower(), folder)
+        if not found:
+            raise Stop(why)
+        given[m.strip().lower()] = found
+    asked = args.models is None and not args.yes
     if args.models in (None, "recommended"):
-        wanted = recommended_models(flavour, gpu)
-        if args.models is None and not args.yes:
-            wanted = ["lama", "sam3"]
-            if installed:
-                out.write("  " + _("already installed, kept: {models}", models=", ".join(installed)))
-
-            def offer(model, question, default=False):
-                if model not in installed and ask(question, default):
-                    wanted.append(model)
-            offer("sdxl", _("Install SDXL ({gb} GB, generative variants on the GPU)?", gb=MODELS["sdxl"][0]),
-                  "sdxl" in recommended_models(flavour, gpu))
-            if flavour != "cpu":
-                offer("flux", _("Install FLUX too ({gb} GB, the most realistic; it needs a Hugging Face token and a "
-                                "12+ GB GPU)?", gb=MODELS["flux"][0]))
-            if flavour != "cpu" and ("flux" in wanted or "flux" in installed):
-                offer("osor", _("Install OSOR too ({gb} GB: it removes an object together with its shadow, on "
-                                "FLUX)?", gb=MODELS["osor"][0]))
-            if flavour != "cpu":
-                offer("objectclear", _("Install ObjectClear too ({gb} GB: it removes an object together with its "
-                                       "shadow and reflection; non-commercial licence)?", gb=MODELS["objectclear"][0]))
+        wanted = choose_models(flavour, gpu, installed, given, lc_sam) if asked else recommended_models(flavour, gpu)
     elif args.models == "none":
         wanted = []
     else:
         wanted = [m.strip() for m in args.models.split(",") if m.strip() in MODELS]
+    wanted += list(given)  # a folder given for a model: that model is wanted
     if args.models != "none":  # LaMa always; what is installed stays (listed below as already there)
-        wanted = [m for m in MODELS if m in wanted or m in installed or m == "lama"]
+        wanted += installed + ["lama"]
+    wanted = [m for m in MODELS if m in wanted]
+
+    def mine():
+        """{part: folder} used from the user's own folders: from an earlier run, and given now for a wanted model."""
+        return dict(kept, **{p: f for m in wanted for p, f in given.get(m, {}).items()})
+
+    def source(part):
+        """Where a part comes from: 'there' (models/), 'yours' (a folder of the user's), 'lightcraft' (SAM 3),
+        'other' (--models-from, linked) or 'get' (downloaded)."""
+        paths = mine()
+        if mf.part_ok(part, mf.part_dir(part, models_dir, paths)):
+            return "yours" if part in paths else "there"
+        if part == "sam3" and lc_sam:
+            return "lightcraft"
+        return "other" if other and mf.part_ok(part, other / part) else "get"
+
+    def drop(model, why):
+        out.write("  " + why)
+        wanted.remove(model)
+
     if "osor" in wanted and "flux" not in wanted:
-        out.write("  " + _("OSOR runs on FLUX: add flux to the models (it is skipped now)"))
-        wanted.remove("osor")
-    need = [m for m in wanted if m not in have]
-    total = TORCH_FLAVOURS[flavour][1] + sum(MODELS[m][0] for m in need)
-    out.write("  " + _("folder: {dir}  ·  free space {free} GB  ·  needed ~{need} GB", dir=d,
-                         free=f"{gb_free(d):.0f}", need=f"{total:.0f}"))
-    for m in wanted:
-        gb, what, lic, gated = MODELS[m]
-        src = (_("already in LightCraft: linked (0 GB)") if m == "sam3" and lc_sam else
-               _("already there (0 GB)") if m in have else f"{gb:g} GB")
-        out.write(f"   · {_(what)} — {src} — " + _("licence {licence}", licence=lic))
-    if gb_free(d) < total + 2:
-        raise Stop(_("not enough space: free at least {gb} GB or pick another folder (--dir)",
-                     gb=f"{total + 2 - gb_free(d):.0f}"))
+        drop("osor", _("OSOR runs on FLUX: add flux to the models (it is skipped now)"))
     token = args.hf_token or os.environ.get("HF_TOKEN")
     if args.hf_token_file:
         try:
@@ -855,21 +982,45 @@ def main():
             Path(args.hf_token_file).unlink()
         except OSError:
             pass
-    gated = [m for m in need if MODELS[m][3]]
+    gated = [p for m in wanted for p in MODELS[m].parts if mf.PARTS[p].gated and source(p) == "get"]
     if gated and not token and not args.yes:
-        out.write("\n  " + _("{models}: a licence to accept on Hugging Face:", models=", ".join(MODELS[m][3] for m in gated))
+        repos = ", ".join(mf.PARTS[p].repo for p in gated)
+        out.write("\n  " + _("{models}: a licence to accept on Hugging Face:", models=repos)
                   + "\n  " + _("1) make an account on huggingface.co  2) open {pages} and accept the licence  "
                                "3) make a token (Read) at https://huggingface.co/settings/tokens",
-                               pages=", ".join(f"https://huggingface.co/{MODELS[m][3]}" for m in gated)))
+                               pages=", ".join(f"https://huggingface.co/{mf.PARTS[p].repo}" for p in gated)))
         try:
             token = getpass.getpass("  " + _("Paste the token (hidden; Enter to skip these models): ")).strip()
         except (EOFError, KeyboardInterrupt):
             token = ""
     if gated and not token:
-        for m in gated:
-            out.write("  " + _("skipping {model}: it needs the Hugging Face token", model=m)
-                      + (" " + _("(selection will be with the brush)") if m == "sam3" else ""))
-            wanted.remove(m)
+        for m in [m for m in wanted if set(MODELS[m].parts) & set(gated)]:
+            drop(m, _("skipping {model}: it needs the Hugging Face token", model=m)
+                 + (" " + _("(selection will be with the brush)") if m == "sam3" else ""))
+        if "osor" in wanted and "flux" not in wanted + installed:
+            drop("osor", _("OSOR runs on FLUX: add flux to the models (it is skipped now)"))
+    paths = mine()
+    need = list(dict.fromkeys(p for m in wanted for p in MODELS[m].parts if source(p) == "get"))
+    total = TORCH_FLAVOURS[flavour][1] + sum(mf.PARTS[p].gb for p in need)
+    out.write("\n  " + _("folder: {dir}  ·  free space {free} GB  ·  needed ~{need} GB", dir=d,
+                           free=f"{gb_free(d):.0f}", need=f"{total:.0f}"))
+    for m in wanted:
+        mod = MODELS[m]
+        src = {p: source(p) for p in mod.parts}
+        get = sum(mf.PARTS[p].gb for p, s in src.items() if s == "get")
+        state = (_("used from your folder, {gb} GB to download", gb=num(get)) if "yours" in src.values() and get else
+                 _("used from your folder (0 GB)") if "yours" in src.values() else
+                 _("already in LightCraft: linked (0 GB)") if "lightcraft" in src.values() else
+                 _("linked from {dir} (0 GB)", dir=other) if "other" in src.values() and not get else
+                 _("already there (0 GB)") if not get else f"{num(get)} GB")
+        # the questions said what each model is for; without them, the summary says it
+        para(f"· {mod.name}" + ("" if asked else f" — {_(mod.what)}") + f" — {state} — "
+             + _("licence {licence}", licence=mod.licence), "   ", "       ")
+        for p in [p for p, s in src.items() if s == "yours"]:
+            out.write(f"       {p}: {paths[p]}")
+    if gb_free(d) < total + 2:
+        raise Stop(_("not enough space: free at least {gb} GB or pick another folder (--dir)",
+                     gb=f"{total + 2 - gb_free(d):.0f}"))
     if not ask(_("Go ahead?"), True, args.yes):
         raise Stop(_("cancelled"))
 
@@ -884,8 +1035,12 @@ def main():
     write_cfg(d, cfg)
 
     out.title(4, _("AI models"))
-    done, failed = get_models(d, wanted, token, args.models_from) if wanted else ([], [])
+    # the parts in the user's own folders: recorded first, so the app finds them even if a download fails later
+    cfg["model_paths"] = {p: str(f) for p, f in paths.items()}
+    write_cfg(d, cfg)
+    done, failed = get_models(d, wanted, token, args.models_from, paths) if wanted else ([], [])
     cfg["models"] = sorted(set(cfg.get("models", [])) | set(done))
+    cfg["model_paths"] = {p: f for p, f in cfg["model_paths"].items() if mf.part_ok(p, f)}
     for m, why in failed:
         out.write("  ! " + _("{model} not installed: {why}", model=m, why=why))
     write_cfg(d, cfg)

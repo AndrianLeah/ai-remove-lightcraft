@@ -6,27 +6,25 @@ The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by
 Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and ObjectClear
 don't fit together: the session unloads one before loading another."""
 import os
-from pathlib import Path
 import numpy as np
 from PIL import Image, ImageFilter
 
+import model_files as mf
 import system
 from i18n import _
 
 ROOT = system.ROOT
-MODELS = Path(system.config().get("models_dir") or ROOT / "models")
+MODELS = mf.models_dir()  # the install's models; a model the user already had elsewhere is where mf.part_dir says
 USE_MASK_PROMPT = True  # refine SAM objects with their previous mask as a prompt (see SAM3.refine)
 DEFAULT_PROMPT = "empty background, seamless continuation of the surrounding scene, photograph, natural light"
 NEGATIVE = ("person, people, human, man, woman, child, figure, statue, animal, text, watermark, logo, "
             "blurry, deformed, painting, illustration")
-FLUX_QUANTS = ("Q4_K_S", "Q5_K_S")  # first one present is used; Q4_K_S: ~1.4 GB less VRAM, so it does not spill
+FLUX_QUANTS = mf.FLUX_QUANTS
 FLUX_SIZES, FLUX_STEPS, FLUX_TURBO_STEPS = (512, 768), 16, 8
-FLUX_LORA = MODELS / "flux-turbo-alpha" / "diffusion_pytorch_model.safetensors"  # alimama Turbo-Alpha
 SDXL_STEPS, SDXL_GUIDED_STEPS = 12, 5  # DPM++ steps; classifier-free guidance on the first 5 only
 SDXL_CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids", "mask", "masked_image_latents"]
 SDXL_HOLD = 0.5  # share of the steps a held region (SDXL.fill hold=) follows its pre-fill
-SAM3_WEIGHTS = "model.safetensors"
-OSOR_WEIGHTS = Path("osor") / "osor-fluxfill" / "weights" / "fluxfill_phase2.pth"  # in MODELS
+SAM3_WEIGHTS = mf.SAM3_WEIGHTS
 OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was trained with
 OSOR_T = 0.4  # its single denoising step starts from 40 % noise on the photo itself (object included)
 
@@ -72,9 +70,11 @@ def _free_gpu():
 # ------------------------------------------------------------------------------------------------ what is installed
 def sam3_dir():
     """models/sam3 with the SAM 3 weights: the same file LightCraft downloaded for its Object masks, linked (no
-    second 3.4 GB copy) when it is there. No config files are needed: transformers' defaults for the SAM 3 tracker
-    are this checkpoint's (checked: identical masks)."""
-    d = MODELS / "sam3"
+    second 3.2 GB copy) when it is there — or the user's own folder the installer found it in. No config files are
+    needed: transformers' defaults for the SAM 3 tracker are this checkpoint's (checked: identical masks)."""
+    d = mf.part_dir("sam3")
+    if d != MODELS / "sam3":
+        return d
     w = d / SAM3_WEIGHTS
     try:
         d.mkdir(parents=True, exist_ok=True)
@@ -87,27 +87,29 @@ def sam3_dir():
     return d
 
 
+def installed(model):
+    """The model's files are there (model_files: in models/ or in the user's own folder), the checks the installer
+    makes too. OSOR runs on FLUX: it needs FLUX as well."""
+    if model == "sam3":
+        return mf.part_ok("sam3", sam3_dir())
+    return mf.has(model) and (model != "osor" or mf.has("flux"))
+
+
 def available():
     """Which models are on disk."""
-    m = MODELS
-    flux = ((m / "FLUX.1-Fill-dev" / "model_index.json").exists()
-            and any((m / "gguf" / f"flux1-fill-dev-{q}.gguf").exists() for q in FLUX_QUANTS))
-    return {
-        "sam3": (sam3_dir() / SAM3_WEIGHTS).exists(),
-        "lama": (m / "lama" / "lama_fp32.onnx").exists(),
-        "sdxl": (m / "sdxl-inpaint" / "model_index.json").exists() and (m / "sdxl-vae-fp16-fix" / "config.json").exists(),
-        "flux": flux,
-        "osor": flux and (m / OSOR_WEIGHTS).exists(),
-        "objectclear": (m / "objectclear" / "model_index.json").exists()
-        and (m / "objectclear" / "code" / "objectclear" / "pipelines" / "pipeline_objectclear.py").exists(),
-    }
+    return {m: installed(m) for m in mf.MODELS}
+
+
+def model_folders():
+    """{part: folder} of the parts used from the user's own folders (the rest are in models/)."""
+    return {p: str(mf.part_dir(p)) for p in mf.recorded() if mf.part_dir(p) != MODELS / p}
 
 
 def usable(model, dev=None):
     """Installed and sensible on this machine: FLUX (and OSOR, which runs on it) needs a GPU; SDXL and ObjectClear
     work on the processor but take minutes."""
     dev = dev or device()
-    if not available().get(model):
+    if not installed(model):
         return False
     return model not in ("flux", "osor") or dev != "cpu"
 
@@ -118,7 +120,7 @@ SHADOW_MODELS = ("osor", "objectclear")  # remove the object together with its s
 # ------------------------------------------------------------------------------------------------ LaMa
 def lama(src: Image.Image, mask: Image.Image) -> Image.Image:
     import onnxruntime as ort
-    sess = ort.InferenceSession(str(MODELS / "lama" / "lama_fp32.onnx"), providers=["CPUExecutionProvider"])
+    sess = ort.InferenceSession(str(mf.part_dir("lama") / "lama_fp32.onnx"), providers=["CPUExecutionProvider"])
     img = np.asarray(src.resize((512, 512), Image.LANCZOS)).astype(np.float32) / 255.0
     mk = (np.asarray(mask.resize((512, 512), Image.NEAREST)) > 127).astype(np.float32)
     out = sess.run(None, {"image": (img * (1 - mk[..., None])).transpose(2, 0, 1)[None], "mask": mk[None, None]})[0][0]
@@ -225,9 +227,9 @@ class SDXL:
         from diffusers import StableDiffusionXLInpaintPipeline, AutoencoderKL, DPMSolverMultistepScheduler
         self.torch = torch
         dt = torch.float32 if dev == "cpu" else torch.float16  # the fp16-fix VAE makes half precision safe
-        vae = AutoencoderKL.from_pretrained(MODELS / "sdxl-vae-fp16-fix", torch_dtype=dt)
+        vae = AutoencoderKL.from_pretrained(mf.part_dir("sdxl-vae-fp16-fix"), torch_dtype=dt)
         self.pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-            MODELS / "sdxl-inpaint", vae=vae, variant="fp16", torch_dtype=dt).to(dev)
+            mf.part_dir("sdxl-inpaint"), vae=vae, variant="fp16", torch_dtype=dt).to(dev)
         if dev == "mps":
             self.pipe.enable_attention_slicing()  # lower peak memory on unified-memory Macs
         # DPM++ 2M with Karras sigmas: in 12 steps the same fills (same seed, same picture) the model's own Euler
@@ -329,8 +331,8 @@ class FLUX:
         from diffusers import FluxFillPipeline, FluxTransformer2DModel, GGUFQuantizationConfig
         from diffusers.utils import logging as dl
         dl.set_verbosity_error()
-        self.torch, self.dev, self.repo = torch, dev, MODELS / "FLUX.1-Fill-dev"
-        gg = MODELS / "gguf"
+        self.torch, self.dev, self.repo = torch, dev, mf.part_dir("FLUX.1-Fill-dev")
+        gg = mf.part_dir("gguf")
         self.quant = next(q for q in FLUX_QUANTS if (gg / f"flux1-fill-dev-{q}.gguf").exists())
         tr = FluxTransformer2DModel.from_single_file(
             str(gg / f"flux1-fill-dev-{self.quant}.gguf"),
@@ -342,9 +344,10 @@ class FLUX:
         self.pipe.vae.enable_tiling()  # no multi-GB activation spike in the VAE
         self.pipe.set_progress_bar_config(disable=True)
         self.steps, self.turbo = FLUX_STEPS, False
-        if FLUX_LORA.exists():  # Turbo-Alpha: same quality in half the steps
+        lora = mf.part_dir("flux-turbo-alpha") / mf.TURBO_WEIGHTS  # alimama Turbo-Alpha
+        if lora.exists():  # Turbo-Alpha: same quality in half the steps
             try:
-                self.pipe.load_lora_weights(str(FLUX_LORA.parent), weight_name=FLUX_LORA.name, adapter_name="turbo")
+                self.pipe.load_lora_weights(str(lora.parent), weight_name=lora.name, adapter_name="turbo")
                 self.steps, self.turbo = FLUX_TURBO_STEPS, True
             except Exception as e:
                 log(f"FLUX: Turbo LoRA not loaded ({type(e).__name__}: {str(e)[:120]}), using {FLUX_STEPS} steps")
@@ -354,8 +357,8 @@ class FLUX:
     def embeddings(self, prompt, log=print, tokens=256):
         import hashlib
         torch = self.torch
-        d = MODELS / "flux_prompts"
-        d.mkdir(exist_ok=True)
+        d = MODELS / "flux_prompts"  # in the install's models, also when FLUX is in the user's own folder
+        d.mkdir(parents=True, exist_ok=True)
         name = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:16] + ("" if tokens == 256 else f"-{tokens}")
         f = d / (name + ".pt")
         if not f.exists():
@@ -381,7 +384,7 @@ class FLUX:
         if self.proj_osor is not None:
             return
         torch = self.torch
-        state = torch.load(MODELS / OSOR_WEIGHTS, map_location="cpu", weights_only=True)
+        state = torch.load(mf.part_dir("osor") / mf.OSOR_WEIGHTS, map_location="cpu", weights_only=True)
         pre = "transformer.base_model.model."
         lora = {"transformer." + k[len(pre):].replace(".default.", "."): v.to(torch.bfloat16)
                 for k, v in state.items() if ".lora_" in k}
@@ -517,7 +520,7 @@ class ObjectClear:
         import sys
         dev = device()
         import torch
-        code = str(MODELS / "objectclear" / "code")
+        code = str(mf.part_dir("objectclear/code"))
         if code not in sys.path:
             sys.path.insert(0, code)
         try:
@@ -528,7 +531,7 @@ class ObjectClear:
         self.torch, self.dev = torch, dev
         dt = torch.float32 if dev == "cpu" else torch.float16  # only the fp16 files are installed: upcast on the CPU
         self.pipe = ObjectClearPipeline.from_pretrained_with_custom_modules(
-            str(MODELS / "objectclear"), torch_dtype=dt, variant="fp16", apply_attention_guided_fusion=True).to(dev)
+            str(mf.part_dir("objectclear")), torch_dtype=dt, variant="fp16", apply_attention_guided_fusion=True).to(dev)
         self.pipe.set_progress_bar_config(disable=True)
         log(f"ObjectClear ready ({dev})")
 

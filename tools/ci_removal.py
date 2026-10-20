@@ -211,7 +211,7 @@ def run(d, out):
     import airemove as ar  # the installed app (its system.ROOT is d: models from d/models, log in d/work)
     import project
     from rawdng import XYZD50_TO_SRGB
-    expect(ar.engines.available().get("lama"), f"LaMa installed in {ar.engines.MODELS}")
+    expect(ar.engines.available().get("lama"), f"LaMa installed in {ar.engines.mf.part_dir('lama')}")
 
     photos, work = out / "photos", out / "work"
     photos.mkdir(parents=True, exist_ok=True)

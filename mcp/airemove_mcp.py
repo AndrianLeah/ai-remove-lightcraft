@@ -18,6 +18,7 @@ from pathlib import Path
 PKG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PKG / "airemove"))
 sys.path.insert(0, str(PKG / "installer"))
+import model_files as mf  # noqa: E402
 import system  # noqa: E402
 
 PROTOCOL = "2025-06-18"
@@ -64,12 +65,16 @@ development still works on it. Every removal stays editable in a project file ne
 Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended (NVIDIA, AMD RX 7000/9000, Apple M).""",
     "install": """1. check_system: shows the GPU, the PyTorch build that will be used, the recommended models, sizes and
    licences, free disk space, and whether LightCraft is installed / running.
-2. Tell the user what will be downloaded (sizes) and the model licences, and get their OK. SAM 3 is reused from
-   LightCraft when LightCraft already downloaded it; otherwise it and FLUX need a free Hugging Face account, the
-   licence accepted on the model page, and a Read token (huggingface.co/settings/tokens) — never invent or reuse a
-   token, ask the user to paste theirs.
-3. install with accept_licenses=true (and the models the user chose). It runs in the background (10-60 min, mostly
-   downloads; on Windows a console window shows it). Poll install_status every 30-60 s and report progress.
+2. Tell the user what each model is for, what will be downloaded (sizes) and the model licences, and get their OK.
+   SAM 3 is reused from LightCraft when LightCraft already downloaded it; otherwise it and FLUX need a free Hugging
+   Face account, the licence accepted on the model page, and a Read token (huggingface.co/settings/tokens) — never
+   invent or reuse a token, ask the user to paste theirs.
+   Ask whether they already have some of the models on disk (another AI Remove install, a Hugging Face cache,
+   ComfyUI's models): check_system(model_dirs={model: folder}) says what it finds there; those are then used from
+   that folder, nothing downloaded or copied (a part not found there is downloaded).
+3. install with accept_licenses=true, the models the user chose and model_dirs for the folders that check_system
+   accepted. It runs in the background (10-60 min, mostly downloads; on Windows a console window shows it). Poll
+   install_status every 30-60 s and report progress.
 4. When done: LightCraft must be restarted once (it reads the control-channel setting at start). If install_status
    says pending_lightcraft, ask the user to close LightCraft, then call configure_lightcraft.
 5. Usage: in LightCraft select a raw photo, press Ctrl+Shift+X (Cmd+Shift+X on Mac), or open "AI Remove" from the
@@ -103,7 +108,24 @@ LightCraft settings it added (external editor, shortcut, control channel). Photo
 
 
 # ------------------------------------------------------------------------------------------------ actions
-def check_system(_):
+def check_folders(dirs):
+    """{model: what the folder holds of it}: the parts found (used from there) and the ones still to download."""
+    rep = {}
+    for m, folder in (dirs or {}).items():
+        if m not in mf.MODELS:
+            rep[m] = {"ok": False, "error": f"unknown model: one of {', '.join(mf.MODELS)}"}
+            continue
+        f = Path(str(folder)).expanduser()
+        found = mf.find_model(m, f) if f.is_dir() else {}
+        rep[m] = {"ok": bool(found), "folder": str(f), "found": {p: str(v) for p, v in found.items()},
+                  "to_download_gb": {p: mf.PARTS[p].gb for p in mf.MODELS[m].parts if p not in found}}
+        if not found:
+            rep[m]["error"] = (f"{f} is not a folder" if not f.is_dir() else
+                               f"none of {mf.MODELS[m].name} there (looked for {mf.looks_for(m)}, a few levels deep)")
+    return rep
+
+
+def check_system(a):
     ins = installer()
     d = install_dir()
     gpus = ins.detect_gpus()
@@ -113,17 +135,19 @@ def check_system(_):
         supported = True
     except ins.Stop as e:
         flavour, gpu, rec, supported = None, None, [], str(e)
-    lc_sam = (system.lightcraft_sam3_dir() / "model.safetensors").exists()
+    lc_sam = (system.lightcraft_sam3_dir() / mf.SAM3_WEIGHTS).exists()
     cfg = read_json(d / "airemove.json") or {}
     port = int(cfg.get("port") or system.control_port())
+    paths = cfg.get("model_paths") or {}
     rep = {
         "os": system.system(), "supported": supported,
         "gpus": [{"vendor": g[0], "name": g[1], "vram_gb": g[2]} for g in gpus],
         "pytorch_build": flavour and {"id": flavour, "what": ins.TORCH_FLAVOURS[flavour][0],
                                       "download_gb": ins.TORCH_FLAVOURS[flavour][1]},
-        "models": {m: {"gb": 0 if (m == "sam3" and lc_sam) else v[0], "what": v[1], "licence": v[2],
-                       "needs_hf_token": bool(v[3]) and not (m == "sam3" and lc_sam),
-                       "recommended": m in rec} for m, v in ins.MODELS.items()},
+        "models": {m: {"name": v.name, "gb": 0 if (m == "sam3" and lc_sam) else v.gb, "what": v.what,
+                       "licence": v.licence, "needs_hf_token": bool(v.gated) and not (m == "sam3" and lc_sam),
+                       "recommended": m in rec, "installed": mf.has(m, d / "models", paths, optional=True)}
+                   for m, v in mf.MODELS.items()},
         "sam3_from_lightcraft": lc_sam,
         "install_dir": str(d), "free_gb": round(ins.gb_free(d), 1),
         "installed": venv_python(d).exists(), "install_config": cfg or None,
@@ -132,6 +156,8 @@ def check_system(_):
                        "reachable": system.lightcraft_reachable(port),
                        "settings_dir": str(system.lightcraft_config_dir())},
     }
+    if a.get("model_dirs"):
+        rep["model_dirs"] = check_folders(a["model_dirs"])
     if rep["installed"]:
         r = subprocess.run([str(venv_python(d)), str(d / "airemove" / "airemove.py"), "--check"], capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=180)
@@ -183,18 +209,28 @@ def _token_file(d, token):
     return ["--hf-token-file", str(f)]
 
 
+def install_args(a, d):
+    """The installer's arguments for the install tool's arguments a."""
+    models = a.get("models") or "recommended"
+    args = ["--yes", "--dir", str(d), "--models", ",".join(models) if isinstance(models, list) else str(models)]
+    for m, folder in (a.get("model_dirs") or {}).items():
+        args += ["--model-dir", f"{m}={folder}"]
+    if a.get("torch"):
+        args += ["--torch", a["torch"]]
+    if a.get("configure_lightcraft") is False:
+        args.append("--no-lightcraft")
+    return args
+
+
 def install(a):
     if not a.get("accept_licenses"):
         return {"started": False, "error": "accept_licenses must be true: first show the user the sizes and the "
                                            "model licences (check_system) and get their OK"}
     d = Path(a.get("install_dir") or install_dir()).expanduser()
-    models = a.get("models") or "recommended"
-    args = ["--yes", "--dir", str(d), "--models", ",".join(models) if isinstance(models, list) else str(models)]
-    if a.get("torch"):
-        args += ["--torch", a["torch"]]
-    if a.get("configure_lightcraft") is False:
-        args.append("--no-lightcraft")
-    args += _token_file(d, a.get("hf_token"))
+    bad = {m: r.get("error") for m, r in check_folders(a.get("model_dirs")).items() if not r["ok"]}
+    if bad:  # the installer would stop on them: say it now
+        return {"started": False, "error": "model_dirs: " + "; ".join(f"{m}: {e}" for m, e in bad.items())}
+    args = install_args(a, d) + _token_file(d, a.get("hf_token"))
     _launch_installer(args, d)
     return {"started": True, "install_dir": str(d), "log": str(d / "install.log"),
             "next": "call install_status every 30-60 s; downloads take 10-60 min depending on the models"}
@@ -319,12 +355,19 @@ def guide(a):
 
 
 OBJ = {"type": "object"}
+MODEL_DIRS = {"type": "object", "additionalProperties": {"type": "string"},
+              "propertyNames": {"enum": list(mf.MODELS)},
+              "description": "models the user already has on disk: {model: folder} (another AI Remove install, a "
+                             "Hugging Face cache, ComfyUI's models...). Used from there, not downloaded again; parts "
+                             "not found there are downloaded"}
 TOOLS = [
     ("ai_remove_guide", "What AI Remove is and how to install, use, troubleshoot or uninstall it. Read this first.",
      {"type": "object", "properties": {"topic": {"type": "string", "enum": ["all"] + list(GUIDE)}}}, guide, True),
     ("check_system", "Inspect this computer for AI Remove: OS, graphics card, which PyTorch build and models fit, "
-                     "download sizes and licences, free disk, LightCraft installed/running/reachable, and the state "
-                     "of an existing AI Remove install (with a self-test). Read-only.", OBJ, check_system, True),
+                     "what each model is for, its download size and licence, free disk, LightCraft "
+                     "installed/running/reachable, and the state of an existing AI Remove install (with a self-test). "
+                     "With model_dirs, also what those folders hold of the models. Read-only.",
+     {"type": "object", "properties": {"model_dirs": MODEL_DIRS}}, check_system, True),
     ("install", "Install (or update/repair) AI Remove in the background: Python environment, PyTorch for the GPU, the "
                 "chosen models, launcher with icon, menu entry, LightCraft integration. Only after the user agreed "
                 "to the download sizes and model licences shown by check_system. Then poll install_status.",
@@ -333,6 +376,7 @@ TOOLS = [
          "models": {"type": "array", "items": {"type": "string", "enum": ["lama", "sam3", "sdxl", "flux", "osor",
                                                                              "objectclear"]},
                     "description": "default: the recommended ones for this computer"},
+         "model_dirs": MODEL_DIRS,
          "hf_token": {"type": "string", "description": "the user's own Hugging Face Read token; only needed for "
                                                        "sam3 (when LightCraft has not got it) and flux"},
          "install_dir": {"type": "string", "description": "default ~/AIRemove"},

@@ -3,18 +3,27 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
 
   ci_smoke.py check DIR        airemove-cli --check prints JSON: PyTorch of the build asked for, LaMa installed and
                                usable, LightCraft not connected; uv in DIR/bin, the menu entry / app made
+  ci_smoke.py folder DIR       a model the user already has in a folder of their own (--model-dir): DIR's LaMa moved
+                               into a folder laid out like a Hugging Face cache, next to DIR; the installer run again
+                               with --model-dir lama=<an empty folder> must stop, changing nothing, and with
+                               --model-dir lama=<that cache> must record it (airemove.json "model_paths") and download
+                               nothing; --check finds LaMa there. The steps after this one use LaMa from there
   ci_smoke.py mcp DIR          the MCP server over stdio through its launcher (mcp/run_mcp.cmd|sh), AIREMOVE_HOME=DIR:
-                               initialize, tools/list, check_system (which must see whether DIR is installed)
+                               initialize, tools/list, check_system (which must see whether DIR is installed),
+                               check_system with model_dirs; the install tool's --model-dir arguments
   ci_smoke.py remove DIR       one removal end to end with the install's Python and code, LightCraft left out:
                                tools/ci_removal.py (a synthetic raw DNG, LaMa, the blend, the DNG and the project)
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
-                               app, its menu entry and, on Windows, its Settings > Apps entry are gone
+                               app, its menu entry and, on Windows, its Settings > Apps entry are gone; the user's own
+                               model folders are still there
 Exit status 1 at the first check that fails. Standard library only.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -66,13 +75,17 @@ def config(d):
         raise Failed(f"no readable {d / 'airemove.json'}")
 
 
-def check(d):
-    cfg = config(d)
+def app_check(d):
     cli = d / "venv" / ("Scripts/airemove-cli.exe" if WIN else "bin/airemove-cli")
     expect(cli.exists(), f"{cli} exists")
     r = run([cli, "--check"])
     expect(r.returncode == 0, f"--check exit status 0 (it was {r.returncode})")
-    rep = report(r.stdout)
+    return report(r.stdout)
+
+
+def check(d):
+    cfg = config(d)
+    rep = app_check(d)
     expect(rep.get("version") == system.VERSION and rep.get("os") == OS, f"version {system.VERSION} on {OS}")
     expect("torch" in rep, f"PyTorch imports: {rep.get('torch') or rep.get('torch_error')}")
     if cfg.get("torch") == "cpu":  # PyTorch's own index, not PyPI's build (CUDA on Linux)
@@ -87,14 +100,58 @@ def check(d):
     expect(cfg.get("shortcut") and Path(cfg["shortcut"]).exists(), f"menu entry / app: {cfg.get('shortcut')}")
 
 
+def installer(d, args):
+    """The installer run again on DIR the way a user starts it (bootstrap), without questions."""
+    cmd = (["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ROOT / "installer" / "bootstrap.ps1"]
+           if WIN else ["sh", ROOT / "installer" / "bootstrap.sh"])
+    return run(cmd + ["--yes", "--dir", d, "--no-lightcraft", "--torch", config(d).get("torch") or "cpu"] + args)
+
+
+def folder(d):
+    lama = d / "models" / "lama" / "lama_fp32.onnx"
+    expect(lama.is_file(), f"LaMa installed in {lama.parent}")
+    cache = d.parent / "ci-hf-cache"  # what a user has: ~/.cache/huggingface, with LaMa in it
+    snap = cache / "hub" / "models--Carve--LaMa-ONNX" / "snapshots" / "0123456789abcdef"
+    snap.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(lama), str(snap / lama.name))
+    shutil.rmtree(lama.parent)
+    empty = d.parent / "ci-empty-folder"
+    empty.mkdir(exist_ok=True)
+    before = (d / "airemove.json").read_bytes()
+
+    r = installer(d, ["--models", "lama", "--model-dir", f"lama={empty}"])
+    expect(r.returncode != 0, f"--model-dir lama=<an empty folder>: the installer stops (exit status {r.returncode})")
+    expect("nothing of it" in r.stdout and "lama/lama_fp32.onnx" in r.stdout,
+           "and says what it looked for (lama/lama_fp32.onnx)")
+    expect((d / "airemove.json").read_bytes() == before and not (d / "models" / "lama").exists(),
+           "nothing changed: airemove.json as it was, no LaMa downloaded")
+
+    r = installer(d, ["--models", "lama", "--model-dir", f"lama={cache}"])
+    expect(r.returncode == 0, f"--model-dir lama=<a Hugging Face cache>: exit status 0 (it was {r.returncode})")
+    expect(f"found: lama in {snap}" in r.stdout, f"the installer found LaMa in {snap}")
+    expect("MODEL_OK lama" in r.stdout and "downloading" not in r.stdout, "LaMa ok, nothing downloaded")
+    expect(not (d / "models" / "lama").exists(), "no LaMa in the install's own models folder")
+    paths = config(d).get("model_paths") or {}
+    expect(Path(paths.get("lama", "")) == snap, f"airemove.json model_paths: {paths}")
+    rep = app_check(d)
+    expect((rep.get("models") or {}).get("lama") is True and "lama" in (rep.get("usable_models") or []),
+           "--check: LaMa installed and usable")
+    expect(Path((rep.get("model_folders") or {}).get("lama", "")) == snap, f"--check: LaMa from {snap}")
+
+
 def mcp(d):
     installed = (d / "venv").exists()
     server = ROOT / "mcp" / ("run_mcp.cmd" if WIN else "run_mcp.sh")
+    mine = Path(tempfile.mkdtemp(prefix="ci-models-"))  # a folder holding LaMa's file (an empty one: enough to find)
+    (mine / "lama_fp32.onnx").write_bytes(b"")
+    dirs = {"lama": str(mine), "sdxl": str(mine)}
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
              "params": {"protocolVersion": PROTOCOL, "capabilities": {}, "clientInfo": {"name": "ci", "version": "1"}}},
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "check_system", "arguments": {}}}]
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "check_system", "arguments": {}}},
+            {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+             "params": {"name": "check_system", "arguments": {"model_dirs": dirs}}}]
     r = run(["cmd", "/c", server] if WIN else ["sh", server], show=False,
             input="".join(json.dumps(m) + "\n" for m in msgs), env=dict(os.environ, AIREMOVE_HOME=str(d)))
     expect(r.returncode == 0, f"server exit status 0 at the end of its input (it was {r.returncode})")
@@ -105,8 +162,8 @@ def mcp(d):
         except ValueError:
             raise Failed(f"stdout carries something that is not the protocol: {line[:200]!r}")
         replies[msg.get("id")] = msg
-    expect(sorted(replies, key=str) == [1, 2, 3], "one reply per request, none for the notification")
-    for i in (1, 2, 3):
+    expect(sorted(replies, key=str) == [1, 2, 3, 4], "one reply per request, none for the notification")
+    for i in (1, 2, 3, 4):
         expect("result" in replies[i], f"request {i}: no error ({replies[i].get('error')})")
     init = replies[1]["result"]
     expect(init.get("protocolVersion") == PROTOCOL and (init.get("serverInfo") or {}).get("name") == "ai-remove",
@@ -122,10 +179,25 @@ def mcp(d):
     print(f"  info PyTorch build {(rep.get('pytorch_build') or {}).get('id')}, GPUs {rep.get('gpus')}")
     expect(rep.get("installed") is installed, f"check_system: installed {installed}")
     expect((rep.get("lightcraft") or {}).get("reachable") is False, "check_system: LightCraft not reachable")
+    m = rep.get("models") or {}
+    expect(sorted(m) == ["flux", "lama", "objectclear", "osor", "sam3", "sdxl"]
+           and all(v.get("what") and v.get("licence") and v.get("gb") is not None for v in m.values()),
+           "check_system: every model with what it is for, its size and licence")
+    expect((m.get("lama") or {}).get("installed") is installed, f"check_system: LaMa installed {installed}")
     if installed:
         app = rep.get("app_check") or {}
         expect((app.get("models") or {}).get("lama") is True, "check_system app_check: models.lama true")
         expect((app.get("lightcraft") or {}).get("connected") is False, "check_system app_check: LightCraft not connected")
+    res = json.loads((replies[4]["result"].get("content") or [{}])[0].get("text", "{}")).get("model_dirs") or {}
+    expect((res.get("lama") or {}).get("ok") is True and Path(res["lama"]["found"]["lama"]) == mine,
+           f"check_system model_dirs: LaMa found in {mine}")
+    expect((res.get("sdxl") or {}).get("ok") is False and "sdxl-inpaint/model_index.json" in res["sdxl"].get("error", ""),
+           f"check_system model_dirs: no SDXL there ({(res.get('sdxl') or {}).get('error')})")
+    sys.path.insert(0, str(ROOT / "mcp"))
+    import airemove_mcp
+    args = airemove_mcp.install_args({"models": ["lama"], "model_dirs": {"lama": str(mine)}}, d)
+    expect(args[args.index("--model-dir") + 1] == f"lama={mine}", "install tool: --model-dir lama=<folder>")
+    shutil.rmtree(mine, ignore_errors=True)
 
 
 def remove(d):
@@ -137,12 +209,14 @@ def remove(d):
 
 def uninstall(d):
     shortcut = config(d).get("shortcut")
+    mine = sorted(set((config(d).get("model_paths") or {}).values()))
     script = d / {"windows": "Uninstall AI Remove.cmd", "macos": "Uninstall AI Remove.command"}.get(OS, "uninstall.sh")
     expect(script.exists(), f"uninstaller {script.name} exists")
     r = run((["cmd", "/c"] if WIN else ["sh"]) + [script, "--yes"])
     expect(r.returncode == 0, f"uninstaller exit status 0 (it was {r.returncode})")
     expect(not (d / "venv").exists() and not (d / "airemove.json").exists(), "venv and airemove.json removed")
     expect(not shortcut or not Path(shortcut).exists(), f"menu entry / app removed: {shortcut}")
+    expect(all(Path(f).is_dir() and any(Path(f).iterdir()) for f in mine), f"the user's model folders are left: {mine}")
     if WIN:
         q = subprocess.run(["reg", "query", WIN_UNINSTALL_KEY], capture_output=True)
         expect(q.returncode != 0, "Settings > Apps entry removed")
@@ -158,13 +232,13 @@ def uninstall(d):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ("check", "mcp", "remove", "uninstall"):
+    if len(sys.argv) != 3 or sys.argv[1] not in ("check", "folder", "mcp", "remove", "uninstall"):
         print(__doc__)
         return 2
     d = Path(sys.argv[2]).expanduser().resolve()
     print(f"{sys.argv[1]} {d}")
     try:
-        {"check": check, "mcp": mcp, "remove": remove, "uninstall": uninstall}[sys.argv[1]](d)
+        {"check": check, "folder": folder, "mcp": mcp, "remove": remove, "uninstall": uninstall}[sys.argv[1]](d)
     except Failed as e:
         print("  FAIL " + str(e), flush=True)
         return 1
