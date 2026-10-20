@@ -1207,9 +1207,9 @@ class Session:
     @staticmethod
     def texture(r, model, plan):
         """Whether the blend adds texture copied from around the hole (blend.texture_field): only to a fill made in
-        one pass, or in squares enlarged more than TILE_FROM times, which lost its own. Squares nearer the engine's
-        size have theirs, and the copied patches put streaks on a plain wall (from the column edges next to it)."""
-        return plan is None or plan[1].T / plan[0] > TILE_FROM
+        one pass, as before. Along a long removal the copied patches carry the edges next to it (columns beside a
+        plain wall) into the fill as streaks — measured at every square size, 1.25x to 3.5x."""
+        return plan is None
 
     def refine_model(self):
         """The engine "Full detail" redraws with: FLUX (the most detail), else SDXL; None without a GPU model."""
