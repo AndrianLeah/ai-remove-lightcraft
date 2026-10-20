@@ -83,7 +83,7 @@ PANEL = CARD
 RED = (235, 64, 52)
 SHADOW_RGB = (56, 198, 244)  # the selection's shadow part ("Include the shadow")
 WHITE = (240, 240, 240)
-MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "objectclear"]  # the tests' remove:n,i / model:i use these indices
+MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "objectclear", "qwen"]  # tests: remove:n,i / model:i use these indices
 
 
 def outline(u, width=2):
@@ -632,7 +632,8 @@ class App:
             "flux": _("Most realistic, large areas · ~{time} each", time=self.fmt_s(A.expected("flux_variant"))),
             "lama": _("Quick fill, plain backgrounds · ~{time}", time=self.fmt_s(A.expected("lama"))),
             "osor": _("Object + shadow, softer · ~{time} each", time=self.fmt_s(A.expected("osor_variant"))),
-            "objectclear": _("Object + shadow · ~{time} each", time=self.fmt_s(A.expected("objectclear_variant")))}
+            "objectclear": _("Object + shadow · ~{time} each", time=self.fmt_s(A.expected("objectclear_variant"))),
+            "qwen": _("By name, complex backgrounds · ~{time} each", time=self.fmt_s(A.expected("qwen_variant")))}
         self.model_box.configure(values=[self.model_labels[k] for k in keys])
         self.model_var.set(self.model_labels[cur])
         self.show_model_info()
@@ -670,7 +671,14 @@ class App:
             "objectclear": _("ObjectClear — removes the object together with its shadow and reflection, ~{time} per "
                              "variant, each one different. It works at 512 px: on large areas the detail is softer. "
                              "Non-commercial licence (S-Lab).",
-                             time=self.fmt_s(A.expected("objectclear_variant")))}
+                             time=self.fmt_s(A.expected("objectclear_variant"))),
+            "qwen": _("Qwen-Image — it first recognises what you selected (the progress bar says what), then removes "
+                      "it and redraws the scene behind it: steps, columns, railings carry on. For large areas on "
+                      "complex backgrounds, where FLUX invents a bush or a blob. ~{time} per variant, ~1 min more for "
+                      "the first one of a removal. Select the whole object (a bag, a shadow): what is left outside "
+                      "stays. If it names the object wrongly, write its name in English (e.g. \"the lamp post\"). It "
+                      "takes almost the whole GPU. Non-commercial licence (Qwen Research).",
+                      time=self.fmt_s(A.expected("qwen_variant")))}
         if hasattr(self, "model_info"):
             self.model_info.configure(text=info[self.model_key()])
 
@@ -813,8 +821,10 @@ class App:
             else:
                 base_done = done
 
-                def prog(step, tot, base_done=base_done, secs=secs, tag=tag):
-                    self.post("job_exact", (_("{task} · step {i}/{total}", task=tag, i=step, total=tot),
+                def prog(step, tot, base_done=base_done, secs=secs, tag=tag, model=model):
+                    what = getattr(s.qwen, "what", None) if model == "qwen" else None  # what Qwen-Image recognised
+                    task = _("{task} · removing: {what}", task=tag, what=what) if what else tag
+                    self.post("job_exact", (_("{task} · step {i}/{total}", task=task, i=step, total=tot),
                                             base_done + secs * step / max(1, tot)))
                 s.run_model(r, model, prompt, progress=prog)
                 self.post("cand", r)
@@ -1702,8 +1712,8 @@ class App:
     def run_test_actions(self, actions):
         """Tests: drive the window through the real handlers. Actions (coordinates normalized to the photo):
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
-        snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear] · more:n · pick:i · detail ·
-        dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit"""
+        snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear/5 qwen] · more:n · pick:i ·
+        detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit"""
         if not actions:
             return
         kind, __, arg = actions[0].partition(":")

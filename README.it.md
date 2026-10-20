@@ -113,8 +113,10 @@ Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/hug
 | **SAM 3** | La selezione con un clic (senza, si usa il pennello). | 3,2 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
 | **OSOR** (facoltativo, su FLUX) | Toglie l'oggetto insieme alla sua ombra e al riflesso, in un solo passo (3–8 s). È lui che trova l'ombra per "Includi l'ombra". | 0,6 GB | FLUX.1 [dev] Non-Commercial |
 | **ObjectClear** (facoltativo) | Toglie l'oggetto insieme alla sua ombra e al riflesso, circa 5 s a variante, a 512 px. | 7,3 GB | S-Lab License 1.0 (non commerciale) |
+| **Qwen-Image 2.1 Turbo** (facoltativo) | Aree grandi su sfondi complessi (una persona davanti a una scalinata, un palo davanti alle colonne): riconosce cosa hai selezionato e lo toglie chiamandolo per nome. Circa 45 s a variante a 1024 px. Serve una GPU NVIDIA o AMD da 16 GB. | 14,4 GB | Qwen Research License (non commerciale); il suo encoder del testo Qwen3-VL: Apache-2.0 |
 
-Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plaster wall" o "dark doorway".
+Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plaster wall" o "dark doorway". Con
+Qwen-Image dice cosa togliere, se lo ha riconosciuto male ("the lamp post").
 
 ## Uso
 

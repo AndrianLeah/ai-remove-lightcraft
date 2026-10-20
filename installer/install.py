@@ -13,7 +13,7 @@ install folder. Standard library only. What it does, in order (each step can be 
      shortcut Ctrl+Shift+X (Cmd+Shift+X on a Mac) for Photo > Edit In > Open Original in Other Editor
   7. checks the result (airemove --check)
 
-  install.py [--dir DIR] [--models lama,sam3,sdxl,flux,osor,objectclear | recommended | none] [--yes]
+  install.py [--dir DIR] [--models lama,sam3,sdxl,flux,osor,objectclear,qwen | recommended | none] [--yes]
              [--model-dir MODEL=FOLDER ...] [--hf-token TOKEN] [--torch auto|cuda|rocm|rocm-win|xpu|mps|cpu]
              [--models-from DIR] [--port 7980] [--no-lightcraft]
   install.py --configure-lightcraft [--dir DIR]      only step 6 (e.g. after closing LightCraft)
@@ -58,7 +58,11 @@ TORCH_FLAVOURS = {
     "cuda": ("NVIDIA (CUDA)", 4.5), "rocm": ("AMD (ROCm, Linux)", 9.0), "rocm-win": (N_("AMD (ROCm for Windows)"), 6.0),
     "xpu": ("Intel Arc (XPU)", 3.5), "mps": ("Apple Silicon (Metal)", 1.0), "cpu": (N_("processor only"), 1.0)}
 MODELS = mf.MODELS  # what each model is for, its download and licence, its files (airemove/model_files.py)
-GPU_ONLY = ("flux", "osor", "objectclear")  # not offered without a GPU (FLUX and OSOR do not run, ObjectClear crawls)
+GPU_ONLY = ("flux", "osor", "objectclear", "qwen")  # not offered without a GPU (ObjectClear crawls, the rest fail)
+# Qwen-Image: its 8B text encoder (~10 GB in FP8) and then its transformer with the picture's attention cache (~10 GB)
+# take a 16 GB card, next to what the desktop and LightCraft keep on it (2-4 GB). Measured on an RX 7800 XT 16 GB; the
+# runtimes it needs (CUDA, ROCm) are NVIDIA's and AMD's.
+QWEN_VRAM, QWEN_TORCH = 15.5, ("cuda", "rocm", "rocm-win")
 SHORTCUT = "Cmd+Shift+X"  # LightCraft's notation: Cmd = Ctrl on Windows and Linux
 EDIT_COMMAND = "photo.openOriginalInExternal"
 APP_NAME = "AI Remove"
@@ -235,6 +239,11 @@ def choose_torch(gpus):
     if arc:
         return "xpu", arc[0]
     return "cpu", None
+
+
+def qwen_fits(flavour, gpu):
+    """Qwen-Image runs on this GPU: NVIDIA or AMD, 16 GB or more (QWEN_VRAM)."""
+    return flavour in QWEN_TORCH and ((gpu[2] if gpu else None) or 0) >= QWEN_VRAM
 
 
 def recommended_models(flavour, gpu):
@@ -454,6 +463,8 @@ def choose_models(flavour, gpu, installed, given, lc_sam):
     for m, mod in MODELS.items():
         if m in GPU_ONLY and flavour == "cpu" and m not in given and m not in installed:
             continue
+        if m == "qwen" and not qwen_fits(flavour, gpu) and m not in given and m not in installed:
+            continue
         if m == "osor" and "flux" not in wanted + installed:
             continue  # it runs on FLUX
         lc = m == "sam3" and lc_sam
@@ -480,6 +491,10 @@ def choose_models(flavour, gpu, installed, given, lc_sam):
         out.write("")
         para(_("FLUX, OSOR and ObjectClear need a graphics card: not offered on this computer (--models installs "
                "them anyway)."))
+    elif not qwen_fits(flavour, gpu) and "qwen" not in wanted + installed:
+        out.write("")
+        para(_("Qwen-Image needs an NVIDIA or AMD graphics card with 16 GB or more: not offered on this computer "
+               "(--models installs it anyway)."))
     return wanted
 
 
@@ -869,7 +884,7 @@ def uninstall(d, keep_models, yes):
 def parse():
     ap = argparse.ArgumentParser(description="Install AI Remove for LightCraft")
     ap.add_argument("--dir", help="install folder (default: ~/AIRemove)")
-    ap.add_argument("--models", default=None, help="lama,sam3,sdxl,flux,osor,objectclear | recommended | none")
+    ap.add_argument("--models", default=None, help="lama,sam3,sdxl,flux,osor,objectclear,qwen | recommended | none")
     ap.add_argument("--hf-token", default=None, help="Hugging Face token (only for SAM 3 / FLUX, models with a licence to accept)")
     ap.add_argument("--hf-token-file", default=None, help="file holding the token (read, then deleted: the MCP server uses it)")
     ap.add_argument("--torch", default="auto", choices=["auto"] + list(TORCH_FLAVOURS))

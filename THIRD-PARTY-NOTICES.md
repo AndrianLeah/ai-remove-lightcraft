@@ -19,6 +19,14 @@ user's choice, after showing each licence. Using a model means accepting its lic
 | OSOR (FLUX Fill, phase II) — optional | [QinmingZhou/OSOR](https://huggingface.co/QinmingZhou/OSOR), from [Zhouqm-Git/osor](https://github.com/Zhouqm-Git/osor) (ECCV 2026) | as FLUX.1 [dev] (non-commercial); OSOR's code is MIT, but AI Remove uses none of it: it loads the weights itself |
 | ObjectClear — optional | [jixin0101/ObjectClear](https://huggingface.co/jixin0101/ObjectClear), from [zjx0101/ObjectClear](https://github.com/zjx0101/ObjectClear) (CVPR 2026) | [S-Lab License 1.0](https://github.com/zjx0101/ObjectClear/blob/main/LICENSE): non-commercial use only |
 
+| Qwen-Image 2.1 Turbo — optional | [Qwen/Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) (configs, processor, VAE), from [QwenLM/Qwen-Image-2.1](https://github.com/QwenLM/Qwen-Image-2.1) | [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/LICENSE): research and evaluation only; commercial use needs a separate licence from Qwen |
+| Qwen-Image 2.1 Turbo GGUF Q4_K_M — optional | [unsloth/Qwen-Image-2.1-Turbo-GGUF](https://huggingface.co/unsloth/Qwen-Image-2.1-Turbo-GGUF) | as Qwen-Image 2.1 |
+| Qwen3-VL-8B-Instruct FP8 — optional, Qwen-Image's text encoder | [Qwen/Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) | Apache-2.0 |
+
+Qwen-Image 2.1's text encoder is Qwen3-VL-8B-Instruct unchanged (checked tensor by tensor against Qwen's repository),
+so AI Remove downloads Qwen's own FP8 release of it (10 GB) instead of the 17.5 GB bfloat16 copy in Qwen-Image's
+repository.
+
 ObjectClear's pipeline code is under the same S-Lab licence, so it is not part of AI Remove either: the installer
 downloads it from GitHub (a fixed commit) into `models/objectclear/code` together with its weights, only when the user
 chooses ObjectClear.
