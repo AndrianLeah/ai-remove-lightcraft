@@ -5,7 +5,8 @@
 # has in a folder of their own (--model-dir: LaMa moved into a Hugging Face cache layout, used from there); one removal
 # end to end with the installed app and that LaMa (tools/ci_removal.py: a synthetic raw DNG made on the runner, LaMa on
 # the processor, the blend, the DNG and the .airemove project, checked pixel by pixel), a long removal in tiles
-# (tools/ci_tiles.py), the MCP server over stdio, and the uninstaller (tools/ci_smoke.py).
+# (tools/ci_tiles.py), the MCP server over stdio, and the uninstaller (tools/ci_smoke.py). Before the install: a program
+# reading install-status.json cannot stop the installer's writes of it (tools/ci_status.py).
 # No secrets, no photos.
 name: CI
 
@@ -74,6 +75,8 @@ jobs:
           key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('installer/install.py') }}
           restore-keys: uv-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: install-status.json read while the installer writes it (tools/ci_status.py)
+        run: python tools/ci_status.py
       - name: MCP server, before the install
         run: python tools/ci_smoke.py mcp "$MCP_BEFORE_DIR"
       - name: Install (installer/bootstrap.sh)
