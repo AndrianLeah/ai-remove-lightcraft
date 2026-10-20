@@ -406,11 +406,11 @@ def extract(lc, pid, info, targets, work):
     return mask_e, lum_e, dng
 
 
-def plan_region(raw, mask_e, lum_e, t=None, margin=1.35, square=True):
+def plan_region(raw, mask_e, lum_e, t=None, margin=1.35, square=True, box=None):
     """The sensor area around mask_e (side = margin x the object's extent) and the object's hole in it: a square, at
     most the photo's short side. square=False: an object longer than that (a pole as tall as a portrait photo, from
     its lamp to its base) gets an area as long as it needs along that axis — in a square its ends were left out, and
-    never removed. Such an area is filled in squares (Session.tile_plan)."""
+    never removed. Such an area is filled in squares (Session.tile_plan). box: the hole in that area instead."""
     score = 1.0
     if t is None:
         t, score = match_orientation(raw.preview_lum(), lum_e)
@@ -434,6 +434,8 @@ def plan_region(raw, mask_e, lum_e, t=None, margin=1.35, square=True):
     cy, cx = (by0 + by1) // 2, (bx0 + bx1) // 2
     ry0 = int(np.clip(cy - H // 2, 0, h - H)); rx0 = int(np.clip(cx - W // 2, 0, w - W))
     ry0 -= ry0 % 2; rx0 -= rx0 % 2
+    if box is not None:
+        ry0, rx0, H, W = box[0] - y0, box[2] - x0, box[1] - box[0], box[3] - box[2]
     reg_mask = grow(sensor[ry0:ry0 + H, rx0:rx0 + W], g)
     box = (y0 + ry0, y0 + ry0 + H, x0 + rx0, x0 + rx0 + W)
     log(f"area {W}x{H} px | mask {int(reg_mask.sum())} px")
@@ -829,10 +831,11 @@ class Session:
     # -------------------------------------------------------------- removals
     def working_cfa(self, upto=None):
         """The sensor data with the chosen fills of the removals before `upto` (all if None) applied."""
-        rs = [r for r in self.removals if not r.deleted and r.chosen is not None]
-        if upto is not None:
-            rs = rs[:next((i for i, r in enumerate(rs) if r is upto), len(rs))]
-        key = tuple((r.id, r.chosen_label()) for r in rs)
+        rs = self.removals
+        if upto is not None and upto in rs:
+            rs = rs[:rs.index(upto)]
+        rs = [r for r in rs if not r.deleted and r.chosen is not None]
+        key = tuple((r.id, r.chosen_label(), tuple(r.box)) for r in rs)
         if key != self._work_key:
             cfa = self.raw.cfa.copy()
             for r in rs:
@@ -841,6 +844,51 @@ class Session:
                                                          rng_seed=r.id)
             self._work_cfa, self._work_key = cfa, key
         return self._work_cfa
+
+    @staticmethod
+    def leaks(r):
+        """Whether part of r's selection lies outside its area (fit_area)."""
+        Y0, Y1, X0, X1 = r.base_rect
+        inside = np.zeros(r.mask_e.shape, bool)
+        inside[Y0:Y1, X0:X1] = True
+        return (r.mask_e & ~inside).sum() >= 20
+
+    def fit_area(self, r):
+        """A removal whose area leaves part of its selection out — made before areas could be longer than the photo's
+        short side: those parts were never removed (a pole's base). Its area grows to hold all of the selection; its
+        variants stay as they were (each keeps the old hole, in the larger area), new ones fill all of it. Returns
+        whether it grew."""
+        if not self.leaks(r):
+            return False
+        __, box, __ = plan_region(self.raw, r.mask_e, self.lum_e, self.t, square=False)
+        oy0, oy1, ox0, ox1 = r.box
+        box = (min(box[0], oy0), max(box[1], oy1), min(box[2], ox0), max(box[3], ox1))
+        if box == tuple(r.box):
+            return False
+        __, __, reg = plan_region(self.raw, r.mask_e, self.lum_e, self.t, box=box)
+        old_reg, old_cands = r.reg_mask, list(r.candidates)
+        dy, dx = oy0 - box[0], ox0 - box[2]
+        h, w = old_reg.shape
+
+        def placed(a):  # an old area's bool array in the new area
+            out = np.zeros(reg.shape, bool)
+            out[dy:dy + h, dx:dx + w] = a
+            return out
+        old_holes = {label: placed(r.holes.get(label, old_reg)) for label, __ in old_cands}
+        r.box, r.reg_mask = box, reg | placed(old_reg)
+        self._init_area(r, upto=r)
+        r.candidates = []
+        for label, im in old_cands:
+            a = np.asarray(r.src).copy()
+            a[dy:dy + h, dx:dx + w] = np.asarray(im.convert("RGB"))
+            r.candidates.append((label, Image.fromarray(a)))
+            r.holes[label] = old_holes[label]
+        r.png.clear()  # images, holes and the area changed: encoded again at the next save
+        r.preview, r.hole_cache, r.plans, r.shape, r.flat = {}, {}, {}, None, False
+        self._work_cfa, self._work_key = None, None
+        log(f"#{r.id}: area grown to hold its whole selection, {box[3] - box[2]}x{box[1] - box[0]} px"
+            f" ({len(old_cands)} variants kept)")
+        return True
 
     def new_removal(self, mask_e):
         """A removal for mask_e (bool, base.png frame): its area, rendered from the photo as it is now (earlier
@@ -854,9 +902,10 @@ class Session:
         measured("area", time.time() - t0)
         return r
 
-    def _init_area(self, r):
-        """The area image (photo with the earlier removals applied), its masks, blending and preview placement."""
-        srgb, r.gain = self.raw.render(r.box, r.gain, cfa=self.working_cfa())  # gain None: from this area
+    def _init_area(self, r, upto=None):
+        """The area image (photo with the earlier removals applied: those before `upto`, else all), its masks,
+        blending and preview placement."""
+        srgb, r.gain = self.raw.render(r.box, r.gain, cfa=self.working_cfa(upto))  # gain None: from this area
         r.src = Image.fromarray((srgb * 255).round().astype(np.uint8))
         r.mask_img = Image.fromarray((r.reg_mask * 255).astype(np.uint8))
         r.alpha = np.asarray(r.mask_img.filter(ImageFilter.GaussianBlur(3))).astype(np.float64) / 255.0

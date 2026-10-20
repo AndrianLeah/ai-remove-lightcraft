@@ -741,6 +741,8 @@ class App:
         parts = []
         if r is None:
             parts.append(("area", _("Preparing the area"), A.expected("area")))
+        elif s.leaks(r):  # made before an area could hold a long selection: it grows first (Session.fit_area)
+            parts.append(("fit", _("Preparing the area"), 2 * A.expected("area")))
         if model == "lama":  # only the model the user picked runs
             if r is None or not any(c[0] == "LaMa" for c in r.candidates):
                 parts.append(("lama", "LaMa", variant_secs("lama")))
@@ -759,14 +761,18 @@ class App:
                 break
             tag = f"#{r.id} · {label}" if r is not None else label
             self.post("job_part", (tag, done, secs))
-            if kind == "area":
-                r = s.new_removal(mask)
-                self.post("removal_new", r)
+            if kind in ("area", "fit"):
+                if kind == "area":
+                    r = s.new_removal(mask)
+                    self.post("removal_new", r)
+                    if model != "lama" and s.thin(r):  # a cord, a cable: LaMa in squares is the best fill, in seconds
+                        A.log(f"#{r.id}: long and thin, LaMa too")
+                        parts.insert(i + 1, ("lama", "LaMa", 0.0))
+                else:
+                    s.fit_area(r)
+                    self.post("cand", r)
                 parts[i + 1:] = [(k, lb, variant_secs(k) if k in ("lama", "variant") else sec)
                                  for k, lb, sec in parts[i + 1:]]
-                if model != "lama" and s.thin(r):  # a cord, a cable: LaMa in squares is the best fill, in seconds
-                    A.log(f"#{r.id}: long and thin, LaMa too")
-                    parts.insert(i + 1, ("lama", "LaMa", variant_secs("lama")))
                 self.post("job_total", done + secs + sum(p[2] for p in parts[i + 1:]))
             elif kind == "lama":
                 s.run_lama(r)
