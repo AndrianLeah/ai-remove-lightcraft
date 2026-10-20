@@ -527,6 +527,13 @@ class App:
         # the version, quiet, on the title's baseline: what the user reports and compares with the releases page
         tk.Label(head, text=A.system.VERSION, font=self.f_small, fg=DIM, bg=BG).pack(
             side="left", anchor="s", padx=(int(6 * k), 0), pady=(0, int(2 * k)))
+        # where AI Remove lives: the code, the releases and where to report a problem
+        repo = tk.Label(head, text="ⓘ  GitHub", font=self.f_small, fg=DIM, bg=BG, cursor="hand2")
+        repo.pack(side="left", anchor="s", padx=(int(10 * k), 0), pady=(0, int(2 * k)))
+        repo.bind("<Enter>", lambda e: repo.configure(fg=ACCENT))
+        repo.bind("<Leave>", lambda e: repo.configure(fg=DIM))
+        repo.bind("<Button-1>", lambda e: (webbrowser.open(f"https://github.com/{A.system.REPO}"), self.status.configure(
+            text=_("AI Remove on GitHub: the code, the releases and where to report a problem"))))
         self.title = tk.Label(head, text="", font=self.font(13), fg=FG, bg=BG)
         self.title.pack(side="left", padx=(int(10 * k), 0))
         # the window's language, far right: as LightCraft's (Auto) or one of ours; it applies at the next opening
