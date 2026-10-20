@@ -661,7 +661,8 @@ class App:
             "flux": _("FLUX Fill — the most realistic: it respects light, perspective and the lines of architecture; "
                       "best for large or difficult areas and when SDXL invents odd things. ~{time} per variant (Turbo, "
                       "8 steps). It takes almost the whole GPU: switching to FLUX unloads SDXL and SAM (~15 s the first "
-                      "time; SAM reloads by itself at the next click).", time=self.fmt_s(flux)),
+                      "time; SAM reloads by itself at the next click). Non-commercial licence (FLUX.1 [dev]).",
+                      time=self.fmt_s(flux)),
             "osor": _("OSOR — removes the object together with its shadow and reflection, in one step (~{time}): you "
                       "select only the object, OSOR decides how far its shadow goes. Softer than FLUX on large areas: "
                       "for the most detail use \"Include the shadow\" and then FLUX. It runs on FLUX's GPU memory. "

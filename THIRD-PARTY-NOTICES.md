@@ -56,8 +56,14 @@ The icon uses the same three-colour engraving style as the Crafting Apps icons, 
 was made in three steps (details in `assets/icon/README.md`):
 
 1. A portrait was generated on this machine with FLUX.1 Fill [dev] (GGUF), the Turbo-Alpha LoRA and the
-   [Perfect Ink Drawing (Engraving Style)](https://huggingface.co/Muapi/perfect-ink-drawing-engraving-style) LoRA
-   (openrail++). This portrait was used only for its tones.
+   [Perfect Ink Drawing (Engraving Style)](https://civitai.com/models/1717646) LoRA by deep_synth (Flux v1.0).
+   - Its author's permissions on Civitai allow commercial use of the images made with it and derivatives, with no
+     credit required.
+   - It was downloaded from a copy on Hugging Face,
+     [Muapi/perfect-ink-drawing-engraving-style](https://huggingface.co/Muapi/perfect-ink-drawing-engraving-style),
+     which is labelled openrail++. The original author's terms are the ones that apply.
+   - FLUX.1 [dev]'s licence lets its outputs be used for any purpose, except training competing models. The
+     portrait was used only for its tones.
 2. AI Remove's own engraving algorithm drew the lines.
 3. VectorCraft traced the result into vectors.
 
