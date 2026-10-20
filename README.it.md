@@ -114,6 +114,12 @@ Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/hug
 | **OSOR** (facoltativo, su FLUX) | Toglie l'oggetto insieme alla sua ombra e al riflesso, in un solo passo (3–8 s). È lui che trova l'ombra per "Includi l'ombra". | 0,6 GB | FLUX.1 [dev] Non-Commercial |
 | **ObjectClear** (facoltativo) | Toglie l'oggetto insieme alla sua ombra e al riflesso, circa 5 s a variante, a 512 px. | 7,3 GB | S-Lab License 1.0 (non commerciale) |
 
+**Uso commerciale.** FLUX, OSOR e ObjectClear sono solo per uso non commerciale. Vanno bene per le tue foto, ma non per
+lavori pagati o per clienti senza una licenza dei loro autori: Black Forest Labs per FLUX e OSOR, S-Lab per ObjectClear.
+Per i lavori pagati usa LaMa o SDXL (SDXL con le sue limitazioni d'uso). La licenza di FLUX chiede anche di controllare
+i risultati prima di condividerli, e di dire che sono stati modificati con l'AI dove la legge lo richiede. È un
+riassunto, non un parere legale: valgono le licenze.
+
 Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plaster wall" o "dark doorway".
 
 ## Uso

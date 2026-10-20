@@ -1,5 +1,6 @@
 """The icon's tone source: a raccoon portrait from FLUX.1 Fill [dev] (full mask on a blank canvas = plain generation)
-with the "Perfect Ink Drawing (Engraving Style)" LoRA (trigger 1NK_H4TCH1NG, openrail++). Its fine stipple is not
+with the "Perfect Ink Drawing (Engraving Style)" LoRA by deep_synth (civitai.com/models/1717646; trigger 1NK_H4TCH1NG;
+its author allows commercial use of the images). Its fine stipple is not
 used as such: engrave_lines.py redraws it with clean lines from its tones.
 
 Runs with an AI Remove install that has FLUX (AIREMOVE_HOME, default ~/AIRemove), the LoRA in
