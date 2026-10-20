@@ -90,6 +90,11 @@ TILE_SCALES = (1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0)  # square side / engine 
 # again in each variant (an encoder session each, ~10-15 s). Measured on a woman in front of steps (2 squares): the
 # same fill and no seam where the squares meet; reading 17 s per removal instead of 28-30 s, then ~14 s per variant.
 QWEN_SQUARES_SEE_AREA = True
+# Qwen-Image draws any size: an area up to QWEN_ONE_PASS times longer than wide is drawn in one pass in its own shape
+# (QWEN_SIZE on its short side, engines.qwen_dims), not in squares of its short side. Measured (RX 7800 XT, woman in
+# front of steps, 3456 x 4878): 79-82 s per variant instead of 101-128 s in 2 squares, no seam, the same memory (its
+# condition pictures have a square's pixels). 1024 x 1792: 8.5 s/step instead of 4.1, still less than 2 squares.
+QWEN_ONE_PASS = 1.75
 REFINED = " HD"  # label suffix of a variant redrawn by "Full detail"
 NEUTRAL_GEOMETRY = {"upright": "off", "vertical": 0, "horizontal": 0, "rotate": 0, "aspect": 0, "scale": 100,
                     "offset_x": 0, "offset_y": 0}
@@ -1192,9 +1197,11 @@ class Session:
         r.scale[label] = self.enlarged(r, model, plan)
         self.add_candidate(r, label, im)
         if plan is None:  # a tiled variant's time is the squares' (measured each)
-            measured(f"{model}_variant", time.time() - t0)
+            measured(f"{model}_variant", (time.time() - t0) / self.pass_cost(r, model))
+        oblong = model == "qwen" and plan is None and self.pass_cost(r, model) > 1
         log(f"#{r.id} {label} in {time.time() - t0:.0f}s"
             + (f" ({len(plan[1])} squares of {plan[1].T} px at {plan[0]})" if plan is not None else "")
+            + (" (one pass at {}x{})".format(*eng.drawn) if oblong else "")
             + (f" (prompt: {prompt or 'default'})" if model in ("sdxl", "flux") else "")
             + (f" (removing: {eng.what})" if model == "qwen" and eng.what else "")
             + (f" | shadow/reflection: +{int((hole & ~r.reg_mask).sum())} px" if hole is not None else ""))
@@ -1237,16 +1244,29 @@ class Session:
         pass would enlarge the fill more than TILE_FROM times, in squares as small as TILE_BUDGET allows. For a
         refinement ("Full detail"): any hole, as near the engine's size as REFINE_BUDGET allows. An area longer than
         a square (plan_region square=False) is always filled in squares, by every engine: at worst squares of its
-        short side, each as one pass would be."""
+        short side, each as one pass would be; by Qwen-Image only beyond QWEN_ONE_PASS."""
         sizes = TILE_SIZES.get(model)
         oblong = r.reg_mask.shape[0] != r.reg_mask.shape[1]
         if not sizes or (not refine and not oblong and model not in TILED_VARIANTS):
+            return None
+        if model == "qwen" and not refine and self.qwen_one_pass(r):
             return None
         own = label if label in r.holes else None
         key = (model, refine, own)  # decided once per removal: its variants are all made alike
         if key not in r.plans:
             r.plans[key] = self._tile_plan(r.holes[own] if own else r.reg_mask, model, sizes, refine)
         return r.plans[key]
+
+    @staticmethod
+    def qwen_one_pass(r):
+        """Whether Qwen-Image draws r's area in one pass, in its own shape (QWEN_ONE_PASS)."""
+        return max(r.reg_mask.shape) <= QWEN_ONE_PASS * min(r.reg_mask.shape)
+
+    @staticmethod
+    def pass_cost(r, model):
+        """What one pass of `model` over r's area takes, in passes over a square area: Qwen-Image draws an oblong area
+        in its own shape (QWEN_ONE_PASS), so its time grows with the area's length."""
+        return max(r.reg_mask.shape) / min(r.reg_mask.shape) if model == "qwen" else 1.0
 
     def _tile_plan(self, hole, model, sizes, refine):
         short = min(hole.shape)
@@ -1297,7 +1317,7 @@ class Session:
         """What one variant of `model` will take for r (for the progress bar)."""
         plan = self.tile_plan(r, model)
         if plan is None:
-            return expected("lama" if model == "lama" else f"{model}_variant")
+            return expected("lama" if model == "lama" else f"{model}_variant") * self.pass_cost(r, model)
         return len(plan[1]) * self.tile_seconds(model, plan[0]) + expected("tiled_blend")
 
     def _tiled(self, r, model, eng, plan, prompt, seed, progress=None, src=None, strength=1.0, effect=None):
@@ -1352,8 +1372,9 @@ class Session:
     def texture(r, model, plan):
         """Whether the blend adds texture copied from around the hole (blend.texture_field): only to a fill made in
         one pass, as before. Along a long removal the copied patches carry the edges next to it (columns beside a
-        plain wall) into the fill as streaks — measured at every square size, 1.25x to 3.5x."""
-        return plan is None
+        plain wall) into the fill as streaks — measured at every square size, 1.25x to 3.5x. Nor to an oblong area
+        drawn by Qwen-Image in one pass (QWEN_ONE_PASS): on steps next to a paved floor it added dark pits."""
+        return plan is None and r.reg_mask.shape[0] == r.reg_mask.shape[1]
 
     def refine_model(self):
         """The engine "Full detail" redraws with: FLUX (the most detail), else SDXL; None without a GPU model."""
@@ -1364,6 +1385,8 @@ class Session:
         """How many photo pixels one pixel of a fill of `model` for r covers (1: drawn at the photo's resolution)."""
         if plan is not None:
             return plan[1].T / plan[0]
+        if model == "qwen":  # in the area's own shape, QWEN_SIZE on its short side
+            return min(r.reg_mask.shape) / engines.QWEN_SIZE
         side = max(r.reg_mask.shape)
         if model in ("flux", "osor"):
             return side / (engines.FLUX_SIZES[0] if side <= sum(engines.FLUX_SIZES) // 2 else engines.FLUX_SIZES[1])
