@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import traceback
+import webbrowser
 import tkinter as tk
 from tkinter import ttk, messagebox, font as tkfont
 
@@ -404,6 +405,8 @@ class App:
         self.bar.pack(fill="x")
         row = tk.Frame(sbar, bg=BG)
         row.pack(fill="x", padx=int(16 * k), pady=(int(5 * k), int(8 * k)))
+        # shown while something is generated: the first variant may be the one, no need to wait for the others
+        self.stop_btn = self.button(row, "■  " + _("Stop") + "  (Esc)", self.stop_jobs, small=True)
         self.status = tk.Label(row, text="", font=self.f_small, fg=ACCENT, bg=BG)
         self.status.pack(side="left")
         self.hint_lbl = tk.Label(row, text="", font=self.f_small, fg=DIM, bg=BG)
@@ -450,14 +453,23 @@ class App:
             self.shadow_btn.pack(fill="x", pady=(int(6 * k), 0))
 
         _hdr, gen = self.section(sp, _("Generate"))
-        tk.Label(gen, text=_("Model"), font=self.f_small, fg=DIM, bg=CARD).pack(anchor="w")
+        mrow = tk.Frame(gen, bg=CARD)
+        mrow.pack(fill="x")
+        tk.Label(mrow, text=_("Model"), font=self.f_small, fg=DIM, bg=CARD).pack(side="left")
+        # what the model is good at: one click away (the menu itself says it in a few words)
+        self.info_btn = tk.Label(mrow, text="ⓘ  " + _("What it does"), font=self.f_small, fg=DIM, bg=CARD,
+                                 cursor="hand2")
+        self.info_btn.pack(side="right")
+        self.info_btn.bind("<Button-1>", lambda e: self.toggle_model_info())
         self.model_var = tk.StringVar()
         self.model_box = ttk.Combobox(gen, textvariable=self.model_var, state="readonly", style="AI.TCombobox",
                                       font=self.f_txt)
         self.model_box.pack(fill="x", pady=(int(3 * k), 0))
         self.model_info = tk.Label(gen, font=self.f_small, fg=DIM, bg=CARD, justify="left", anchor="w",
                                    wraplength=self.side_w - int(56 * k))
-        self.model_info.pack(fill="x", pady=(int(6 * k), int(10 * k)))
+        self.info_pad = tk.Frame(gen, bg=CARD, height=int(10 * k))  # the gap when the description is hidden
+        self.show_info = bool(A.setting("model_info", False))
+        self.place_model_info()
         self.model_box.bind("<<ComboboxSelected>>", lambda e: self.root.focus_set())
         self.model_var.trace_add("write", lambda *a: self.on_model_change())  # any change, also from code
         tk.Label(gen, text=_("What to put there (optional)"), font=self.f_small, fg=DIM, bg=CARD).pack(anchor="w")
@@ -481,6 +493,7 @@ class App:
         self.rows_empty = tk.Label(self.rows.inner, font=self.f_small, fg=DIM, bg=CARD, justify="left",
                                    text=_("None yet: select something on the photo\nand press \"Remove selection\"."))
         self.rows_empty.pack(anchor="w", pady=4)
+        self.fit_rows()
 
         self.var_title, vars_ = self.section(sp, _("Variants"), expand=True)
         self.vars = Scroll(vars_, height=int(200 * k), width=self.side_w - int(60 * k))
@@ -508,7 +521,7 @@ class App:
         # --- photo (left): header with title and view controls, the zoomable photo
         left = tk.Frame(body, bg=BG)
         left.pack(side="left", fill="both", expand=True, padx=(int(16 * k), int(12 * k)), pady=(int(12 * k), 0))
-        head = tk.Frame(left, bg=BG)
+        head = self.head = tk.Frame(left, bg=BG)
         head.pack(fill="x", pady=(0, int(10 * k)))
         tk.Label(head, text="AI Remove", font=self.font(13, True), fg=ACCENT, bg=BG).pack(side="left")
         self.title = tk.Label(head, text="", font=self.font(13), fg=FG, bg=BG)
@@ -557,6 +570,9 @@ class App:
         if MAC:
             r.bind("<Command-z>", lambda e: self.undo())
         r.bind("<Return>", lambda e: self.remove_selection())
+        r.bind("<Escape>", lambda e: self.stop_jobs())
+        r.bind("<Left>", lambda e: self.step_variant(-1))
+        r.bind("<Right>", lambda e: self.step_variant(1))
         for keys, f in ((("plus", "equal", "KP_Add"), 1.25), (("minus", "KP_Subtract"), 0.8), (("0", "KP_0"), 0)):
             for key in keys:
                 r.bind(f"<KeyPress-{key}>", lambda e, f=f: self.on_zoom_key(e, f))
@@ -690,6 +706,7 @@ class App:
                 self.extracting = False
             self.base_ready.set()
             self.post("base")
+            threading.Thread(target=lambda: self.post("update", A.update_available()), daemon=True).start()
         except A.Fail as e:
             A.log("ERROR:", e)
             self.base_ready.set()
@@ -702,6 +719,8 @@ class App:
             return
         while True:
             job = self.jobs.get()
+            if job[0] != "save":
+                s.stop.clear()  # a Stop pressed before this job was for the one before
             try:
                 if job[0] == "new":
                     __, mask, n, model, prompt = job
@@ -725,6 +744,8 @@ class App:
                     self.post("job_start", (_("Writing the DNG for LightCraft"), A.expected("save")))
                     self.post("job_part", (_("Saving"), 0.0, A.expected("save")))
                     self.post("saved", s.write_all())
+            except A.Stopped:
+                self.next_status = _("Stopped: the variants already made are kept")
             except Exception as e:
                 A.log("ERROR:", traceback.format_exc())
                 self.post("error", str(e) if isinstance(e, A.Fail) else traceback.format_exc(limit=3))
@@ -904,6 +925,8 @@ class App:
         self.busy = True
         self.job = {"label": label, "total": total, "t0": time.time(), "mode": "timed", "base": 0.0, "secs": 1.0,
                     "t_part": time.time(), "exact": 0.0}
+        if label != _("Writing the DNG for LightCraft"):  # a save is not stopped
+            self.stop_btn.pack(side="left", padx=(0, int(10 * self.k)), before=self.status)
         self.update_buttons()
 
     def on_job_total(self, total):
@@ -923,10 +946,23 @@ class App:
     def on_job_end(self, _data):
         if self.jobs.qsize() == 0:
             self.busy = False
+            self.stop_btn.pack_forget()
             msg, self.next_status = getattr(self, "next_status", None), None
             self.set_idle_status(msg or (_("Click something else to remove, or \"Save to LightCraft\"")
                                          if self.s.removals else _("Click what you want to remove")))
         self.update_buttons()
+
+    def on_update(self, found):
+        """A newer AI Remove is out: a note in the header; a click opens its page (its installer keeps the models)."""
+        if not found:
+            return
+        version, url = found
+        lbl = tk.Label(self.head, text="↑  " + _("AI Remove {version} is out", version=version), font=self.f_small,
+                       fg=ACCENT, bg=BG, cursor="hand2")
+        lbl.pack(side="right", padx=(0, int(14 * self.k)))
+        lbl.bind("<Button-1>", lambda e: (webbrowser.open(url), self.status.configure(text=_(
+            "To update, run the new version's installer: it keeps your models and your projects"))))
+        A.log(f"update available: {version}")
 
     def on_shadow(self, m):
         """The shadow/reflection found by "Include the shadow" joins the selection (one step: Undo takes it out)."""
@@ -1128,6 +1164,7 @@ class App:
             w.bind("<Leave>", lambda e, ws=ws: [x.configure(bg=CARD) for x in ws if x is not ws[1]])
         self.row_widgets[r.id] = (f, th, t1, t2)
         self.update_row(r)
+        self.fit_rows()
 
     def update_row(self, r):
         if r.id not in self.row_widgets:
@@ -1146,19 +1183,27 @@ class App:
         f.configure(highlightbackground=ACCENT if r is self.cur else CARD)
 
     def tile_image(self, r, idx, size, square=False):
-        """Candidate idx of r on the photo around its area (base.png look), as a thumbnail."""
+        """Candidate idx of r on the photo around what it filled (base.png look), as a square thumbnail: the whole
+        hole for an object, a piece of it a few times its width for a pole or a cord (all of a long one would be a
+        thin line, and the variants would all look the same)."""
         patch, al = self.s.preview(r, idx)
         Y0, Y1, X0, X1 = r.base_rect
         base = self.s.base_arr[Y0:Y1, X0:X1].astype(np.float32)
         ph, pw = base.shape[:2]
         im = base * (1 - al[:ph, :pw, None]) + patch[:ph, :pw].astype(np.float32) * al[:ph, :pw, None]
         out = Image.fromarray(np.clip(im, 0, 255).astype(np.uint8))
-        if square:  # centre crop to a square for the list
+        ys, xs = np.nonzero(al[:ph, :pw] > 0.02)
+        if len(ys):
+            hh, ww = ys.max() - ys.min() + 1, xs.max() - xs.min() + 1
+            side = int(min(np.clip(3 * min(hh, ww) + 48, 160, max(hh, ww) + 48), ph, pw))
+            cy, cx = (int(ys.mean()), int(xs.mean())) if max(hh, ww) > 4 * min(hh, ww) else \
+                ((ys.min() + ys.max()) // 2, (xs.min() + xs.max()) // 2)
+            y0, x0 = int(np.clip(cy - side // 2, 0, ph - side)), int(np.clip(cx - side // 2, 0, pw - side))
+            out = out.crop((x0, y0, x0 + side, y0 + side))
+        else:
             s = min(out.size)
             out = out.crop(((out.width - s) // 2, (out.height - s) // 2, (out.width + s) // 2, (out.height + s) // 2))
-            return out.resize((size, size), Image.LANCZOS)
-        out.thumbnail((size, size), Image.LANCZOS)
-        return out
+        return out.resize((size, size), Image.LANCZOS)
 
     def select_removal(self, r):
         self.cur = r
@@ -1257,6 +1302,36 @@ class App:
         self.update_buttons()
         self.autosave()
 
+    def step_variant(self, d):
+        """← / →: the previous / next variant of the selected removal becomes the chosen one."""
+        r = self.cur
+        if self.typing() or r is None or r.deleted or not r.candidates:
+            return
+        i = int(np.clip((r.chosen if r.chosen is not None else 0) + d, 0, len(r.candidates) - 1))
+        if i != r.chosen:
+            self.choose(i)
+
+    def place_model_info(self):
+        if self.show_info:
+            self.info_pad.pack_forget()
+            self.model_info.pack(after=self.model_box, fill="x", pady=(int(6 * self.k), int(10 * self.k)))
+        else:
+            self.model_info.pack_forget()
+            self.info_pad.pack(after=self.model_box, fill="x")
+        self.info_btn.configure(text="ⓘ  " + (_("Hide") if self.show_info else _("What it does")))
+
+    def toggle_model_info(self):
+        self.show_info = not self.show_info
+        A.remember("model_info", self.show_info)
+        self.place_model_info()
+
+    def fit_rows(self):
+        """The removals list as tall as its rows, up to three (then it scrolls): an empty list takes no room from
+        the variants."""
+        self.rows.inner.update_idletasks()
+        one = self.ROWTHUMB + int(16 * self.k)
+        self.rows.canvas.configure(height=max(int(0.6 * one), min(self.rows.inner.winfo_reqheight(), 3 * one)))
+
     def zoom_to(self, r):
         if r is not None:
             Y0, Y1, X0, X1 = r.base_rect
@@ -1272,6 +1347,26 @@ class App:
         self.jobs.put(("more", r, self.n_variants(), self.model_key(), self.prompt.get().strip()))
         self.busy = True
         self.update_buttons()
+
+    def stop_jobs(self):
+        """Stop (Esc): the variant under way ends at its next step and is dropped, the variants already made stay,
+        and what was waiting in the queue is dropped too — but a save."""
+        if not self.busy:
+            return
+        kept = []
+        while True:
+            try:
+                job = self.jobs.get_nowait()
+            except queue.Empty:
+                break
+            if job[0] == "save":
+                kept.append(job)
+        for job in kept:
+            self.jobs.put(job)
+        self.s.stop.set()
+        if self.job:
+            self.job["label"] = _("Stopping…")
+        A.log("stop pressed")
 
     def full_detail(self):
         """"Full detail": the chosen variant of a long removal, drawn smaller than the photo, redrawn at the photo's
@@ -1292,6 +1387,7 @@ class App:
         self.autosave()
         f = self.row_widgets.pop(r.id)[0]
         f.destroy()
+        self.fit_rows()
         self.outlines.pop(r.id, None)
         self.comp_key = None
         self.cur = next((x for x in reversed(self.s.removals) if not x.deleted), None)
@@ -1301,6 +1397,7 @@ class App:
             self.var_title.configure(text=_("Variants").upper())
             self.fill_tiles()
             self.rows_empty.pack(anchor="w", pady=6)
+            self.fit_rows()
             self.render_main()
         self.update_buttons()
 
@@ -1596,7 +1693,7 @@ class App:
         """Tests: drive the window through the real handlers. Actions (coordinates normalized to the photo):
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
         snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear] · more:n · pick:i · detail ·
-        dropvar:i · select:id · delete · waitidle · save · quit"""
+        dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit"""
         if not actions:
             return
         kind, __, arg = actions[0].partition(":")
@@ -1675,6 +1772,20 @@ class App:
         elif kind == "dropvar":  # as the right-click menu's "Delete variant"
             self.delete_variant(int(vals[0]))
             delay = 300
+        elif kind == "waitvars":  # until the selected removal has that many variants
+            if self.cur is None or len(self.cur.candidates) < int(vals[0]):
+                self.root.after(500, lambda: self.run_test_actions(actions))
+                return
+            delay = 100
+        elif kind == "stop":
+            self.stop_jobs()
+            delay = 200
+        elif kind == "step":  # as the arrow keys
+            self.step_variant(int(vals[0]))
+            delay = 300
+        elif kind == "info":
+            self.toggle_model_info()
+            delay = 200
         elif kind == "pick":
             self.choose(int(vals[0]))
             delay = 300

@@ -5,6 +5,7 @@ Everything here uses the standard library only: the installer and the MCP server
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import sys
@@ -15,6 +16,28 @@ CONFIG_FILE = ROOT / "airemove.json"  # written by the installer
 DEFAULT_PORT = 7980
 LIGHTCRAFT_ID = "ai.storyteller.lightcraft"  # Flatpak / desktop entry id
 VERSION = "1.1.0"
+REPO = "AndrianLeah/ai-remove-lightcraft"  # on GitHub: its releases are the updates
+RELEASES = f"https://github.com/{REPO}/releases/latest"
+
+
+def version_tuple(v):
+    """'1.10.2' or 'v1.10.2' -> (1, 10, 2), for comparing versions."""
+    return tuple(int(x) for x in re.findall(r"\d+", str(v))[:3])
+
+
+def latest_release(timeout=4.0):
+    """(version, release page) of the newest published release on GitHub, or None when it cannot be asked (offline,
+    a proxy, GitHub's rate limit). Only the request itself is sent: nothing about the computer or the photos."""
+    import urllib.request
+    req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
+                                 headers={"Accept": "application/vnd.github+json", "User-Agent": f"AI-Remove/{VERSION}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            d = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    tag = str(d.get("tag_name") or "")
+    return (tag.lstrip("vV"), d.get("html_url") or RELEASES) if version_tuple(tag) else None
 
 
 def system():
