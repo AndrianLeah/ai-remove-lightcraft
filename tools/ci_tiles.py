@@ -10,11 +10,14 @@ of stone courses and a slow gradient, crossed by a long slanted cord, and the co
   SDXL none; "Full detail" (refine) gets squares nearer the engine's size on the cord and is not offered for the
   person; the cord is long and thin, the person is not;
 - LaMa through Session.run_lama fills the cord in squares at its own 512 px: the cord is gone (the fill is the
-  ground's colour), the photo outside the hole is untouched.
+  ground's colour), the photo outside the hole is untouched;
+- Qwen-Image (its bookkeeping, without its models) in the squares of an oblong area: two variants take one encoder
+  session and one naming between them.
 Exit status 1 at the first check that fails.
 
   ci_tiles.py DIR
 """
+import contextlib
 import sys
 import time
 from argparse import Namespace
@@ -156,6 +159,47 @@ def main():
     f = a[core].mean(axis=0)
     expect(np.abs(f - g).max() < 20, f"the cord is gone: the fill is the ground's colour ({f.round()} vs "
                                      f"{g.round()}), LaMa tiled in {time.time() - t0:.0f}s")
+
+    # Qwen-Image in the squares of the oblong area: named once in the whole area, every square read in one encoder
+    # session per removal (engines.Qwen.prepare), not again in each variant
+    import engines
+    from types import SimpleNamespace
+
+    class Stub:
+        def to(self, *a, **k):
+            return self
+
+    class Qwen(engines.Qwen):  # the engine's bookkeeping, without its models
+        def __init__(self):
+            self.torch = SimpleNamespace(no_grad=contextlib.nullcontext, cat=lambda xs, dim=0: xs[0], bfloat16=None)
+            self.pipe = SimpleNamespace(transformer=Stub(), text_encoder=None, vae_scale_factor=16,
+                                        _get_qwen_prompt_embeds=lambda text, images, dev: (Stub(), None, Stub()))
+            self.dev, self.cond, self.names, self.what, self.named = "cpu", {}, {}, None, 0
+
+        def _name(self, te, image, hole):
+            self.named += 1
+            return "the pole"
+
+        def _latents(self, img):
+            return Stub()
+
+        def fill(self, src, mask, prompt, seed, progress=None, log=print, size=None, seen=None, what=None):
+            image, hole = self._inputs(src, mask, engines.QWEN_SIZE)  # as Qwen.fill, up to its condition
+            self.condition(image if seen is None else self._inputs(seen, mask, engines.QWEN_SIZE)[0], hole, prompt,
+                           log, what)
+            return src
+    sessions = []
+    engines._qwen_text_encoder, engines._free_gpu = (lambda dev: sessions.append(dev) or Stub()), (lambda: None)
+    s.t = (1, False)  # a portrait photo: Qwen-Image sees the area upright
+    q, r_q = Qwen(), A.Removal(6, None)
+    r_q.reg_mask, r_q.src = reg, Image.fromarray(np.ascontiguousarray(ground(1500)[:1000]))
+    r_q.mask_img = Image.fromarray((reg * 255).astype(np.uint8))
+    qplan = s.tile_plan(r_q, "qwen")
+    for variant in (1, 2):
+        s._tiled(r_q, "qwen", q, qplan, "", variant)
+    expect(len(qplan[1]) >= 2 and len(sessions) == 1 and q.named == 1,
+           f"Qwen-Image in {len(qplan[1])} squares, two variants: {len(sessions)} encoder session(s), "
+           f"named {q.named} time(s)")
     return 0
 
 

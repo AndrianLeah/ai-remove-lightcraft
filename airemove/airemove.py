@@ -84,6 +84,12 @@ TILED_VARIANTS = ("flux", "lama")
 # redrew a column's base, SDXL drew planks): the window adds a LaMa variant to the generative ones.
 THIN = 128
 TILE_SCALES = (1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0)  # square side / engine size tried, smallest first
+# Qwen-Image in squares (an area longer than a square): each square sees the area as it is as its condition picture,
+# not the earlier squares' fill (which it still continues: engines.QWEN_LOCK), so one encoder session per removal reads
+# every square of every variant (engines.Qwen.prepare). False: each square that sees an earlier one's fill is read
+# again in each variant (an encoder session each, ~10-15 s). Measured on a woman in front of steps (2 squares): the
+# same fill and no seam where the squares meet; reading 17 s per removal instead of 28-30 s, then ~14 s per variant.
+QWEN_SQUARES_SEE_AREA = True
 REFINED = " HD"  # label suffix of a variant redrawn by "Full detail"
 NEUTRAL_GEOMETRY = {"upright": "off", "vertical": 0, "horizontal": 0, "rotate": 0, "aspect": 0, "scale": 100,
                     "offset_x": 0, "offset_y": 0}
@@ -1194,10 +1200,12 @@ class Session:
             + (f" | shadow/reflection: +{int((hole & ~r.reg_mask).sum())} px" if hole is not None else ""))
         return label, im
 
-    def _qwen(self, eng, src, mask, prompt, seed, progress=None):
+    def _qwen(self, eng, src, mask, prompt, seed, progress=None, seen=None, what=None):
         """Qwen-Image sees the area upright, as the photo is seen: it names the selection first, and on its side a
-        pole across columns was named "the overhead cable" and stayed (upright: "the floor lamp", removed)."""
-        return self._down(eng.fill(self._up(src), self._up(mask), prompt, seed, progress=progress, log=log))
+        pole across columns was named "the overhead cable" and stayed (upright: "the floor lamp", removed). seen,
+        what: a square's condition picture and the removal's name (Session._tiled)."""
+        return self._down(eng.fill(self._up(src), self._up(mask), prompt, seed, progress=progress, log=log,
+                                   seen=None if seen is None else self._up(seen), what=what))
 
     def _up(self, a):
         """An area image or array (sensor orientation) as the photo is seen; PIL in, PIL out."""
@@ -1300,6 +1308,16 @@ class Session:
         up, down = (self._up, self._down) if model == "sdxl" and SDXL_UPRIGHT else (lambda a: a, lambda a: a)
         flat = self.flat(r) if model == "sdxl" and strength >= 1 else None
         key = f"{model}_{'tile' if strength >= 1 else 'refine'}{size}"
+        what, seen = None, {}
+        t0 = time.time()
+        if model == "qwen":  # named once in the whole area, its squares read in one encoder session (Qwen.prepare)
+            area = np.asarray(r.src.convert("RGB"))
+            seen = {k: Image.fromarray(np.ascontiguousarray(area[st[0]])) for k, st in enumerate(P.steps) if st}
+            if not QWEN_SQUARES_SEE_AREA:  # only the first square: the others see the earlier squares' fill
+                seen = dict(list(seen.items())[:1])
+            what = eng.prepare(self._up(r.src), self._up(r.mask_img),
+                               [(self._up(im), self._up(Image.fromarray(P.steps[k][1].astype(np.uint8) * 255)))
+                                for k, im in seen.items()], prompt, log)
 
         def one(img, mask, k):
             s = seed + 7919 * k
@@ -1308,7 +1326,7 @@ class Session:
             elif model == "lama":
                 out = engines.lama(img, mask)
             elif model == "qwen":
-                out = self._qwen(eng, img, mask, prompt, s, self.check_stop)
+                out = self._qwen(eng, img, mask, prompt, s, self.check_stop, seen.get(k), what)
             elif model in ("osor", "objectclear"):
                 out, eff = self._effect_fill(model, eng, img, np.asarray(mask) > 127, s, self.check_stop)
                 sl = P.steps[k][0]
@@ -1323,7 +1341,6 @@ class Session:
                 out = down(eng.fill(up(img), up(mask), prompt, s, strength=SDXL_STRENGTH if strength >= 1 else strength,
                                     hold=hold, progress=self.check_stop))
             return out
-        t0 = time.time()
         out = P.fill(r.src if src is None else src, one, progress)
         secs = time.time() - t0
         measured(key, secs / max(1, len(P)))  # a square with its share of the matching (blend.Membrane)
