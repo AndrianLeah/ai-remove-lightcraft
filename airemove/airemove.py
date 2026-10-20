@@ -1541,6 +1541,7 @@ def check():
     except Exception as e:
         rep["torch_error"] = f"{type(e).__name__}: {e}"
     rep["models"] = engines.available()
+    rep["model_folders"] = engines.model_folders()  # parts used from the user's own folders (the rest: models/)
     rep["usable_models"] = [m for m in ("lama", "sdxl", "flux", "osor", "objectclear")
                             if engines.usable(m, rep.get("device", "cpu"))]
     print(json.dumps(rep, indent=1, ensure_ascii=False))

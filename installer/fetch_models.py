@@ -1,12 +1,15 @@
 """Download AI Remove's models from Hugging Face into <install>/models — or link them from another install
-(--from) or, for SAM 3, from LightCraft's own copy. Runs in the install's Python (needs huggingface_hub).
-Prints one line per model for the installer: MODEL_OK <name> | MODEL_FAIL <name> <why>.
+(--from) or, for SAM 3, from LightCraft's own copy. A part the user already has in a folder of their own (--paths:
+the installer found it there and records it in airemove.json) stays where it is: nothing is downloaded for it.
+Runs in the install's Python (needs huggingface_hub). Prints one line per model for the installer:
+MODEL_OK <name> | MODEL_FAIL <name> <why>.
 
   fetch_models.py --dest DIR --models lama,sam3,sdxl,flux,osor,objectclear [--from OTHER_MODELS_DIR]
-                  (HF_TOKEN for gated ones)
+                  [--paths '{"part": "folder", ...}']    (HF_TOKEN for gated ones)
 """
 import argparse
 import io
+import json
 import os
 import sys
 import urllib.request
@@ -15,49 +18,21 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "airemove"))
+import model_files as mf  # noqa: E402
 import system  # noqa: E402
 from i18n import _, N_  # noqa: E402
 
-SDXL_FILES = ["model_index.json", "scheduler/scheduler_config.json",
-              "text_encoder/config.json", "text_encoder/model.fp16.safetensors",
-              "text_encoder_2/config.json", "text_encoder_2/model.fp16.safetensors",
-              "tokenizer/*", "tokenizer_2/*", "unet/config.json", "unet/diffusion_pytorch_model.fp16.safetensors",
-              "vae/config.json", "vae/diffusion_pytorch_model.fp16.safetensors"]
-FLUX_FILES = ["model_index.json", "LICENSE.md", "scheduler/*", "text_encoder/*", "text_encoder_2/*", "tokenizer/*",
-              "tokenizer_2/*", "transformer/config.json", "vae/*"]
-OBJECTCLEAR_FILES = ["model_index.json", "scheduler/*", "tokenizer/*", "tokenizer_2/*", "*/config.json",
-                     "*/model.fp16.safetensors", "*/diffusion_pytorch_model.fp16.safetensors"]
 # ObjectClear's pipeline code (S-Lab License 1.0, non-commercial: fetched here, not shipped with AI Remove), pinned
 OBJECTCLEAR_CODE = "https://codeload.github.com/zjx0101/ObjectClear/zip/c052d91ecd8772744a5ab97527441c813ab83009"
-OBJECTCLEAR_CODE_KEY = "objectclear/code/objectclear/pipelines/pipeline_objectclear.py"
-# model: [(repo, files, sub-folder of models/)], and the file that says it is complete
-SPECS = {
-    "lama": ([("Carve/LaMa-ONNX", ["lama_fp32.onnx"], "lama")], "lama/lama_fp32.onnx"),
-    "sam3": ([("facebook/sam3", ["model.safetensors"], "sam3")], "sam3/model.safetensors"),
-    "sdxl": ([("diffusers/stable-diffusion-xl-1.0-inpainting-0.1", SDXL_FILES, "sdxl-inpaint"),
-              ("madebyollin/sdxl-vae-fp16-fix", ["config.json", "diffusion_pytorch_model.safetensors"],
-               "sdxl-vae-fp16-fix")], "sdxl-inpaint/unet/diffusion_pytorch_model.fp16.safetensors"),
-    "flux": ([("black-forest-labs/FLUX.1-Fill-dev", FLUX_FILES, "FLUX.1-Fill-dev"),
-              ("YarvixPA/FLUX.1-Fill-dev-GGUF", ["flux1-fill-dev-Q4_K_S.gguf"], "gguf"),
-              ("alimama-creative/FLUX.1-Turbo-Alpha", ["diffusion_pytorch_model.safetensors"], "flux-turbo-alpha")],
-             "gguf/flux1-fill-dev-Q4_K_S.gguf"),
-    "osor": ([("QinmingZhou/OSOR", ["osor-fluxfill/weights/fluxfill_phase2.pth", "README.md"], "osor")],
-             "osor/osor-fluxfill/weights/fluxfill_phase2.pth"),
-    # the code comes last: when it is there, the weights are complete
-    "objectclear": ([("jixin0101/ObjectClear", OBJECTCLEAR_FILES, "objectclear")], OBJECTCLEAR_CODE_KEY),
-}
 GATED_HELP = {
     "sam3": N_("accept the SAM License at https://huggingface.co/facebook/sam3 (approval can take a while)"),
     "flux": N_("accept the licence at https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev"),
 }
 
 
-def complete(dest, model):
-    """All of the model is there (the key file of each of its parts)."""
-    parts, key = SPECS[model]
-    if not (dest / key).exists():
-        return False
-    return all((dest / sub).is_dir() and any((dest / sub).iterdir()) for __, ___, sub in parts)
+def complete(dest, model, paths=None):
+    """All of the model is there (in dest, or in the user's folders in paths), Turbo included."""
+    return mf.has(model, dest, paths or {}, optional=True)
 
 
 def link_tree(src, dst):
@@ -73,37 +48,36 @@ def link_tree(src, dst):
 
 
 def sam3_from_lightcraft(dest):
-    lc = system.lightcraft_sam3_dir() / "model.safetensors"
+    lc = system.lightcraft_sam3_dir() / mf.SAM3_WEIGHTS
     if lc.exists():
-        how = system.link_or_copy(lc, dest / "sam3" / "model.safetensors")
+        how = system.link_or_copy(lc, dest / "sam3" / mf.SAM3_WEIGHTS)
         print("  " + (_("SAM 3: using the model LightCraft already downloaded (linked)") if how != "copy" else
                       _("SAM 3: using the model LightCraft already downloaded (copied)")))
         return True
     return False
 
 
-def sam3_to_lightcraft(dest, token):
+def sam3_to_lightcraft(sam3, token):
     """LightCraft's Object masks use the same model: give LightCraft our copy if it has none (with its two
     tokenizer files)."""
     lcd = system.lightcraft_sam3_dir()
-    if (lcd / "model.safetensors").exists():
+    if (lcd / mf.SAM3_WEIGHTS).exists():
         return
     try:
         from huggingface_hub import hf_hub_download
         for f in ("vocab.json", "merges.txt"):
             hf_hub_download("facebook/sam3", f, local_dir=str(lcd), token=token)
-        system.link_or_copy(dest / "sam3" / "model.safetensors", lcd / "model.safetensors")
+        system.link_or_copy(sam3 / mf.SAM3_WEIGHTS, lcd / mf.SAM3_WEIGHTS)
         print("  " + _("SAM 3 given to LightCraft too ({dir}): its Object masks work now", dir=lcd))
     except Exception as e:  # nice to have only
         print("  " + _("(SAM 3 not shared with LightCraft: {error})", error=type(e).__name__))
 
 
-def objectclear_code(dest):
+def objectclear_code(code):
     """ObjectClear's package (objectclear/: models, pipelines, utils — not its training dataset code) and its
-    licence, from the pinned commit, into models/objectclear/code."""
+    licence, from the pinned commit, into code (models/objectclear/code)."""
     with urllib.request.urlopen(OBJECTCLEAR_CODE, timeout=120) as resp:
         z = zipfile.ZipFile(io.BytesIO(resp.read()))
-    code = dest / "objectclear" / "code"
     for name in z.namelist():
         rel = name.split("/", 1)[1] if "/" in name else ""
         keep = rel == "LICENSE" or (rel.startswith("objectclear/") and not rel.startswith("objectclear/dataset/"))
@@ -114,25 +88,38 @@ def objectclear_code(dest):
         t.write_bytes(z.read(name))
 
 
-def fetch(dest, model, token, other):
-    if complete(dest, model):
-        print("  " + _("{model}: already there", model=model))
+def fetch(dest, model, token, other, paths):
+    if complete(dest, model, paths):
+        mine = [p for p in mf.MODELS[model].parts if mf.part_dir(p, dest, paths) != dest / p]
+        print("  " + (_("{model}: used from your folder, nothing downloaded", model=model) if mine else
+                      _("{model}: already there", model=model)))
         return
-    if other and complete(other, model):
-        n = sum(link_tree(other / sub, dest / sub) for __, ___, sub in SPECS[model][0])
-        print("  " + _("{model}: taken from {dir} ({n} files linked)", model=model, dir=other, n=n))
-        return
-    if model == "sam3" and sam3_from_lightcraft(dest):
-        return
-    from huggingface_hub import snapshot_download
-    for repo, files, sub in SPECS[model][0]:
-        print("  " + _("{model}: downloading {repo} …", model=model, repo=repo), flush=True)
-        snapshot_download(repo, allow_patterns=files, local_dir=str(dest / sub), token=token or None)
-    if model == "sam3":
-        sam3_to_lightcraft(dest, token)
-    if model == "objectclear":
-        print("  " + _("{model}: downloading its code from GitHub …", model=model), flush=True)
-        objectclear_code(dest)
+    for part in mf.MODELS[model].parts:
+        spec = mf.PARTS[part]
+        where = mf.part_dir(part, dest, paths)
+        if mf.part_ok(part, where):
+            if where != dest / part:
+                print("  " + _("{model}: {part} used from your folder {dir}", model=model, part=part, dir=where))
+            continue
+        if other and mf.part_ok(part, other / part):
+            n = link_tree(other / part, dest / part)
+            print("  " + _("{model}: {part} taken from {dir} ({n} files linked)", model=model, part=part, dir=other,
+                           n=n))
+            continue
+        if part == "sam3" and sam3_from_lightcraft(dest):
+            continue
+        if part == "objectclear/code":  # from GitHub, pinned (S-Lab licence: not shipped with AI Remove)
+            print("  " + _("{model}: downloading its code from GitHub …", model=model), flush=True)
+            objectclear_code(dest / part)
+            continue
+        from huggingface_hub import snapshot_download
+        print("  " + _("{model}: downloading {repo} …", model=model, repo=spec.repo), flush=True)
+        snapshot_download(spec.repo, allow_patterns=spec.get, local_dir=str(dest / part), token=token or None)
+        if part == "sam3":
+            sam3_to_lightcraft(dest / part, token)
+    missing = [p for p in mf.MODELS[model].parts if not mf.part_ok(p, mf.part_dir(p, dest, paths))]
+    if missing:
+        raise RuntimeError(_("incomplete after the download: {parts}", parts=", ".join(missing)))
 
 
 def main():
@@ -140,15 +127,17 @@ def main():
     ap.add_argument("--dest", required=True)
     ap.add_argument("--models", required=True)
     ap.add_argument("--from", dest="other")
+    ap.add_argument("--paths", default="{}", help="JSON {part: folder}: parts in the user's own folders")
     a = ap.parse_args()
     dest = Path(a.dest)
     dest.mkdir(parents=True, exist_ok=True)
     other = Path(a.other) if a.other else None
+    paths = {k: v for k, v in json.loads(a.paths).items() if k in mf.PARTS}
     token = os.environ.get("HF_TOKEN") or None
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
-    for model in [m for m in a.models.split(",") if m in SPECS]:
+    for model in [m for m in a.models.split(",") if m in mf.MODELS]:
         try:
-            fetch(dest, model, token, other)
+            fetch(dest, model, token, other, paths)
             print(f"MODEL_OK {model}", flush=True)
         except Exception as e:
             msg = f"{type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}"

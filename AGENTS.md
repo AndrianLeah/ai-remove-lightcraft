@@ -22,13 +22,17 @@ Setup of the server: `mcp/README.md`.
    uv into the install folder if uv is missing. It reports whether AI Remove is installed, the GPU, and whether
    LightCraft is installed, running and reachable.
 2. **Tell the user and wait for their OK** before installing. Say:
+   - what each model is for (README, "Models");
    - the download size: PyTorch 1–9 GB depending on the GPU, plus the models;
    - the model licences (see `THIRD-PARTY-NOTICES.md`);
    - that LightCraft's local control channel will be enabled (it has no password; local programs only).
-3. **Hugging Face token, only if needed.** Ask for a token only when FLUX is wanted, or SAM 3 is wanted and LightCraft
+3. **Models already on disk.** Ask whether the user already has some of the models (another AI Remove install, a
+   Hugging Face cache, ComfyUI's `models`). Pass each one as `--model-dir MODEL=FOLDER`. The installer checks the
+   folder, stops if the model is not there, uses what it finds where it is and downloads only the missing parts.
+4. **Hugging Face token, only if needed.** Ask for a token only when FLUX is wanted, or SAM 3 is wanted and LightCraft
    has not downloaded it. The token is the user's own Read token, and they must have accepted the licence on the model
    page. Never invent one. Never print it back.
-4. **Install, non-interactively:**
+5. **Install, non-interactively:**
    - macOS / Linux: `sh installer/bootstrap.sh --yes --models lama,sam3,sdxl [--hf-token T]`
    - Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File installer\bootstrap.ps1 --yes --models lama,sam3,sdxl`
 
@@ -38,7 +42,7 @@ Setup of the server: `mcp/README.md`.
 
    Progress goes to `~/AIRemove/install-status.json` (state, step n/7) and `~/AIRemove/install.log`. It takes 10–60
    minutes.
-5. **After the install**, the user must restart LightCraft once. If the status is `pending_lightcraft`:
+6. **After the install**, the user must restart LightCraft once. If the status is `pending_lightcraft`:
    1. the user closes LightCraft;
    2. run `bootstrap --configure-lightcraft --yes`.
 

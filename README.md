@@ -71,7 +71,8 @@ Download a package from the releases, or clone this repository, then run the ins
 The installer:
 
 1. detects the GPU and picks the right PyTorch build;
-2. asks which models to install, showing each one's size and licence;
+2. asks which models to install, showing what each one is for, its size and its licence. A model you already have
+   on disk can be used from its folder instead of being downloaded again (see below);
 3. puts a private Python 3.12, PyTorch and the models in `~/AIRemove`;
 4. creates the **AI Remove** app with its icon (Start menu, Applications, or the app menu);
 5. sets LightCraft up: it enables LightCraft's local control channel (`LIGHTCRAFT_CONTROL_PORT`), makes AI Remove its
@@ -98,6 +99,7 @@ Other options:
 | `--dir DIR` | Install somewhere other than `~/AIRemove` |
 | `--hf-token TOKEN` | Token for the gated models (SAM 3, FLUX) |
 | `--torch cuda\|rocm\|rocm-win\|xpu\|mps\|cpu` | Override the detected PyTorch build |
+| `--model-dir MODEL=FOLDER` | Use a model you already have on disk, where it is (see below); once per model |
 | `--models-from OTHER/models` | Reuse another install's models (linked, no extra space) |
 | `--no-lightcraft` | Leave LightCraft's settings alone |
 | `--configure-lightcraft` | Only apply the LightCraft integration (for example after closing LightCraft) |
@@ -119,16 +121,35 @@ links that copy and downloads nothing.
 AI Remove does not keep the token: it is used for the download only. The MCP server passes it to the installer in a
 temporary file, and the installer deletes that file as soon as it has read it.
 
+### Models you already have
+
+If a model is already on your disk, answer its question with its folder instead of *y*: you can drag the folder into
+the installer's window. Any of these works:
+
+- another AI Remove install, or its `models` folder;
+- a Hugging Face cache (`~/.cache/huggingface/hub`), where the models are kept as `models--<org>--<name>`;
+- ComfyUI's `models` folder (FLUX's GGUF in `models/unet`);
+- the model's own folder.
+
+The installer looks a few levels down, checks the files the same way the app does, and tells you what it found. A part
+it does not find there is downloaded, for example FLUX's text encoders when only its GGUF is in ComfyUI. What it found is
+used where it is: nothing is copied, and uninstalling AI Remove leaves that folder alone. The folders are recorded in
+`airemove.json` (`model_paths`), so keep them where they are.
+
+Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/huggingface/hub`.
+
 ## Models
 
 | Model | Best for | Size | Licence |
 |---|---|---|---|
 | LaMa | Small and medium objects on plain backgrounds; runs on the processor in seconds | 0.2 GB | Apache-2.0 |
-| SDXL Inpainting | Medium areas with detail; every variant differs; ~8–15 s each on a GPU | 6.9 GB | CreativeML Open RAIL++-M |
-| FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | 16.6 GB | FLUX.1 [dev] Non-Commercial |
-| SAM 3 | One-click selection | 3.4 GB (0 if LightCraft has it) | SAM License (Meta) |
+| SDXL Inpainting | Medium areas with detail; every variant differs; ~8–15 s each on a GPU | 6.8 GB | CreativeML Open RAIL++-M |
+| FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | 16.4 GB | FLUX.1 [dev] Non-Commercial |
+| SAM 3 | One-click selection (without it: the brush) | 3.2 GB (0 if LightCraft has it) | SAM License (Meta) |
 | OSOR (optional, on FLUX) | The object with its shadow and reflection, one step (~3–8 s); finds the shadow for "Include the shadow" | 0.6 GB | FLUX.1 [dev] Non-Commercial |
 | ObjectClear (optional) | The object with its shadow and reflection, ~5 s per variant, 512 px | 7.3 GB | S-Lab License 1.0 (non-commercial) |
+
+The installer shows the same descriptions, sizes and licences (from `airemove/model_files.py`).
 
 An optional prompt **in English** guides SDXL and FLUX, for example "old plaster wall" or "dark doorway".
 
@@ -211,7 +232,7 @@ LightCraft runs, any program on your computer can drive it. Uninstalling turns t
 
 | Path | What |
 |---|---|
-| `airemove/` | The app: `airemove.py` (session, LightCraft bridge, RAW pipeline, CLI), `ui.py` (Tk window), `engines.py` (SAM 3, LaMa, SDXL, FLUX), `rawdng.py` (DNG read/write, sensor noise), `blend.py` (seamless blending), `project.py` (`.airemove` files), `system.py` (per-OS paths, LightCraft discovery), `i18n.py` + `locales/` (translations) |
+| `airemove/` | The app: `airemove.py` (session, LightCraft bridge, RAW pipeline, CLI), `ui.py` (Tk window), `engines.py` (SAM 3, LaMa, SDXL, FLUX), `model_files.py` (each model's files, sizes and licence, and where they are), `rawdng.py` (DNG read/write, sensor noise), `blend.py` (seamless blending), `project.py` (`.airemove` files), `system.py` (per-OS paths, LightCraft discovery), `i18n.py` + `locales/` (translations) |
 | `installer/` | `bootstrap.ps1` / `bootstrap.sh` (fetch uv, then run `install.py`), `install.py` (standard library only), `fetch_models.py` |
 | `mcp/` | The MCP server and its launchers |
 | `assets/icon/` | The icon, and how it was made ([assets/icon/README.md](assets/icon/README.md)) |

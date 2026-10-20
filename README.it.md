@@ -57,7 +57,8 @@ Decomprimi la cartella dove vuoi e fai doppio clic sul file del tuo sistema:
 L'installer:
 
 1. riconosce la scheda video;
-2. ti chiede quali modelli installare, mostrando il peso e la licenza di ciascuno;
+2. ti chiede quali modelli installare, mostrando a cosa serve ciascuno, quanto pesa e la sua licenza. Se un modello
+   ce l'hai già sul disco, puoi indicare la sua cartella invece di riscaricarlo (vedi sotto);
 3. scarica Python e PyTorch nella cartella `AIRemove` della tua home;
 4. crea il programma "AI Remove" con la sua icona (menu Start, Applicazioni o menu delle app);
 5. configura LightCraft: attiva il suo canale di controllo, imposta AI Remove come editor esterno e assegna la
@@ -85,14 +86,31 @@ questo passaggio più tardi, con `installer/bootstrap.ps1 --configure-lightcraft
 
 Senza SAM 3 la selezione si fa col pennello, oppure con una maschera chiamata "Rimuovi" (o "Remove") fatta in LightCraft.
 
+### Modelli che hai già
+
+Se un modello è già sul tuo disco, alla sua domanda rispondi con la cartella invece di *s*: puoi trascinarla nella
+finestra dell'installer. Va bene:
+
+- un'altra installazione di AI Remove, o la sua cartella `models`;
+- la cache di Hugging Face (`~/.cache/huggingface/hub`), dove i modelli stanno in cartelle `models--<autore>--<nome>`;
+- la cartella `models` di ComfyUI (il GGUF di FLUX in `models/unet`);
+- la cartella del modello stesso.
+
+L'installer guarda anche qualche livello più sotto, controlla i file come fa l'app e ti dice cosa ha trovato. Quello che
+lì non c'è lo scarica: per esempio gli encoder di testo di FLUX, se in ComfyUI c'è solo il suo GGUF. Quello che trova
+lo usa dov'è: non copia niente, e disinstallare AI Remove non tocca quella cartella. Le cartelle restano scritte in
+`airemove.json` (`model_paths`), quindi non spostarle.
+
+Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/huggingface/hub`.
+
 ## I modelli
 
 | Modello | Quando usarlo | Peso | Licenza |
 |---|---|---|---|
 | **LaMa** | Oggetti piccoli e medi su sfondi semplici (muro, cielo, prato, asfalto). Gira sul processore, un solo risultato in pochi secondi. | 0,2 GB | Apache-2.0 |
-| **SDXL** | Aree medie con dettagli: inventa contenuto coerente con la scena e ogni variante è diversa. Circa 8–15 s a variante con una GPU. | 6,9 GB | CreativeML Open RAIL++-M |
-| **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. | 16,6 GB | FLUX.1 [dev] Non-Commercial |
-| **SAM 3** | La selezione con un clic. | 3,4 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
+| **SDXL** | Aree medie con dettagli: inventa contenuto coerente con la scena e ogni variante è diversa. Circa 8–15 s a variante con una GPU. | 6,8 GB | CreativeML Open RAIL++-M |
+| **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. | 16,4 GB | FLUX.1 [dev] Non-Commercial |
+| **SAM 3** | La selezione con un clic (senza, si usa il pennello). | 3,2 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
 | **OSOR** (facoltativo, su FLUX) | Toglie l'oggetto insieme alla sua ombra e al riflesso, in un solo passo (3–8 s). È lui che trova l'ombra per "Includi l'ombra". | 0,6 GB | FLUX.1 [dev] Non-Commercial |
 | **ObjectClear** (facoltativo) | Toglie l'oggetto insieme alla sua ombra e al riflesso, circa 5 s a variante, a 512 px. | 7,3 GB | S-Lab License 1.0 (non commerciale) |
 
