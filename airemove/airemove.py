@@ -1393,16 +1393,28 @@ class Session:
         own = {"sdxl": engines.SDXL.S, "objectclear": engines.ObjectClear.S, "qwen": engines.QWEN_SIZE}
         return side / own.get(model, 512)
 
-    def can_refine(self, r):
-        """Whether "Full detail" would redraw r's chosen variant sharper: a long removal's variant drawn smaller than
-        the photo (more than 1.6 times), not redrawn already."""
+    def refine_check(self, r):
+        """Whether "Full detail" would redraw r's chosen variant sharper — a long removal's variant drawn smaller than
+        the photo (more than 1.6 times), not redrawn already — and why not, for the window: (ok, why) with why one of
+        "ok", "none" (no variant chosen), "done" (redrawn already), "model" (no FLUX nor SDXL), "shape" (not a long
+        removal: in squares a person's or a car's hole gets pieces of things drawn in it) or "sharp" (drawn near the
+        photo's resolution already)."""
         label = r.chosen_label()
-        if label is None or label.endswith(REFINED) or self.refine_model() is None or not self.long(r):
-            return False
+        if label is None:
+            return False, "none"
+        if label.endswith(REFINED):
+            return False, "done"
+        if self.refine_model() is None:
+            return False, "model"
+        if not self.long(r):
+            return False, "shape"
         f = r.scale.get(label)  # unknown for variants of a reopened project: made in one pass
         if f is None:
             f = self.enlarged(r, LABEL_MODELS.get(label.split()[0], "lama"))
-        return f > 1.6
+        return (True, "ok") if f > 1.6 else (False, "sharp")
+
+    def can_refine(self, r):
+        return self.refine_check(r)[0]
 
     def refine_seconds(self, r):
         model = self.refine_model()
