@@ -170,9 +170,9 @@ Qwen-Image it names what to remove, when it recognised it wrongly ("the lamp pos
 | Select an object | click | click |
 | Take a part out / add a part | Alt+click / Shift+click | Option+click / Shift+click |
 | SAM click / Brush / Eraser | S / B / E | S / B / E |
-| Brush size | `[` `]` or Alt+wheel | `[` `]` or Option+wheel |
+| Brush / Eraser size | `[` `]` or Ctrl+wheel | `[` `]` or Cmd+wheel |
 | Drop an object from the selection | right-click | right-click (or Control+click) |
-| Zoom | Ctrl+wheel, `+` `−`, `0` = fit | Cmd+wheel, `+` `−`, `0` = fit |
+| Zoom | Ctrl+wheel (Alt+wheel with the Brush or Eraser), `+` `−`, `0` = fit | Cmd+wheel (Option+wheel with the Brush or Eraser), `+` `−`, `0` = fit |
 | Pan | wheel, middle button, Space+drag | two fingers, Space+drag |
 | Undo | Ctrl+Z | Cmd+Z |
 | Compare with the original | hold "Original" or `\` | hold "Original" or `\` |

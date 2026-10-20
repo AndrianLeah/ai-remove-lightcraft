@@ -6,6 +6,7 @@ then "Rimuovi selezione": it becomes removal #n with its own area and its own va
 On the right: the removals; click one to see only its variants, pick one, ask for more or delete it — the other
 removals are not touched. "Salva in LightCraft" writes one DNG with all of them, stacked on the original.
 Zoom: Ctrl+wheel (Cmd+wheel on a Mac) or + / −, 0 = whole photo; pan with the wheel, middle button or Space+drag.
+With the Brush or the Eraser, Ctrl+wheel (Cmd+wheel) sets its size and Alt+wheel (Option+wheel) zooms.
 Hold "Originale" (or \\) to compare with the photo before the removals.
 
 Windows, macOS and Linux: modifiers, mouse buttons and the wheel differ between Tk's backends (see PLATFORM below).
@@ -28,7 +29,7 @@ from scipy import ndimage as ndi
 import airemove as A
 import engines
 import i18n
-from i18n import _, _n
+from i18n import _, _n, N_
 
 # ---------------------------------------------------------------------------------------------- PLATFORM
 MAC, WIN = sys.platform == "darwin", sys.platform == "win32"
@@ -84,6 +85,15 @@ RED = (235, 64, 52)
 SHADOW_RGB = (56, 198, 244)  # the selection's shadow part ("Include the shadow")
 WHITE = (240, 240, 240)
 MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "objectclear", "qwen"]  # tests: remove:n,i / model:i use these indices
+# the models' own names, as the menu shows them (variant labels keep their short ones: airemove.MODELS)
+MODEL_NAMES = {"sdxl": "SDXL", "flux": "FLUX Fill", "lama": "LaMa", "osor": "OSOR", "objectclear": "ObjectClear",
+               "qwen": "Qwen-Image"}
+# the menu: what fills the selection, quickest first, then what takes the object's shadow too
+MODEL_GROUPS = ((N_("Fill the selection"), ("lama", "sdxl", "flux", "qwen")),
+                (N_("Object and its shadow"), ("objectclear", "osor")))
+# what the text field is for: what to put there (SDXL, FLUX Fill), the name of what to remove (Qwen-Image: it names
+# the selection itself, a name corrects it) or nothing (LaMa, OSOR and ObjectClear read no text)
+PROMPT_MODE = {"sdxl": "fill", "flux": "fill", "qwen": "name", "lama": None, "osor": None, "objectclear": None}
 
 
 def outline(u, width=2):
@@ -221,9 +231,9 @@ class Scroll(tk.Frame):
 class Stepper(tk.Frame):
     """−  N  +  (with the Spinbox methods the window uses: get / delete / insert)."""
 
-    def __init__(self, master, value, lo, hi, app):
+    def __init__(self, master, value, lo, hi, app, on_change=None):
         super().__init__(master, bg=CARD)
-        self.lo, self.hi = lo, hi
+        self.lo, self.hi, self.on_change = lo, hi, None
         self.minus = app.button(self, "−", lambda: self.set(self.v - 1), small=True)
         self.minus.pack(side="left")
         self.lbl = tk.Label(self, text="", font=app.f_bold, fg=FG, bg=CARD, width=3)
@@ -231,10 +241,13 @@ class Stepper(tk.Frame):
         self.plus = app.button(self, "+", lambda: self.set(self.v + 1), small=True)
         self.plus.pack(side="left")
         self.set(value)
+        self.on_change = on_change
 
     def set(self, v):
         self.v = int(min(max(int(v), self.lo), self.hi))
         self.lbl.configure(text=str(self.v))
+        if self.on_change:
+            self.on_change()
 
     def get(self):
         return str(self.v)
@@ -281,6 +294,151 @@ class HintEntry(tk.Entry):
         if not super().get() and self.focus_get() is not self:
             self._out()
 
+    def set_hint(self, hint):
+        """Another grey hint, shown at once if the field is empty (also while it is disabled)."""
+        st = self.cget("state")
+        self.configure(state="normal")
+        self.hint = hint
+        if self._ph:
+            super().delete(0, "end")
+            super().insert(0, hint)
+        self.configure(state=st)
+
+    def set_text(self, s):
+        """Replaces what is typed (the hint comes back when s is empty)."""
+        st = self.cget("state")
+        self.configure(state="normal")
+        self._in()
+        super().delete(0, "end")
+        super().insert(0, s)
+        if not s and self.focus_get() is not self:
+            self._out()
+        self.configure(state=st)
+
+
+class ModelPicker(tk.Frame):
+    """The model menu: a button with the chosen model's name, what it is for and its time on this PC; a click opens
+    the list, in two groups, each model with what it is best for (a Combobox line was too short to say it)."""
+
+    def __init__(self, master, app, var):
+        super().__init__(master, bg=BTN, highlightthickness=1, highlightbackground=LINE, cursor="hand2")
+        self.app, self.var, self.k = app, var, app.k
+        self.meta, self.keys, self.pop = {}, [], None
+        k, pad = app.k, int(9 * app.k)
+        self.name = tk.Label(self, font=app.f_bold, fg=FG, bg=BTN, anchor="w")
+        self.time = tk.Label(self, font=app.f_small, fg=DIM, bg=BTN, anchor="e")
+        self.arrow = tk.Label(self, text="▾", font=app.f_txt, fg=FG, bg=BTN)
+        self.use = tk.Label(self, font=app.f_small, fg=DIM, bg=BTN, anchor="w")
+        self.name.grid(row=0, column=0, sticky="w", padx=(pad, 0), pady=(int(5 * k), 0))
+        self.time.grid(row=0, column=1, sticky="e", padx=(int(6 * k), 0), pady=(int(5 * k), 0))
+        self.arrow.grid(row=0, column=2, rowspan=2, padx=pad)
+        self.use.grid(row=1, column=0, columnspan=2, sticky="w", padx=(pad, 0), pady=(0, int(5 * k)))
+        self.columnconfigure(0, weight=1)
+        self.parts = (self, self.name, self.time, self.arrow, self.use)
+        for w in self.parts:
+            w.bind("<Button-1>", lambda e: self.open())
+            w.bind("<Enter>", lambda e: self._paint(BTN_HI))
+            w.bind("<Leave>", lambda e: self._paint(BTN))
+
+    def _paint(self, bg):
+        for w in self.parts:
+            w.configure(bg=bg)
+
+    def set_models(self, meta, keys):
+        """meta: model -> (name, what it is for, time); keys: the models installed, in MODEL_KEYS order."""
+        self.meta, self.keys = meta, keys
+        self.show()
+
+    def show(self):
+        name, use, t = self.meta.get(self.app.model_key(), ("", "", ""))
+        self.name.configure(text=name)
+        self.use.configure(text=use)
+        self.time.configure(text=t)
+
+    def open(self):
+        if self.pop is not None:
+            self.close()
+            return
+        app, k = self.app, self.k
+        top = self.pop = tk.Toplevel(self)
+        top.overrideredirect(True)
+        top.configure(bg=LINE)
+        box = tk.Frame(top, bg=CARD)
+        box.pack(fill="both", expand=True, padx=1, pady=1)
+        width = max(self.winfo_width(), int(360 * k))
+        cur = app.model_key()
+        for title, keys in MODEL_GROUPS:
+            keys = [m for m in keys if m in self.keys]
+            if not keys:
+                continue
+            tk.Label(box, text=_(title).upper(), font=app.f_head, fg=DIM, bg=CARD, anchor="w").pack(
+                fill="x", padx=int(12 * k), pady=(int(9 * k), int(3 * k)))
+            for m in keys:
+                self._row(box, m, m == cur, width - int(44 * k))
+        tk.Frame(box, bg=CARD, height=int(6 * k)).pack()
+        top.update_idletasks()
+        w, h = max(width, top.winfo_reqwidth()), top.winfo_reqheight()
+        x, y = self.winfo_rootx() + self.winfo_width() - w, self.winfo_rooty() + self.winfo_height() + 2
+        if y + h > self.winfo_screenheight() - int(40 * k):  # no room below: it opens upwards
+            y = max(0, self.winfo_rooty() - h - 2)
+        top.geometry(f"{w}x{h}+{max(0, x)}+{y}")
+        top.bind("<Escape>", lambda e: self.close())
+        top.bind("<ButtonPress>", self._outside, add="+")
+        top.focus_force()
+        try:
+            top.grab_set()  # a click anywhere else in the window closes it
+        except tk.TclError:
+            pass
+
+    def _row(self, box, m, on, wrap):
+        app, k = self.app, self.k
+        name, use, t = self.meta[m]
+        bg = CARD_HI if on else CARD
+        f = tk.Frame(box, bg=bg, cursor="hand2")
+        f.pack(fill="x", padx=int(5 * k), pady=1)
+        bar = tk.Frame(f, bg=ACCENT if on else bg, width=max(2, int(3 * k)))
+        bar.pack(side="left", fill="y")
+        txt = tk.Frame(f, bg=bg)
+        txt.pack(side="left", fill="x", expand=True, padx=int(8 * k), pady=int(6 * k))
+        head = tk.Frame(txt, bg=bg)
+        head.pack(fill="x")
+        a = tk.Label(head, text=name, font=app.f_bold, fg=ACCENT if on else FG, bg=bg, anchor="w")
+        a.pack(side="left")
+        b = tk.Label(head, text=t, font=app.f_small, fg=DIM, bg=bg, anchor="e")
+        b.pack(side="right")
+        c = tk.Label(txt, text=app.model_best(m), font=app.f_small, fg=DIM, bg=bg, anchor="w", justify="left",
+                     wraplength=wrap)
+        c.pack(fill="x")
+        ws = (f, txt, head, a, b, c)
+        for w in ws + (bar,):
+            w.bind("<ButtonRelease-1>", lambda e, m=m: self.pick(m))
+            w.bind("<Enter>", lambda e, ws=ws: [x.configure(bg=CARD_HI) for x in ws])
+            w.bind("<Leave>", lambda e, ws=ws, bg=bg: [x.configure(bg=bg) for x in ws])
+
+    def _outside(self, e):
+        t = self.pop
+        if t is None:
+            return
+        x, y = e.x_root, e.y_root
+        if not (t.winfo_rootx() <= x < t.winfo_rootx() + t.winfo_width()
+                and t.winfo_rooty() <= y < t.winfo_rooty() + t.winfo_height()):
+            self.close()
+
+    def pick(self, m):
+        self.close()
+        if m in self.app.model_labels:
+            self.var.set(self.app.model_labels[m])
+        self.app.root.focus_set()
+
+    def close(self):
+        t, self.pop = self.pop, None
+        if t is not None:
+            try:
+                t.grab_release()
+            except tk.TclError:
+                pass
+            t.destroy()
+
 
 
 class App:
@@ -304,6 +462,10 @@ class App:
         self.sam_ready = False
         self.job = None  # progress of the running job
         self.task, self.task_t0 = "", time.time()
+        # the text field holds one of two texts, kept apart: what to put there (SDXL, FLUX Fill) and the name of what
+        # to remove (Qwen-Image); PROMPT_MODE says which one the chosen model reads
+        self.prompt_text, self.prompt_mode = {"fill": "", "name": ""}, "fill"
+        self.qwen_names = {}  # removal id -> what Qwen-Image recognised in its selection
         try:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
@@ -381,19 +543,8 @@ class App:
         st.configure("AI.Vertical.TScrollbar", troughcolor=CARD, background="#3a3a3a", bordercolor=CARD,
                      arrowcolor=DIM, lightcolor="#3a3a3a", darkcolor="#3a3a3a", gripcount=0, arrowsize=int(9 * k))
         st.map("AI.Vertical.TScrollbar", background=[("active", "#4a4a4a")])
-        st.configure("AI.TCombobox", fieldbackground=BTN, background=BTN, foreground=FG, arrowcolor=FG,
-                     bordercolor=LINE, lightcolor=BTN, darkcolor=BTN, selectbackground=BTN, selectforeground=FG,
-                     padding=int(5 * k))
-        st.map("AI.TCombobox", fieldbackground=[("readonly", BTN)], foreground=[("readonly", FG)],
-               selectbackground=[("readonly", BTN)], selectforeground=[("readonly", FG)],
-               background=[("readonly", BTN), ("active", BTN_HI)])
         st.configure("AI.Horizontal.TScale", troughcolor="#3a3a3a", background=ACCENT, bordercolor=CARD,
                      lightcolor=ACCENT, darkcolor=ACCENT, gripcount=0)
-        r.option_add("*TCombobox*Listbox.background", CARD)
-        r.option_add("*TCombobox*Listbox.foreground", FG)
-        r.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
-        r.option_add("*TCombobox*Listbox.selectForeground", "#1b1b1b")
-        r.option_add("*TCombobox*Listbox.font", self.f_txt)
         r.configure(bg=BG)
         r.minsize(int(1100 * k), int(700 * k))
 
@@ -462,29 +613,40 @@ class App:
         self.info_btn.pack(side="right")
         self.info_btn.bind("<Button-1>", lambda e: self.toggle_model_info())
         self.model_var = tk.StringVar()
-        self.model_box = ttk.Combobox(gen, textvariable=self.model_var, state="readonly", style="AI.TCombobox",
-                                      font=self.f_txt)
-        self.model_box.pack(fill="x", pady=(int(3 * k), 0))
+        self.picker = ModelPicker(gen, self, self.model_var)
+        self.picker.pack(fill="x", pady=(int(3 * k), 0))
+        wrap = self.side_w - int(56 * k)
         self.model_info = tk.Label(gen, font=self.f_small, fg=DIM, bg=CARD, justify="left", anchor="w",
-                                   wraplength=self.side_w - int(56 * k))
+                                   wraplength=wrap)
         self.info_pad = tk.Frame(gen, bg=CARD, height=int(10 * k))  # the gap when the description is hidden
         self.show_info = bool(A.setting("model_info", False))
         self.place_model_info()
-        self.model_box.bind("<<ComboboxSelected>>", lambda e: self.root.focus_set())
         self.model_var.trace_add("write", lambda *a: self.on_model_change())  # any change, also from code
-        tk.Label(gen, text=_("What to put there (optional)"), font=self.f_small, fg=DIM, bg=CARD).pack(anchor="w")
-        self.prompt = HintEntry(gen, _("in English, e.g. dark doorway, old plaster wall"), font=self.f_txt, bg=BTN,
-                                fg=FG, insertbackground=FG, relief="flat", highlightthickness=1,
-                                highlightbackground=LINE, highlightcolor=ACCENT)
+        # what the field is for depends on the model (apply_prompt_mode): the label says it
+        self.prompt_lbl = tk.Label(gen, text="", font=self.f_small, fg=DIM, bg=CARD, anchor="w", justify="left",
+                                   wraplength=wrap)
+        self.prompt_lbl.pack(fill="x")
+        self.prompt = HintEntry(gen, "", font=self.f_txt, bg=BTN, fg=FG, insertbackground=FG, relief="flat",
+                                highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
+                                disabledbackground=CARD, disabledforeground="#666666")
         self.prompt.pack(fill="x", pady=(int(3 * k), int(10 * k)), ipady=int(5 * k))
-        vrow = tk.Frame(gen, bg=CARD)
+        # Qwen-Image: what it recognised in the removal shown, which a name in the field corrects
+        self.prompt_note = tk.Label(gen, text="", font=self.f_small, fg=DIM, bg=CARD, anchor="w", justify="left",
+                                    wraplength=wrap)
+        vrow = self.vrow = tk.Frame(gen, bg=CARD)
         vrow.pack(fill="x")
         tk.Label(vrow, text=_("Variants"), font=self.f_small, fg=DIM, bg=CARD).pack(side="left")
-        self.count = Stepper(vrow, int(A.setting("variants", self.args.variants or 4)), 1, 8, self)
+        self.count = Stepper(vrow, int(A.setting("variants", self.args.variants or 4)), 1, 8, self,
+                             on_change=lambda: self.update_more())
         self.count.pack(side="right")
         self.gen_btn = self.button(gen, _("Remove selection") + "  ⏎", self.remove_selection, kind="accent")
         self.gen_btn.configure(state="disabled", font=self.f_bold)
         self.gen_btn.pack(fill="x", pady=(int(12 * k), 0))
+        # the same settings, for the removal shown in the panel: variants of another model, another text, are added
+        # to the ones it has (its selection stays as it was)
+        self.more_btn = self.button(gen, "", self.more, small=True)
+        self.more_btn.configure(state="disabled")
+        self.more_btn.pack(fill="x", pady=(int(6 * k), 0))
         self.refresh_models()
 
         self.rows_hdr, rows = self.section(sp, _("Removals"))
@@ -500,16 +662,17 @@ class App:
         self.vars.pack(fill="both", expand=True)
         vb = tk.Frame(vars_, bg=CARD)
         vb.pack(fill="x", pady=(int(8 * k), 0))
-        self.more_btn = self.button(vb, "＋ " + _("More variants"), self.more, small=True)
-        self.more_btn.configure(state="disabled")
-        self.more_btn.pack(side="left", fill="x", expand=True)
+        # a long removal's variants are drawn smaller than the photo: the chosen one redrawn at its resolution
+        self.hd_btn = self.button(vb, "✦  " + _("Full detail"), self.full_detail, small=True)
+        self.hd_btn.configure(state="disabled")
+        self.hd_btn.pack(side="left", fill="x", expand=True)
         self.del_btn = self.button(vb, _("Delete removal"), self.delete_cur, small=True)
         self.del_btn.configure(state="disabled")
         self.del_btn.pack(side="left", fill="x", expand=True, padx=(int(6 * k), 0))
-        # a long removal's variants are drawn smaller than the photo: the chosen one redrawn at its resolution
-        self.hd_btn = self.button(vars_, "✦  " + _("Full detail"), self.full_detail, small=True)
-        self.hd_btn.configure(state="disabled")
-        self.hd_btn.pack(fill="x", pady=(int(6 * k), 0))
+        # what "Full detail" would do for the removal shown, or why it does not apply to it (refine_note)
+        self.hd_note = tk.Label(vars_, text="", font=self.f_small, fg=DIM, bg=CARD, anchor="w", justify="left",
+                                wraplength=self.side_w - int(56 * k))
+        self.hd_note.pack(fill="x", pady=(int(5 * k), 0))
 
         foot = tk.Frame(sp, bg=SIDE)
         foot.pack(fill="x", pady=(int(14 * k), 0))
@@ -622,21 +785,41 @@ class App:
         self.zsel.reset()
 
     def refresh_models(self):
-        """The menu says what each model is good for and what one variant takes on this PC (from the last runs); the
-        model's name and the details go under it (show_model_info)."""
+        """The menu shows each model by name, what it is for and what one variant takes on this PC (from the last
+        runs); its list says what each one is best for (model_best), the details go under it (show_model_info)."""
         keys = self.model_keys()
         cur = self.model_key() if self.model_var.get() else A.setting("model", keys[0])
         cur = cur if cur in keys else keys[0]
-        self.model_labels = {
-            "sdxl": _("Generative, varied results · ~{time} each", time=self.fmt_s(A.expected("sdxl_variant"))),
-            "flux": _("Most realistic, large areas · ~{time} each", time=self.fmt_s(A.expected("flux_variant"))),
-            "lama": _("Quick fill, plain backgrounds · ~{time}", time=self.fmt_s(A.expected("lama"))),
-            "osor": _("Object + shadow, softer · ~{time} each", time=self.fmt_s(A.expected("osor_variant"))),
-            "objectclear": _("Object + shadow · ~{time} each", time=self.fmt_s(A.expected("objectclear_variant"))),
-            "qwen": _("By name, complex backgrounds · ~{time} each", time=self.fmt_s(A.expected("qwen_variant")))}
-        self.model_box.configure(values=[self.model_labels[k] for k in keys])
+
+        def each(key):
+            return _("~{time} each", time=self.fmt_s(A.expected(key)))
+        self.model_meta = {
+            "lama": ("LaMa", _("Quick fill · plain backgrounds"), "~" + self.fmt_s(A.expected("lama"))),
+            "sdxl": ("SDXL", _("Generative · varied results"), each("sdxl_variant")),
+            "flux": ("FLUX Fill", _("Most realistic · large areas"), each("flux_variant")),
+            "qwen": ("Qwen-Image", _("By name · complex backgrounds"), each("qwen_variant")),
+            "objectclear": ("ObjectClear", _("Object and its shadow"), each("objectclear_variant")),
+            "osor": ("OSOR", _("Object and its shadow · softer"), each("osor_variant"))}
+        # one line per model (tests and the saved setting go by it): its name first
+        self.model_labels = {m: f"{n} · {u} · {t}" for m, (n, u, t) in self.model_meta.items()}
+        self.picker.set_models(self.model_meta, keys)
         self.model_var.set(self.model_labels[cur])
         self.show_model_info()
+
+    def model_best(self, m):
+        """When to choose the model, in the menu's list (short: the details are under the menu, "What it does")."""
+        return {
+            "lama": _("Small or medium objects on a wall, the sky, a lawn, tarmac. One result, in seconds, on the "
+                      "processor."),
+            "sdxl": _("Medium areas with some detail. Every variant is different: make 3–4 and pick one. Your text "
+                      "says what to put there."),
+            "flux": _("Large or difficult areas: architecture, perspective, light. When SDXL invents odd things."),
+            "qwen": _("A person or an object in front of steps, columns, railings: it names what you selected and "
+                      "redraws what is behind it."),
+            "objectclear": _("An object together with its shadow or reflection. Quick; the detail is softer on large "
+                             "areas."),
+            "osor": _("Object, shadow and reflection in one step, on FLUX. For the most detail: \"Include the "
+                      "shadow\", then FLUX Fill.")}[m]
 
     def model_keys(self):
         """Models installed and sensible on this computer (LaMa always)."""
@@ -690,6 +873,92 @@ class App:
     def typing(self):
         return self.root.focus_get() in (self.prompt, self.count)
 
+    def apply_prompt_mode(self):
+        """The text field for the chosen model (PROMPT_MODE): what to put there (SDXL, FLUX Fill), the name of what to
+        remove (Qwen-Image), or disabled (LaMa, OSOR and ObjectClear read no text). The two texts are kept apart, so
+        a name typed for Qwen-Image never reaches SDXL as what to draw."""
+        if not hasattr(self, "prompt"):
+            return
+        m = self.model_key()
+        mode = PROMPT_MODE.get(m)
+        if mode != self.prompt_mode:
+            if self.prompt_mode is not None:
+                self.prompt_text[self.prompt_mode] = self.prompt.get()
+            self.prompt_mode = mode
+            self.prompt.configure(state="normal")
+            self.prompt.set_text(self.prompt_text.get(mode, "") if mode else "")
+        if mode == "fill":
+            self.prompt_lbl.configure(text=_("What to put there (optional)"))
+            self.prompt.set_hint(_("in English, e.g. dark doorway, old plaster wall"))
+        elif mode == "name":
+            self.prompt_lbl.configure(text=_("What to remove (optional: Qwen-Image names it by itself)"))
+            self.prompt.set_hint(_("in English, e.g. the lamp post"))
+        else:
+            self.prompt_lbl.configure(text=_("Text (not used by {model})", model=MODEL_NAMES[m]))
+            self.prompt.set_hint(_("{model} needs no text", model=MODEL_NAMES[m]))
+        self.prompt.configure(state="normal" if mode else "disabled")
+        self.update_prompt_note()
+
+    def update_prompt_note(self):
+        """Under the field, for Qwen-Image: what it recognised in the removal shown (a name typed corrects it)."""
+        r = self.cur
+        what = self.qwen_names.get(r.id) if r is not None and not r.deleted else None
+        text = (_("Recognised in #{id}: {what}. If that is wrong, write the right name above.", id=r.id, what=what)
+                if self.prompt_mode == "name" and what else "")
+        self.prompt_note.configure(text=text)
+        if text:
+            self.prompt_note.pack(after=self.prompt, fill="x", pady=(0, int(10 * self.k)))
+        else:
+            self.prompt_note.pack_forget()
+
+    def prompt_for(self, model):
+        """The text `model` reads: the field when it holds that kind of text, else the one kept for it."""
+        mode = PROMPT_MODE.get(model)
+        if mode is None:
+            return ""
+        return (self.prompt.get() if mode == self.prompt_mode else self.prompt_text.get(mode, "")).strip()
+
+    def update_more(self):
+        """The button under "Remove selection": more variants for the removal shown in the panel, with the model,
+        text and number set above. They are added to the ones it has (any model: SDXL's next to FLUX's); its
+        selection stays as it was."""
+        if not hasattr(self, "more_btn"):
+            return
+        r, m = self.cur, self.model_key()
+        on = r is not None and not r.deleted and not self.writing
+        if not on:
+            text = "＋  " + _("More variants for a removal (choose one below)")
+        elif m == "lama" and any(c[0] == "LaMa" for c in r.candidates):
+            text, on = _("#{id} has LaMa's result already: choose another model", id=r.id), False
+        else:
+            n = 1 if m == "lama" else int(self.count.get())
+            text = "＋  " + _n("{n} more for #{id} with {model}", "{n} more for #{id} with {model}", n, id=r.id,
+                               model=MODEL_NAMES[m])
+        self.more_btn.configure(text=text, state="normal" if on else "disabled")
+
+    def refine_note(self, why):
+        """What "Full detail" would do for the removal shown, or why it does not apply (Session.refine_check)."""
+        r = self.cur
+        label = A.label_text(r.chosen_label()) if r is not None and r.chosen is not None else ""
+        model = MODEL_NAMES.get(self.s.refine_model() or "flux")
+        return {
+            "nosel": _("Full detail: for a long removal (a pole, a cable, a railing), the chosen variant redrawn at "
+                       "the photo's resolution."),
+            "ok": _("Full detail redraws {variant} at the photo's resolution with {model}: sharper all along the "
+                    "removal.", variant=label, model=model),
+            "none": _("Full detail: choose a variant first."),
+            "done": _("{variant} is in full detail already.", variant=label),
+            "model": _("Full detail needs FLUX Fill or SDXL: install one of them."),
+            "shape": _("Full detail is only for long removals (a pole, a cable, a railing): on a person or an object, "
+                       "redrawing in squares invents things."),
+            "sharp": _("Full detail: {variant} is drawn near the photo's resolution already, nothing to gain.",
+                       variant=label)}[why]
+
+    def on_qwen_name(self, data):
+        rid, what = data
+        self.qwen_names[rid] = what
+        self.update_prompt_note()
+
     def update_buttons(self):
         has = self.sel_mask is not None and bool(self.sel_mask.any())
         ready = self.s.raw is not None and not self.writing
@@ -700,9 +969,11 @@ class App:
         self.save_btn.configure(state="normal" if (ready and any(r.chosen is not None for r in live)) else "disabled",
                                 text=_("Update in LightCraft") if self.s.dng_path else _("Save to LightCraft"))
         on = self.cur is not None and not self.cur.deleted and not self.writing
-        self.more_btn.configure(state="normal" if on else "disabled")
+        self.update_more()
         self.del_btn.configure(state="normal" if on else "disabled")
-        self.hd_btn.configure(state="normal" if on and self.s.can_refine(self.cur) else "disabled")
+        ok, why = self.s.refine_check(self.cur) if on else (False, "nosel")
+        self.hd_btn.configure(state="normal" if ok else "disabled")
+        self.hd_note.configure(text=self.refine_note(why))
         if self.shadow_btn is not None:
             self.shadow_btn.configure(state="normal" if (has and ready) else "disabled")
 
@@ -828,6 +1099,10 @@ class App:
                     self.post("job_exact", (_("{task} · step {i}/{total}", task=task, i=step, total=tot),
                                             base_done + secs * step / max(1, tot)))
                 s.run_model(r, model, prompt, progress=prog)
+                if model == "qwen" and not prompt:  # what it recognised by itself (a name typed is the user's)
+                    what = getattr(getattr(s, "qwen", None), "what", None)
+                    if what:
+                        self.post("qwen_name", (r.id, what))
                 self.post("cand", r)
             done += secs
         self.post("models")
@@ -1007,8 +1282,9 @@ class App:
 
     def on_found(self, _data):
         self.title.configure(text=self.s.info['file_name'])
-        self.prompt.delete(0, "end")
-        self.prompt.insert(0, self.s.prompt or "")
+        self.prompt_text["fill"] = self.s.prompt or ""  # "Remove: <text>" on a LightCraft mask: what to put there
+        if self.prompt_mode == "fill":
+            self.prompt.set_text(self.prompt_text["fill"])
 
     def on_base(self, _data):
         b = self.s.base
@@ -1234,6 +1510,7 @@ class App:
         self.fill_tiles()
         self.render_main()
         self.update_buttons()
+        self.update_prompt_note()
 
     def fill_tiles(self):
         for w in self.vars.inner.winfo_children():
@@ -1243,7 +1520,8 @@ class App:
         if r is None:
             return
         if not r.candidates:
-            text = _("Generating the variants…") if self.busy else _("No variants: make new ones with \"More variants\"")
+            text = (_("Generating the variants…") if self.busy else
+                    _("No variants: add some with \"＋ more for #{id}\" under \"Remove selection\"", id=r.id))
             tk.Label(self.vars.inner, text=text, font=self.f_small, fg=DIM, bg=CARD).pack(anchor="w")
             return
         for c in range(2):
@@ -1335,10 +1613,10 @@ class App:
     def place_model_info(self):
         if self.show_info:
             self.info_pad.pack_forget()
-            self.model_info.pack(after=self.model_box, fill="x", pady=(int(6 * self.k), int(10 * self.k)))
+            self.model_info.pack(after=self.picker, fill="x", pady=(int(6 * self.k), int(10 * self.k)))
         else:
             self.model_info.pack_forget()
-            self.info_pad.pack(after=self.model_box, fill="x")
+            self.info_pad.pack(after=self.picker, fill="x")
         self.info_btn.configure(text="ⓘ  " + (_("Hide") if self.show_info else _("What it does")))
 
     def toggle_model_info(self):
@@ -1365,7 +1643,7 @@ class App:
         if self.model_key() == "lama" and any(c[0] == "LaMa" for c in r.candidates):
             self.status.configure(text=_("LaMa always gives the same result: pick SDXL or FLUX for more variants"))
             return
-        self.jobs.put(("more", r, self.n_variants(), self.model_key(), self.prompt.get().strip()))
+        self.jobs.put(("more", r, self.n_variants(), self.model_key(), self.prompt_for(self.model_key())))
         self.busy = True
         self.update_buttons()
 
@@ -1395,7 +1673,7 @@ class App:
         r = self.cur
         if r is None or r.deleted or not self.s.can_refine(r):
             return
-        self.jobs.put(("refine", r, self.prompt.get().strip()))
+        self.jobs.put(("refine", r, self.prompt_for(self.s.refine_model() or "flux")))
         self.busy = True
         self.update_buttons()
 
@@ -1421,6 +1699,7 @@ class App:
             self.fit_rows()
             self.render_main()
         self.update_buttons()
+        self.update_prompt_note()
 
     def n_variants(self):
         try:
@@ -1434,6 +1713,9 @@ class App:
         self.show_model_info()
         if getattr(self, "model_labels", None):
             A.remember("model", self.model_key())
+            self.picker.show()
+            self.apply_prompt_mode()
+            self.update_more()
 
     def include_shadow(self):
         """"Include the shadow": OSOR (or ObjectClear) finds what goes with the selected object — its shadow, its
@@ -1447,7 +1729,8 @@ class App:
     def remove_selection(self):
         if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None:
             return
-        self.jobs.put(("new", self.sel_mask.copy(), self.n_variants(), self.model_key(), self.prompt.get().strip()))
+        self.jobs.put(("new", self.sel_mask.copy(), self.n_variants(), self.model_key(),
+                       self.prompt_for(self.model_key())))
         self.ops, self.history, self.pending = [], [], {}
         self.busy = True
         self.render_main()
@@ -1492,8 +1775,8 @@ class App:
             self.canvas_sel.delete("cursor")
         else:
             what = _("Brush: paint what goes") if name == "brush" else _("Eraser: paint what stays")
-            self.hint_lbl.configure(text=what + "  ·  " + _("{alt}: swaps  ·  [ ]: size  ·  {mod}+wheel: zoom",
-                                                            alt=ALT, mod=MOD))
+            self.hint_lbl.configure(text=what + "  ·  " + _("{alt}: swaps  ·  {mod}+wheel or [ ]: size  ·  "
+                                                            "{alt}+wheel: zoom", alt=ALT, mod=MOD))
 
     def on_size_scale(self, v):
         if getattr(self, "_scale_busy", False):
@@ -1658,9 +1941,10 @@ class App:
         ctrl, shift, alt = mods(e)
         if w is self.canvas_sel:
             x, y = e.x_root - w.winfo_rootx(), e.y_root - w.winfo_rooty()
-            if alt and self.tool != "sam":
+            painting = self.tool != "sam"
+            if painting and ctrl:  # Brush / Eraser: Ctrl+wheel (Cmd on a Mac) sets its size, Alt+wheel zooms
                 self.brush_size(1.15 ** steps)
-            elif ctrl:
+            elif ctrl or (painting and alt):
                 self.zsel.zoom(1.25 ** steps, x, y)
             elif shift:
                 self.zsel.pan(steps * 80 * self.k, 0)
@@ -1714,7 +1998,8 @@ class App:
         """Tests: drive the window through the real handlers. Actions (coordinates normalized to the photo):
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
         snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear/5 qwen] · more:n · pick:i ·
-        detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit"""
+        detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit ·
+        menu (opens / closes the model list) · wheel:notches,mods (on the photo; mods 1 Ctrl/Cmd, 2 Alt/Option)"""
         if not actions:
             return
         kind, __, arg = actions[0].partition(":")
@@ -1763,7 +2048,11 @@ class App:
             from PIL import ImageGrab
             r = self.root
             r.attributes("-topmost", True)
+            if self.picker.pop is not None:  # the model list stays above the window
+                self.picker.pop.attributes("-topmost", True)
+                self.picker.pop.lift()
             r.update()
+            time.sleep(0.2)  # the screen catches up with Tk
             x, y = r.winfo_rootx(), r.winfo_rooty()
             ImageGrab.grab(bbox=(x, y, x + r.winfo_width(), y + r.winfo_height())).save(
                 A.ROOT / "work" / f"shot-{int(vals[0]) if vals else 0}.png")
@@ -1806,6 +2095,20 @@ class App:
             delay = 300
         elif kind == "info":
             self.toggle_model_info()
+            delay = 200
+        elif kind == "menu":
+            self.picker.open()
+            A.log(f"TEST model list {'open' if self.picker.pop is not None else 'closed'}")
+            delay = 400
+        elif kind == "wheel":
+            c = self.canvas_sel
+            m = int(vals[1]) if len(vals) > 1 else 0
+            state = (0x4 if m & 1 else 0) | (ALT_MASK if m & 2 else 0)
+            e = type("E", (), {"x_root": c.winfo_rootx() + c.winfo_width() // 2,
+                               "y_root": c.winfo_rooty() + c.winfo_height() // 2,
+                               "delta": (4 if MAC else 120) * vals[0], "state": state})()
+            self.on_wheel(e)
+            A.log(f"TEST wheel {vals[0]:+.0f} mods {m}: tool {self.tool} | brush {self.brush:.4f} | zoom {self.zsel.z:.2f}")
             delay = 200
         elif kind == "pick":
             self.choose(int(vals[0]))

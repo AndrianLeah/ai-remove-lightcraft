@@ -131,9 +131,9 @@ Qwen-Image dice cosa togliere, se lo ha riconosciuto male ("the lamp post").
 | Seleziona un oggetto | clic | clic |
 | Togli una parte / aggiungi una parte | Alt+clic / Shift+clic | Option+clic / Shift+clic |
 | Pennello / Gomma / Clic SAM | B / E / S | B / E / S |
-| Dimensione del pennello | `[` `]` oppure Alt+rotella | `[` `]` oppure Option+rotella |
+| Dimensione di Pennello / Gomma | `[` `]` oppure Ctrl+rotella | `[` `]` oppure Cmd+rotella |
 | Elimina un oggetto dalla selezione | clic destro | clic destro (o Ctrl+clic) |
-| Zoom | Ctrl+rotella, `+` `−`, `0` = adatta | Cmd+rotella, `+` `−`, `0` = adatta |
+| Zoom | Ctrl+rotella (Alt+rotella con Pennello o Gomma), `+` `−`, `0` = adatta | Cmd+rotella (Option+rotella con Pennello o Gomma), `+` `−`, `0` = adatta |
 | Sposta la vista | rotella, tasto centrale, Spazio+trascina | due dita, Spazio+trascina |
 | Annulla | Ctrl+Z | Cmd+Z |
 | Confronta con l'originale | tieni premuto "Originale" o `\` | tieni premuto "Originale" o `\` |
