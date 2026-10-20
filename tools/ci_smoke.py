@@ -5,6 +5,8 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                usable, LightCraft not connected; uv in DIR/bin, the menu entry / app made
   ci_smoke.py mcp DIR          the MCP server over stdio through its launcher (mcp/run_mcp.cmd|sh), AIREMOVE_HOME=DIR:
                                initialize, tools/list, check_system (which must see whether DIR is installed)
+  ci_smoke.py remove DIR       one removal end to end with the install's Python and code, LightCraft left out:
+                               tools/ci_removal.py (a synthetic raw DNG, LaMa, the blend, the DNG and the project)
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
                                app, its menu entry and, on Windows, its Settings > Apps entry are gone
 Exit status 1 at the first check that fails. Standard library only.
@@ -126,6 +128,13 @@ def mcp(d):
         expect((app.get("lightcraft") or {}).get("connected") is False, "check_system app_check: LightCraft not connected")
 
 
+def remove(d):
+    py = d / "venv" / ("Scripts/python.exe" if WIN else "bin/python")
+    expect(py.exists(), f"{py} exists")
+    r = run([py, ROOT / "tools" / "ci_removal.py", d])
+    expect(r.returncode == 0, f"removal end to end: exit status 0 (it was {r.returncode})")
+
+
 def uninstall(d):
     shortcut = config(d).get("shortcut")
     script = d / {"windows": "Uninstall AI Remove.cmd", "macos": "Uninstall AI Remove.command"}.get(OS, "uninstall.sh")
@@ -149,13 +158,13 @@ def uninstall(d):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in ("check", "mcp", "uninstall"):
+    if len(sys.argv) != 3 or sys.argv[1] not in ("check", "mcp", "remove", "uninstall"):
         print(__doc__)
         return 2
     d = Path(sys.argv[2]).expanduser().resolve()
     print(f"{sys.argv[1]} {d}")
     try:
-        {"check": check, "mcp": mcp, "uninstall": uninstall}[sys.argv[1]](d)
+        {"check": check, "mcp": mcp, "remove": remove, "uninstall": uninstall}[sys.argv[1]](d)
     except Failed as e:
         print("  FAIL " + str(e), flush=True)
         return 1

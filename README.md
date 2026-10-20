@@ -204,7 +204,7 @@ LightCraft runs, any program on your computer can drive it. Uninstalling turns t
 | `installer/` | `bootstrap.ps1` / `bootstrap.sh` (fetch uv, then run `install.py`), `install.py` (standard library only), `fetch_models.py` |
 | `mcp/` | The MCP server and its launchers |
 | `assets/icon/` | The icon, and how it was made ([assets/icon/README.md](assets/icon/README.md)) |
-| `tools/` | `build_dist.py` (release packages), `i18n_check.py` (translation catalogs) |
+| `tools/` | `build_dist.py` (release packages), `check_dist.py` (checks them), `i18n_check.py` (translation catalogs), `ci_smoke.py` and `ci_removal.py` (CI: a real install, then one removal end to end) |
 
 Run from source with an install's Python:
 
@@ -212,11 +212,16 @@ Run from source with an install's Python:
 ~/AIRemove/venv/bin/python airemove/airemove.py --check
 ```
 
-Build the release zips into `dist/`:
+Build the release zips into `dist/` and check them:
 
 ```bash
 python tools/build_dist.py
+python tools/check_dist.py
 ```
+
+Releases are built by GitHub Actions (`.github/workflows/release.yml`). Set `VERSION` in `airemove/system.py`, then
+push a tag `v<VERSION>`: the workflow builds the four packages from the tag, checks them, writes `SHA256SUMS` and
+attaches everything to a draft release. Write its notes on GitHub, then publish it.
 
 ## Licences
 

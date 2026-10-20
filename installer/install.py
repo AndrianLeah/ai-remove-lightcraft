@@ -801,34 +801,39 @@ def main():
                                             "LightCraft)")))
     lc_sam = (system.lightcraft_sam3_dir() / "model.safetensors").exists()
 
-    # models: what to download
+    # models: what this folder has already (a re-run keeps it and does not ask about it again), then what to download
+    from fetch_models import complete  # noqa: E402  (next to this file; standard library only)
+    installed = [m for m in MODELS if complete(d / "models", m)]
+    have = set(installed) | {m for m in MODELS if (args.models_from and complete(Path(args.models_from), m)) or
+                             (m == "sam3" and lc_sam)}
     if args.models in (None, "recommended"):
         wanted = recommended_models(flavour, gpu)
         if args.models is None and not args.yes:
             wanted = ["lama", "sam3"]
-            if ask(_("Install SDXL ({gb} GB, generative variants on the GPU)?", gb=MODELS["sdxl"][0]),
-                   "sdxl" in recommended_models(flavour, gpu)):
-                wanted.append("sdxl")
-            if flavour != "cpu" and ask(_("Install FLUX too ({gb} GB, the most realistic; it needs a Hugging Face "
-                                          "token and a 12+ GB GPU)?", gb=MODELS["flux"][0]), False):
-                wanted.append("flux")
-            if "flux" in wanted and ask(_("Install OSOR too ({gb} GB: it removes an object together with its "
-                                          "shadow, on FLUX)?", gb=MODELS["osor"][0]), False):
-                wanted.append("osor")
-            if flavour != "cpu" and ask(_("Install ObjectClear too ({gb} GB: it removes an object together with its "
-                                          "shadow and reflection; non-commercial licence)?",
-                                          gb=MODELS["objectclear"][0]), False):
-                wanted.append("objectclear")
+            if installed:
+                out.write("  " + _("already installed, kept: {models}", models=", ".join(installed)))
+
+            def offer(model, question, default=False):
+                if model not in installed and ask(question, default):
+                    wanted.append(model)
+            offer("sdxl", _("Install SDXL ({gb} GB, generative variants on the GPU)?", gb=MODELS["sdxl"][0]),
+                  "sdxl" in recommended_models(flavour, gpu))
+            if flavour != "cpu":
+                offer("flux", _("Install FLUX too ({gb} GB, the most realistic; it needs a Hugging Face token and a "
+                                "12+ GB GPU)?", gb=MODELS["flux"][0]))
+            if flavour != "cpu" and ("flux" in wanted or "flux" in installed):
+                offer("osor", _("Install OSOR too ({gb} GB: it removes an object together with its shadow, on "
+                                "FLUX)?", gb=MODELS["osor"][0]))
+            if flavour != "cpu":
+                offer("objectclear", _("Install ObjectClear too ({gb} GB: it removes an object together with its "
+                                       "shadow and reflection; non-commercial licence)?", gb=MODELS["objectclear"][0]))
     elif args.models == "none":
         wanted = []
     else:
         wanted = [m.strip() for m in args.models.split(",") if m.strip() in MODELS]
-    if "lama" not in wanted and args.models != "none":
-        wanted.insert(0, "lama")
-    from fetch_models import complete  # noqa: E402  (next to this file; standard library only)
-    have = {m for m in MODELS if complete(d / "models", m) or
-            (args.models_from and complete(Path(args.models_from), m)) or (m == "sam3" and lc_sam)}
-    if "osor" in wanted and "flux" not in wanted and "flux" not in have:
+    if args.models != "none":  # LaMa always; what is installed stays (listed below as already there)
+        wanted = [m for m in MODELS if m in wanted or m in installed or m == "lama"]
+    if "osor" in wanted and "flux" not in wanted:
         out.write("  " + _("OSOR runs on FLUX: add flux to the models (it is skipped now)"))
         wanted.remove("osor")
     need = [m for m in wanted if m not in have]
