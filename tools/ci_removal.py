@@ -15,8 +15,10 @@ Checks: the orientation is found; the blown sky renders neutral white (not the m
 give after white balance) and, filled with that white, goes back as the sensor's clipped values; the DNG reads back
 with the export's tags; every sensor value of the disc changed and the disc is gone (its colour is the ground's around
 it, with sensor-like noise); nothing changed outside the removal's area or farther than a few pixels from the disc; the
-project lists the removal; reopened, it rebuilds the same sensor data, and saving again rewrites the same file. Exit
-status 1 at the first check that fails.
+project lists the removal; reopened, it rebuilds the same sensor data, and saving again rewrites the same file. A part
+of a split selection waiting for its model (Session.plan_removal): its area is not rendered until its first variant,
+and it still waits once the project is reopened, where LaMa then makes it. Exit status 1 at the first check that
+fails.
 
   ci_removal.py DIR [--keep FOLDER]    FOLDER: where the photo, base.png, the DNG and the project are left to look
                                        at (default: a temporary folder, deleted)
@@ -305,7 +307,25 @@ def run(d, out):
     expect(dng2 == dng and nid2 == nid and updated2 and "photo.reload" in cmds and "library.import" not in cmds,
            f"saved again: {dng2.name} updated and reloaded (photo {nid2})")
     expect(dng.read_bytes() == before, "the same file, byte for byte")
+
+    # a part that waits for its model ("Split into parts"): its area planned, rendered only at its first variant;
+    # it waits in the project too, and is made after reopening
+    spot = np.zeros_like(sel)
+    sh, sw = sel.shape
+    spot[int(0.75 * sh):int(0.75 * sh) + 24, int(0.2 * sw):int(0.2 * sw) + 24] = True
+    p = s2.plan_removal(spot)
+    expect(not s2.area_ready(p) and not p.candidates and p.chosen is None,
+           f"a part planned as #{p.id}: its area {p.box} not rendered yet, no variant")
+    s2.save_project()
     s2.close()
+    s3 = session(ar, lc.lc, photo, export, base_png, work / "s3")
+    p3 = next((x for x in s3.removals if x.id == p.id), None)
+    expect(p3 is not None and not p3.candidates and tuple(p3.box) == tuple(p.box),
+           "reopened: the part still waits, with its area")
+    s3.ensure_area(p3)
+    s3.run_lama(p3)
+    expect(p3.chosen_label() == LABEL, f"its first variant made after reopening: {p3.chosen_label()}")
+    s3.close()
 
 
 def main():

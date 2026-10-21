@@ -30,8 +30,9 @@ LightCraft must be started with it on — the installer sets LIGHTCRAFT_CONTROL_
 
 usage: airemove.py [PHOTO] [--id PHOTO_ID] [--variants N] a photo LightCraft does not have selected opens on its own
        airemove.py --auto lama|sdxl|rorem|flux|osor|objectclear|qwen[N] [--shadow] [--id PHOTO_ID]
-                                                             no window: one removal from the "Rimuovi" masks with
-                                                             that model, variant N used, written into the DNG;
+                                                             no window: the "Rimuovi" masks removed with that
+                                                             model (far-apart parts each in a removal of its own),
+                                                             variant N used, written into the DNG;
                                                              --shadow: the object's shadow too (as the button)
        airemove.py --check                                   JSON report: GPU, models, LightCraft connection
 """
@@ -664,6 +665,100 @@ def plan_region(raw, mask_e, lum_e, t=None, margin=1.35, square=True, box=None):
     return t, box, reg_mask
 
 
+def split_selection(mask, scale, margin=1.35):
+    """The selection (bool, base.png's frame) as the parts to remove one after another, each in its own area. In one
+    area, a person far on the left and a sign far on the right make that area as wide as the photo, which a model sees
+    at about its own size (~1 Mpx): every part of it filled soft. Apart, each is filled near the model's size.
+    - Parts: the selection's pieces, bits closer than plan_region's edge cover joined.
+    - What a part's fill sees: its area (plan_region's: margin x the extent, at least 384 sensor px). A long part
+      filled in squares along it (tiles.py) sees less, but not with every model (SDXL fills a square area in one
+      pass): its whole area is the safe reckoning, which only makes it come after the parts that area holds.
+    - Two parts that each see some of the other are one (a person and their shadow, a crowd shoulder to shoulder):
+      neither could be filled with the other still there, in sight.
+    - The order lets an area hold only parts filled before it: the window fills them one after another, each from the
+      photo with the earlier ones applied (Session.new_removal), so no fill sees a part still to remove. A part that
+      holds no other comes in reading order.
+    scale: base.png px per sensor px (Session.base_scale). Returns bool masks in that order, whose union is mask."""
+    H, W = mask.shape
+    if not mask.any():
+        return []
+    g = max(6 * scale, 0.004 * max(H, W))  # plan_region's cover of the object's soft edge, in base.png px
+    near = ndi.distance_transform_edt(~mask) <= g
+    lab, n = ndi.label(near)
+    lab[~mask] = 0
+    comps = [(i + 1, sl, lab[sl] == i + 1) for i, sl in enumerate(ndi.find_objects(lab)) if sl is not None]
+
+    def bbox(group):
+        return (min(comps[c][1][0].start for c in group), max(comps[c][1][0].stop for c in group),
+                min(comps[c][1][1].start for c in group), max(comps[c][1][1].stop for c in group))
+
+    def area(group):  # plan_region's area, in base.png px: (y0, y1, x0, x1)
+        by0, by1, bx0, bx1 = bbox(group)
+        by0, by1, bx0, bx1 = by0 - g, by1 + g, bx0 - g, bx1 + g
+        side = min(max(max(by1 - by0, bx1 - bx0) * margin, 384 * scale), min(H, W))
+        h = min(max((by1 - by0) * margin, side), H) if by1 - by0 > side else side
+        w = min(max((bx1 - bx0) * margin, side), W) if bx1 - bx0 > side else side
+        y0 = int(np.clip((by0 + by1 - h) / 2, 0, H - h))
+        x0 = int(np.clip((bx0 + bx1 - w) / 2, 0, W - w))
+        return y0, int(np.ceil(y0 + h)), x0, int(np.ceil(x0 + w))
+
+    def holds(a, group):  # whether area a has a pixel of the group's parts
+        for c in group:
+            __, (ys, xs), m = comps[c]
+            y0, y1, x0, x1 = max(a[0], ys.start), min(a[1], ys.stop), max(a[2], xs.start), min(a[3], xs.stop)
+            if y0 < y1 and x0 < x1 and m[y0 - ys.start:y1 - ys.start, x0 - xs.start:x1 - xs.start].any():
+                return True
+        return False
+
+    groups = [[c] for c in range(len(comps))]
+    while True:
+        areas = [area(gr) for gr in groups]
+        k = len(groups)
+        h = [[i != j and holds(areas[i], groups[j]) for j in range(k)] for i in range(k)]
+        pair = next(((i, j) for i in range(k) for j in range(i + 1, k) if h[i][j] and h[j][i]), None)
+        if pair:
+            i, j = pair
+            groups[i] += groups.pop(j)
+            continue
+        order, left = [], set(range(k))
+        while left:  # each part after those its area holds; among the free ones, in reading order
+            free = [i for i in left if not any(h[i][j] for j in left)]
+            if not free:  # parts holding each other in a ring: one part
+                break
+            i = min(free, key=lambda i: (areas[i][0] // max(1, H // 8), areas[i][2]))
+            order.append(i)
+            left.discard(i)
+        if not left:
+            break
+        ring = sorted(left)
+        groups = [gr for i, gr in enumerate(groups) if i not in left] + [sum((groups[i] for i in ring), [])]
+    return [np.isin(lab, [comps[c][0] for c in groups[i]]) for i in order]
+
+
+def shadows_touching(found, mask, scale, most=4.0):
+    """Of the shadows SAM 3 finds in the photo (Describe "shadow": bool masks, base.png's frame), those of the
+    selection: touching one of its parts (within plan_region's edge cover), and at most `most` times the size of the
+    parts they touch — a person's long shadow at a low sun, not a building's shade a person stands in. Their union
+    outside the selection, or None."""
+    if not found or not mask.any():
+        return None
+    g = max(6 * scale, 0.006 * max(mask.shape))
+    lab, n = ndi.label(mask)
+    sizes = np.bincount(lab.ravel(), minlength=n + 1)
+    near = ndi.distance_transform_edt(~mask, return_indices=True)
+    dist, (iy, ix) = near
+    out = np.zeros_like(mask)
+    for m in found:
+        touch = m & (dist <= g)
+        if not touch.any():
+            continue
+        parts = np.unique(lab[iy[touch], ix[touch]])
+        if m.sum() <= most * sizes[parts[parts > 0]].sum():
+            out |= m
+    out &= ~mask
+    return out if out.any() else None
+
+
 # ------------------------------------------------------------------------------------------------ import into LightCraft
 def import_stacked(lc, pid, info, out_path):
     res = lc.one("library.import", {"paths": [str(out_path)], "mode": "add"})
@@ -1219,6 +1314,19 @@ class Session:
         measured("area", time.time() - t0)
         return r
 
+    def plan_removal(self, mask_e):
+        """A removal for mask_e that waits for its model ("Split selection": one per part, split_selection): its area
+        is planned now and rendered at its first variant, from the photo with the removals before it applied, as a
+        reopened removal's is (_load_area)."""
+        r = Removal(self.next_id, mask_e)
+        self.next_id += 1
+        __, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t, square=False)
+        self._masks(r)
+        r._load = self._load_area
+        self._place(r)
+        self.removals.append(r)
+        return r
+
     def _init_area(self, r, upto=None):
         """The area image (photo with the earlier removals applied: those before `upto`, else all), its masks and
         preview placement. Its blend solver is made at the first blend (Removal.membrane)."""
@@ -1254,6 +1362,9 @@ class Session:
         size = (max(1, X1 - X0), max(1, Y1 - Y0))
         r.base_alpha = self._base_alpha(r, r.alpha)
         keep = r.base_alpha < 0.01
+        if r._src is None and not r.candidates:  # a part still waiting for its model (plan_removal): no preview yet,
+            r.lut = [np.arange(256, dtype=np.uint8)] * 3  # this runs again when its area is rendered (_init_area)
+            return
         if r._src is None and r.candidates:  # a reopened removal: outside its hole a variant IS the area
             label, im = r.candidates[r.chosen if r.chosen is not None else 0]  # (blend.seamless), no render needed
             area = np.asarray(im.convert("RGB"))
@@ -1802,14 +1913,27 @@ class Session:
         e[y0:y1, x0:x1] = a
         return e, box, (a & edge).sum() > 0.005 * edge.sum()
 
-    def find_shadow(self, mask_e, progress=None, margin=SHADOW_MARGIN):
-        """"Includi l'ombra": what OSOR (or ObjectClear) removes together with the selected object — its shadow,
-        its reflection — as a bool mask in base.png's frame, outside the selection; None if there is nothing.
-        The area is the size of a removal's: the smaller the object is in the model's 512/768 px view, the less it
-        sees of its shadow. When the shadow reaches the area's edge, once more in a larger area."""
+    def find_shadow(self, mask_e, progress=None, margin=SHADOW_MARGIN, parts=None):
+        """"Includi l'ombra": what OSOR (or ObjectClear) removes together with the selected objects — their shadows,
+        their reflections — as a bool mask in base.png's frame, outside the selection; None if there is nothing.
+        Looked for part by part (split_selection, as the removals will be made; parts: already split): in one area
+        around people all over a photo, each would be a few pixels in the model's view, and so would its shadow."""
         model = self.shadow_model()
         if model is None:
             raise Fail(_("Neither OSOR nor ObjectClear is installed: they find the shadow (see the installer)"))
+        parts = split_selection(mask_e, self.base_scale) if parts is None else parts
+        found = [m for m in (self._shadow_of(model, p, progress, margin) for p in parts) if m is not None]
+        if not found:
+            return None
+        m = np.logical_or.reduce(found) & ~mask_e  # one part's shadow is never another part
+        if len(parts) > 1:
+            log(f"shadow: {len(found)} of {len(parts)} parts have one, {int(m.sum())} px")
+        return m if m.any() else None
+
+    def _shadow_of(self, model, mask_e, progress, margin):
+        """One part's shadow (find_shadow). Its area is the size of a removal's: the smaller the object is in the
+        model's 512/768 px view, the less it sees of its shadow. When the shadow reaches the area's edge, once more in
+        a larger area."""
         t0 = time.time()
         eng = self.get_engine(model)
         e, box, beyond = self._shadow_pass(model, eng, mask_e, margin, progress)
@@ -1936,9 +2060,10 @@ def check():
 
 
 def auto(args):
-    """--auto MODEL[N]: no window. One removal from the photo's "Rimuovi" masks, made with MODEL; variant N (default
-    1) is the one used; the result is written and stacked like "Salva in LightCraft". --shadow: the object's shadow and
-    reflection are added to the selection first ("Includi l'ombra"). Prints a JSON line."""
+    """--auto MODEL[N]: no window. The photo's "Rimuovi" masks removed with MODEL, as the window's "Remove selection":
+    far-apart parts each in a removal of its own (split_selection); variant N (default 1) of each is the one used; the
+    result is written and stacked like "Salva in LightCraft". --shadow: the object's shadow and reflection are added to
+    the selection first ("Includi l'ombra"). Prints a JSON line."""
     m = re.fullmatch(rf"({'|'.join(ENGINES)})(\d*)", args.auto.strip().lower())
     if not m:
         raise Fail(_("--auto: {models}, optionally the number of the variant to use (e.g. sdxl2)",
@@ -1957,20 +2082,24 @@ def auto(args):
             shadow = s.find_shadow(sel)
             if shadow is not None:
                 sel = sel | shadow
-        r = s.new_removal(sel)
-        if model == "lama":
-            s.run_lama(r)
-            pick = 1
-        else:
-            for __ in range(pick):
-                s.run_model(r, model, s.prompt)
-        r.chosen, r.user_picked = pick - 1, True
+        made = []
+        for part in split_selection(sel, s.base_scale):  # far-apart parts: removals of their own, one after another
+            r = s.new_removal(part)
+            if model == "lama":
+                s.run_lama(r)
+                pick = 1
+            else:
+                for __ in range(pick):
+                    s.run_model(r, model, s.prompt)
+            r.chosen, r.user_picked = pick - 1, True
+            made.append(r)
         s.save_project()
         out, nid, update = s.write_all()
-        # "dng": the result for any photo (its name since before pictures), "file" the same
+        # "dng": the result for any photo (its name since before pictures), "file" the same; "removal" / "variant":
+        # the first part's (from before selections were split), "removals": every part's
         print(json.dumps({"ok": True, "dng": str(out), "file": str(out), "photo_id": nid, "updated": update,
-                          "removal": r.id,
-                          "variant": r.chosen_label(), "project": str(project.path_for(s.src_path))}), flush=True)
+                          "removal": made[0].id, "removals": [r.id for r in made],
+                          "variant": made[0].chosen_label(), "project": str(project.path_for(s.src_path))}), flush=True)
     finally:
         s.close()
     return 0

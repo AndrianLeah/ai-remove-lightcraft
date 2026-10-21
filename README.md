@@ -20,11 +20,17 @@ JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
 2. Click what should go: SAM 3 selects the whole object. Alt/Option+click takes a part out, Shift+click adds one, and
    the brush and eraser handle the rest. Or **describe** it: type "people" (in English) and SAM 3 selects every
    person in the photo, each on its own, so a right-click drops one you want to keep.
-3. **Remove selection** generates a few variants with the model you chose. Pick the best one. To remove the
-   object's shadow or reflection too, press **Include the shadow** first: it adds them to the selection, in blue.
+3. Select everything in one go, describing it as many times as you like ("person", then "bag", then "sign") and
+   fixing it with the brush and eraser. To remove the objects' shadows or reflections too, press **Include the
+   shadow**: it adds them to the selection, in blue.
+4. **Split into parts** cuts the selection into parts sized for the models: things far apart (a person on the left, a
+   sign on the right) become parts of their own, numbered on the photo, while a crowd or a person and their shadow
+   stay one. Select each part, choose its model (the menu says what each one is good for, and what it is not for:
+   FLUX Fill draws people back into a crowd) and press **Generate**, or **Generate all** for the rest. Pick the best
+   variant of each. **Remove selection** does all of it at once, with one model for every part.
    On a long removal (a pole, a cable, a railing), **Full detail** redraws the chosen variant at the photo's own
    resolution.
-4. **Save to LightCraft** writes `<name>-AIRemove.dng` (from a JPEG: `<name>-AIRemove.jpg`, and so on), stacked on
+5. **Save to LightCraft** writes `<name>-AIRemove.dng` (from a JPEG: `<name>-AIRemove.jpg`, and so on), stacked on
    the original with the same development.
 
 Every removal stays editable: regenerate it, pick another variant or delete it whenever you like. Everything lives in
@@ -49,15 +55,17 @@ embedded preview, which would still show what was removed.
 ## Features
 
 - **One-click selection** with SAM 3, refined with more clicks, a brush and an eraser.
-- **Select by describing:** "people", "car", "sign" selects every instance at once, a crowd included (~0.3 s on a
-  GPU, after a few seconds' load the first time). Where two people touch, no strip between them is left out: like
+- **Select by describing:** "people", "car", "sign" selects every instance at once, a crowd included. SAM 3 looks at
+  the whole photo and at overlapping tiles of it, each near its own size, so people far away are found too (on a
+  park photo: 98 people instead of 39; ~1–2 s on a GPU). Where two people touch, no strip between them is left out: like
   LightCraft's own Describe since 0.11, each person's mask is joined by SAM 3's semantic mask where that person is
   the nearest.
 - **Three fill models.** LaMa is fast and runs on the processor. SDXL Inpainting makes generative variants. FLUX.1 Fill
   [dev] with Turbo-Alpha is the most realistic.
-- **Shadows and reflections (optional).** OSOR and ObjectClear remove an object together with its shadow and
-  reflection, though only the object is selected. "Include the shadow" uses OSOR to add the shadow to the selection,
-  so every model removes it.
+- **Shadows and reflections.** "Include the shadow" adds the selected objects' shadows to the selection, so every
+  model removes them: SAM 3 finds the shadows that touch them (a long shadow at a low sun), and OSOR, if installed,
+  what goes with each object (its shadow, its reflection), part by part. OSOR and ObjectClear (optional) also remove
+  an object together with its shadow and reflection, though only the object is selected.
 - **No person drawn back (optional).** RORem is SDXL Inpainting retrained only to remove: where SDXL draws a person
   or an odd object back into the hole (the other one of two people, the owner of a bag left outside the selection),
   it draws the background. Commercial use allowed, like SDXL.
@@ -70,6 +78,13 @@ embedded preview, which would still show what was removed.
   close to the model's own size, so the fill is not a small picture enlarged; thin ones also get a LaMa variant, which
   continues what is behind them best. **Full detail** redraws the chosen variant the same way, at the photo's
   resolution, keeping what it shows.
+- **One selection for the whole photo.** Far-apart parts of it are removed separately, each in an area of its own
+  near the model's size: a tourist on one side and a sign on the other are each filled as sharp as if selected
+  alone. Parts that would see each other (a person and their shadow, a crowd) stay one removal, and each part sees
+  the ones before it already filled. **Split into parts** shows the parts first, so each gets the model that suits
+  it: RORem for the people, LaMa for a sign on a wall, FLUX Fill for a piece of architecture.
+- **Each model says what it is not for,** in the menu, so the choice is an informed one: FLUX Fill draws people back
+  into a crowd, LaMa blurs large areas, RORem can leave a seam along a pole.
 - **Editable removals,** each with its own variants, kept in a project file; reopening a photo brings them back.
 - **Windows, macOS (Apple Silicon) and Linux,** on NVIDIA, AMD (ROCm), Intel Arc or Apple GPUs. It falls back to
   the processor without one.
@@ -168,16 +183,16 @@ Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache
 
 ## Models
 
-| Model | Best for | Size | Licence |
-|---|---|---|---|
-| LaMa | Small and medium objects on plain backgrounds; runs on the processor in seconds | 0.2 GB | Apache-2.0 |
-| SDXL Inpainting | Medium areas with detail; every variant differs; ~8–15 s each on a GPU | 6.8 GB | CreativeML Open RAIL++-M |
-| RORem (optional, on SDXL's files) | SDXL retrained only to remove: no person or odd object drawn back where SDXL draws one; ~7 s per variant on a GPU. On long thin holes (a pole) SDXL is cleaner | 4.8 GB | Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M |
-| FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | 16.4 GB | FLUX.1 [dev] Non-Commercial |
-| SAM 3 | One-click selection, and selecting by describing ("people"); without it: the brush | 3.2 GB (0 if LightCraft has it) | SAM License (Meta) |
-| OSOR (optional, on FLUX) | The object with its shadow and reflection, one step (~3–8 s); finds the shadow for "Include the shadow" | 0.6 GB | FLUX.1 [dev] Non-Commercial |
-| ObjectClear (optional) | The object with its shadow and reflection, ~5 s per variant, 512 px | 7.3 GB | S-Lab License 1.0 (non-commercial) |
-| Qwen-Image 2.1 Turbo (optional) | Large areas on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~30 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
+| Model | Best for | Not for | Size | Licence |
+|---|---|---|---|---|
+| LaMa | Small and medium objects on plain backgrounds; runs on the processor in seconds | Large areas and structures (doors, windows): it blurs them | 0.2 GB | Apache-2.0 |
+| SDXL Inpainting | Medium areas with detail; every variant differs; ~8–15 s each on a GPU | A person among others: it may draw a person back | 6.8 GB | CreativeML Open RAIL++-M |
+| RORem (optional, on SDXL's files) | People and objects: SDXL retrained only to remove, no person or odd object drawn back where SDXL draws one; ~7 s per variant on a GPU | Long thin holes (a pole): it can leave a seam, SDXL is cleaner | 4.8 GB | Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M |
+| FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | People: in a street or a crowd it draws people back where they were | 16.4 GB | FLUX.1 [dev] Non-Commercial |
+| SAM 3 | One-click selection, and selecting by describing ("people"); without it: the brush | | 3.2 GB (0 if LightCraft has it) | SAM License (Meta) |
+| OSOR (optional, on FLUX) | The object with its shadow and reflection, one step (~3–8 s); finds the shadow for "Include the shadow" | Large areas: softer than FLUX | 0.6 GB | FLUX.1 [dev] Non-Commercial |
+| ObjectClear (optional) | The object with its shadow and reflection, ~5 s per variant, 512 px | Large areas: softer detail | 7.3 GB | S-Lab License 1.0 (non-commercial) |
+| Qwen-Image 2.1 Turbo (optional) | People and objects on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~30 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | When in a hurry: about a minute for a removal's first variant | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
 
 The installer shows the same descriptions, sizes and licences (from `airemove/model_files.py`).
 
