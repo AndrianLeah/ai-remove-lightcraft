@@ -9,7 +9,9 @@ the picture's own pixels are what a RAW's sensor data is, so a removal works on 
     by a level or two;
   - PNG and TIFF: lossless (a compressed TIFF as Deflate);
   - WebP: lossless when the original is, else quality 95;
-  - HEIC and AVIF: quality 90 (an AVIF's untouched pixels move by about a level, its own lossy coding's cost).
+  - HEIC: quality 70. On an iPhone photo: about 1.3 times the original's size, untouched pixels moving by half a level
+    on average (at 90: 2.4 times the size for 0.1 level);
+  - AVIF: quality 90 (its untouched pixels move by about a level at any quality, its own lossy coding's cost).
   The colour profile, the XMP and the EXIF go with it. The EXIF loses its thumbnail, which would still show what
   was removed. TIFFs keep their main tags but not their EXIF directory.
 - 16-bit TIFFs and greyscale pictures stay what they are; an alpha channel is kept unchanged; a palette PNG comes
@@ -260,9 +262,10 @@ class ImageFile:
             kw["pnginfo"] = text
         elif fmt == "WebP":
             kw["lossless"], kw["quality"] = (True, 100) if m.get("lossless") else (False, 95)
-        elif fmt in ("HEIC", "AVIF"):  # an AVIF saved again moves by about a level at any quality: lossy as it is
-            if fmt == "HEIC":
-                heif_available()
+        elif fmt == "HEIC":
+            heif_available()
+            kw["quality"] = 70  # see the module's notes: 90 more than doubled the file for no visible difference
+        elif fmt == "AVIF":
             kw["quality"] = 90
         im.save(out_path, SAVE_AS[fmt], **kw)
 
