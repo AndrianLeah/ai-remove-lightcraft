@@ -570,7 +570,7 @@ def make_shortcuts(d, cfg):
             output(["reg", "add", WIN_UNINSTALL_KEY, "/v", name, "/t", typ, "/d", val, "/f"])
         out.write("  " + _("Start menu: {app} · Settings > Apps: \"AI Remove for LightCraft\" (to uninstall)",
                                 app=APP_NAME))
-        win_project_type(f'"{launcher_exe(d)}" "%1"', str(icon / "airemove.ico"))
+        win_project_type(f'"{launcher_exe(d)}" "%1"', str(icon / "airemove-project.ico"))
         return str(launcher_exe(d))
     if s == "macos":
         app = Path.home() / "Applications" / f"{APP_NAME}.app"
@@ -591,7 +591,7 @@ def make_shortcuts(d, cfg):
         app.parent.mkdir(parents=True, exist_ok=True)
         run(["osacompile", "-o", str(app), str(script)])
         shutil.copyfile(icon / "airemove.icns", app / "Contents" / "Resources" / "applet.icns")
-        mac_project_type(app)
+        mac_project_type(app, icon / "airemove-project.icns")
         # a new icon breaks the applet's signature (it seals its resources): sign it again, ad hoc. Made here, not
         # downloaded, it carries no quarantine, so Gatekeeper lets it run; Apple Silicon needs the valid signature
         output(["codesign", "--force", "--deep", "--sign", "-", str(app)])
@@ -603,10 +603,12 @@ def make_shortcuts(d, cfg):
         return str(app)
     # Linux: a menu entry with the icon in the user's icon theme
     data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    for sz_dir in (icon / "hicolor").iterdir():
-        dst = data / "icons" / "hicolor" / sz_dir.name / "apps"
+    for sz_dir, kind in ((s, k) for s in (icon / "hicolor").iterdir() for k in ("apps", "mimetypes")):
+        if not (sz_dir / kind).is_dir():  # apps: the app's icon; mimetypes: the .airemove files'
+            continue
+        dst = data / "icons" / "hicolor" / sz_dir.name / kind
         dst.mkdir(parents=True, exist_ok=True)
-        for f in (sz_dir / "apps").iterdir():
+        for f in (sz_dir / kind).iterdir():
             shutil.copyfile(f, dst / f.name)
     entry = data / "applications" / "airemove.desktop"
     entry.parent.mkdir(parents=True, exist_ok=True)
@@ -649,20 +651,22 @@ def win_project_type(command=None, icon=None):
     ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)  # SHCNE_ASSOCCHANGED
 
 
-def mac_project_type(app):
-    """macOS: the app declares the .airemove type and opens it (its applet's `on open` gets the file). Written into
-    its Info.plist before the app is signed; LaunchServices is told after."""
+def mac_project_type(app, icns):
+    """macOS: the app declares the .airemove type and opens it (its applet's `on open` gets the file); the files
+    show `icns`, copied into the app as project.icns. Written into the app before it is signed; LaunchServices is
+    told after."""
     import plistlib
+    shutil.copyfile(icns, app / "Contents" / "Resources" / "project.icns")
     plist = app / "Contents" / "Info.plist"
     info = plistlib.loads(plist.read_bytes())
     info.setdefault("CFBundleIdentifier", "com.airemove.app")  # LaunchServices files document types under it
     info["UTExportedTypeDeclarations"] = [{
         "UTTypeIdentifier": MAC_PROJECT_UTI, "UTTypeDescription": _("AI Remove project"),
-        "UTTypeConformsTo": ["public.data"], "UTTypeIconFile": "applet",
+        "UTTypeConformsTo": ["public.data"], "UTTypeIconFile": "project",
         "UTTypeTagSpecification": {"public.filename-extension": ["airemove"]}}]
     info.setdefault("CFBundleDocumentTypes", []).append({
         "CFBundleTypeName": _("AI Remove project"), "CFBundleTypeRole": "Editor", "LSHandlerRank": "Owner",
-        "LSItemContentTypes": [MAC_PROJECT_UTI], "CFBundleTypeIconFile": "applet"})
+        "LSItemContentTypes": [MAC_PROJECT_UTI], "CFBundleTypeIconFile": "project"})
     plist.write_bytes(plistlib.dumps(info))
     out.write("  " + _(".airemove projects: a double-click opens the photo in AI Remove"))
 
@@ -689,7 +693,7 @@ def linux_project_type(data, remove=False):
                        '    <comment>AI Remove project</comment>\n'
                        '    <comment xml:lang="it">Progetto di AI Remove</comment>\n'
                        '    <sub-class-of type="application/zip"/>\n'
-                       '    <icon name="airemove"/>\n'
+                       '    <icon name="airemove-project"/>\n'
                        '    <glob pattern="*.airemove"/>\n'
                        '  </mime-type>\n'
                        '</mime-info>\n', encoding="utf-8")
@@ -940,8 +944,9 @@ def uninstall(d, keep_models, yes):
         win_project_type(None)
     elif s == "linux":
         data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-        for f in (data / "icons" / "hicolor").glob("*/apps/airemove.*"):
-            f.unlink(missing_ok=True)
+        for pattern in ("*/apps/airemove.*", "*/mimetypes/airemove-project.*"):
+            for f in (data / "icons" / "hicolor").glob(pattern):
+                f.unlink(missing_ok=True)
         linux_project_type(data, remove=True)
     keep = {"models"} if keep_models else set()
     left = []

@@ -72,6 +72,34 @@ The icon is drawn on `viewBox="0 0 512 512"`, as a rounded-square tile with `rx=
 5. **Tile.** `source/round_svg.py` and `source/assemble_icon.py` put the trace into the 512 tile, giving
    `airemove.svg`. `airemove.vectorcraft` is that file, as the editable VectorCraft document.
 
+## The project icon (.airemove files)
+
+A photo's project, `<raw>.airemove`, has its own icon, so it reads as AI Remove's file and not as the app.
+
+- **Shape:** a sheet of paper with a folded corner, the way Windows, macOS and Linux show documents.
+- **Colours:** the paper and the ink outline use the palette above; the fold is the paper in shade (`#d6ccb6`).
+- **Middle:** the app's tile, the same drawing as `airemove.svg`.
+
+`source/project_icon.py` makes it from `airemove.svg` in two versions:
+
+- `airemove-project.svg`: 48 px and up.
+- `airemove-project-small.svg`: 16 to 32 px. It has a thicker outline and a bigger tile, because the full one's fine lines vanish at those sizes.
+
+`airemove-project.vectorcraft` is the full one as an editable VectorCraft document, with its parts named (page, fold, app tile). Edited there, it is exported as `airemove-project.svg`. When the raccoon changes, run `project_icon.py` again for both:
+
+```bash
+python source/project_icon.py airemove.svg airemove-project.svg
+python source/project_icon.py airemove.svg airemove-project-small.svg small
+```
+
+The installer gives `.airemove` files this icon:
+
+- **Windows:** `airemove-project.ico`.
+- **macOS:** `airemove-project.icns`, copied into the app as `project.icns` for its document type.
+- **Linux:** `hicolor/*/mimetypes/airemove-project.png`.
+
+The two project SVGs are working files, like the `.vectorcraft` ones: the packages leave them out.
+
 ## Regenerate the files
 
 Edit `airemove.vectorcraft` in VectorCraft and export it as `airemove.svg`. Then run `python build_icons.py`. It needs
@@ -80,4 +108,7 @@ Edit `airemove.vectorcraft` in VectorCraft and export it as `airemove.svg`. Then
 - the PNGs;
 - `airemove.ico`;
 - `airemove.icns`;
-- `hicolor/`.
+- `hicolor/`;
+- the project icon's `airemove-project.ico`, `airemove-project.icns` and `hicolor/*/mimetypes/`.
+
+`python build_icons.py app` or `python build_icons.py project` writes only one of the two.
