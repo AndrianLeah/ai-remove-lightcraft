@@ -30,10 +30,13 @@ The packages were built and checked by GitHub Actions from commit @COMMIT@ ([the
 ## Licences
 
 The models have their own licences:
+- **LaMa:** Apache-2.0
 - **SAM 3:** SAM License
 - **SDXL:** CreativeML Open RAIL++-M
+- **RORem:** Apache-2.0, on SDXL Inpainting (CreativeML Open RAIL++-M)
 - **FLUX.1 [dev] and OSOR:** FLUX.1 [dev] Non-Commercial
 - **ObjectClear:** S-Lab License 1.0, non-commercial. Its code is downloaded at install time, not shipped with AI
   Remove.
+- **Qwen-Image 2.1 Turbo:** Qwen Research License, non-commercial; its text encoder Qwen3-VL: Apache-2.0
 
-See `THIRD-PARTY-NOTICES.md` for details.
+For paid work, use LaMa, SDXL or RORem. See `THIRD-PARTY-NOTICES.md` for details.

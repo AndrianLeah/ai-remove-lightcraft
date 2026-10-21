@@ -10,7 +10,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -20,6 +19,8 @@ sys.path.insert(0, str(PKG / "airemove"))
 sys.path.insert(0, str(PKG / "installer"))
 import model_files as mf  # noqa: E402
 import system  # noqa: E402
+
+FILL_MODELS = [m for m in mf.MODELS if m != "sam3"]  # what fills a removal (model_files: the one list; SAM 3 selects)
 
 PROTOCOL = "2025-06-18"
 WIN = system.system() == "windows"
@@ -303,8 +304,8 @@ def open_ai_remove(a):
 def remove_with_masks(a):
     d = install_dir()
     model = str(a.get("model") or "sdxl").lower()
-    if model not in ("lama", "sdxl", "rorem", "flux", "osor", "objectclear", "qwen"):
-        return {"ok": False, "error": "model: lama | sdxl | rorem | flux | osor | objectclear | qwen"}
+    if model not in FILL_MODELS:
+        return {"ok": False, "error": "model: " + " | ".join(FILL_MODELS)}
     args = ["--auto", model + (str(int(a["variant"])) if a.get("variant") else "")]
     if a.get("shadow"):
         args.append("--shadow")
@@ -388,8 +389,7 @@ TOOLS = [
                 "to the download sizes and model licences shown by check_system. Then poll install_status.",
      {"type": "object", "required": ["accept_licenses"], "properties": {
          "accept_licenses": {"type": "boolean", "description": "true = the user accepted sizes and licences"},
-         "models": {"type": "array", "items": {"type": "string", "enum": ["lama", "sam3", "sdxl", "rorem", "flux",
-                                                                             "osor", "objectclear", "qwen"]},
+         "models": {"type": "array", "items": {"type": "string", "enum": list(mf.MODELS)},
                     "description": "default: the recommended ones for this computer"},
          "model_dirs": MODEL_DIRS,
          "hf_token": {"type": "string", "description": "the user's own Hugging Face Read token; only needed for "
@@ -410,10 +410,11 @@ TOOLS = [
                           "prompt>\") are filled with the model and written into <name>-AIRemove.dng, stacked on the "
                           "original (like the window's Save). Can take minutes. Returns the DNG path and photo id.",
      {"type": "object", "properties": {
-         "model": {"type": "string", "enum": ["lama", "sdxl", "rorem", "flux", "osor", "objectclear", "qwen"],
+         "model": {"type": "string", "enum": FILL_MODELS,
                    "description": "osor / objectclear also remove the object's shadow and reflection; qwen removes "
                                   "it by name (a mask's English prompt names it, else Qwen3-VL does); rorem is SDXL "
-                                  "retrained to remove: it draws no person back where SDXL does"},
+                                  "retrained to remove: it draws no person back where SDXL does, and reads no "
+                                  "prompt"},
          "shadow": {"type": "boolean", "description": "first add the object's shadow and reflection to the masks "
                                                       "(needs osor or objectclear installed), then fill with model"},
          "variant": {"type": "integer", "description": "generate this many variants and use the last (default 1)"},

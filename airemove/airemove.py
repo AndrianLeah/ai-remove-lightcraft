@@ -29,10 +29,10 @@ usage: airemove.py [RAW] [--id PHOTO_ID] [--variants N]
                                                              --shadow: the object's shadow too (as the button)
        airemove.py --check                                   JSON report: GPU, models, LightCraft connection
 """
-import argparse, base64, json, os, re, socket, sys, threading, time, traceback, zlib
+import argparse, base64, collections, json, os, re, socket, sys, threading, time, traceback, zlib
 from pathlib import Path
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageFilter
 from scipy import ndimage as ndi
 
 HERE = Path(__file__).resolve().parent
@@ -75,8 +75,29 @@ TILE_WIDE = 0.5
 TILE_BUDGET = 60.0
 REFINE_BUDGET = 150.0
 REFINE_STRENGTH = 0.75  # on the pole: 0.5 kept the variant's blur in places (a grid of strokes on a plain wall)
-TILE_SIZES = {"flux": engines.FLUX_SIZES, "sdxl": (engines.SDXL.S,), "rorem": (engines.SDXL.S,), "lama": (512,),
-              "osor": engines.FLUX_SIZES, "objectclear": (engines.ObjectClear.S,), "qwen": (engines.QWEN_SIZE,)}
+# Every model the app runs, in one place (the window's names and menu: ui.py; downloads and licences: model_files):
+# - label: the first word of its variants' labels ("FLUX 2", stored in projects: never change one);
+# - engine: the engines class it runs on, kept in the Session attribute of the first model using it (OSOR runs on
+#   FLUX's engine with its adapter); None: LaMa, a function;
+# - sizes: what it draws at (tiles.py squares, Session.enlarged);
+# - seed: its seed offset, so that variants of different models for the same removal differ.
+ModelSpec = collections.namedtuple("ModelSpec", "label engine sizes seed")
+ENGINES = {
+    "lama": ModelSpec("LaMa", None, (512,), 0),
+    "sdxl": ModelSpec("SDXL", "SDXL", (engines.SDXL.S,), 0),
+    "rorem": ModelSpec("RORem", "RORem", (engines.SDXL.S,), 5000),
+    "flux": ModelSpec("FLUX", "FLUX", engines.FLUX_SIZES, 1000),
+    "osor": ModelSpec("OSOR", "FLUX", engines.FLUX_SIZES, 2000),
+    "objectclear": ModelSpec("ObjectClear", "ObjectClear", (engines.ObjectClear.S,), 3000),
+    "qwen": ModelSpec("Qwen", "Qwen", (engines.QWEN_SIZE,), 4000),
+}
+# the Session attribute each engine lives in: sdxl, rorem, flux, objectclear, qwen (one loaded at a time)
+ENGINE_ATTRS = {}
+for _m, _s in ENGINES.items():
+    if _s.engine:
+        ENGINE_ATTRS.setdefault(_s.engine, _m)
+del _m, _s
+TILE_SIZES = {m: s.sizes for m, s in ENGINES.items()}
 # SDXL fills a long, thin hole with a long, thin thing (a plank where a cord was, a rod where a pole was), in one pass
 # and more so in squares, measured: its variants stay in one pass. It still redraws for "Full detail" without FLUX.
 TILED_VARIANTS = ("flux", "lama")
@@ -371,7 +392,7 @@ def find_photo(lc, args):
 
 
 def wait_sam(lc):
-    for _ in range(90):
+    for __ in range(90):
         st = lc.one("segment.model.status")
         if not st.get("busy") and not st.get("analyzing"):
             return
@@ -427,9 +448,8 @@ def plan_region(raw, mask_e, lum_e, t=None, margin=1.35, square=True, box=None):
     most the photo's short side. square=False: an object longer than that (a pole as tall as a portrait photo, from
     its lamp to its base) gets an area as long as it needs along that axis — in a square its ends were left out, and
     never removed. Such an area is filled in squares (Session.tile_plan). box: the hole in that area instead."""
-    score = 1.0
     if t is None:
-        t, score = match_orientation(raw.preview_lum(), lum_e)
+        t, __ = match_orientation(raw.preview_lum(), lum_e)
     y0, x0, h, w = raw.frame
     oriented_shape = apply_t(np.zeros((h, w), bool), t).shape
     m = Image.fromarray((mask_e * 255).astype(np.uint8)).resize((oriented_shape[1], oriented_shape[0]), Image.BILINEAR)
@@ -586,14 +606,13 @@ def rect_t(r, shape, t):
     k, flip = t
     if flip:
         x0, x1 = W - x1, W - x0
-    for _ in range(k % 4):  # np.rot90: out[i, j] = a[j, W-1-i]
+    for __ in range(k % 4):  # np.rot90: out[i, j] = a[j, W-1-i]
         y0, y1, x0, x1 = W - x1, W - x0, y0, y1
         H, W = W, H
     return y0, y1, x0, x1
 
 
-MODELS = {"sdxl": "SDXL", "flux": "FLUX", "lama": "LaMa", "osor": "OSOR", "objectclear": "ObjectClear",
-          "qwen": "Qwen", "rorem": "RORem"}
+MODELS = {m: s.label for m, s in ENGINES.items()}  # model -> its variants' label
 LABEL_MODELS = {v: k for k, v in MODELS.items()}  # a variant label's first word -> its model
 
 
@@ -662,7 +681,9 @@ class Session:
 
     def __init__(self, lc, args):
         self.lc, self.args = lc, args
-        self.raw = self.info = self.sam = self.sdxl = self.flux = self.objectclear = self.qwen = self.rorem = None
+        self.raw = self.info = self.sam = None
+        for attr in ENGINE_ATTRS.values():  # self.sdxl, self.flux, ...: the engine loaded, if any
+            setattr(self, attr, None)
         self.removals, self.next_id = [], 1
         self.seed = int(time.time()) % 100000
         self._engine_lock = threading.RLock()
@@ -696,8 +717,8 @@ class Session:
         self.raw = RawDNG(dng)
         self.t, score = match_orientation(self.raw.preview_lum(), self.lum_e)
         self.gain = self.raw.global_gain()  # one render space for every removal
-        y0, x0, h, w = self.raw.frame
-        oh, ow = apply_t(np.zeros((h, w), bool), self.t).shape
+        __, __, h, w = self.raw.frame
+        __, ow = apply_t(np.zeros((h, w), bool), self.t).shape
         self.base_scale = self.base.width / ow
         log(f"orientation {self.t} (corr {score:.2f}) | gain {self.gain:.2f}")
         self.restore()
@@ -1162,8 +1183,9 @@ class Session:
         """SDXL, RORem, FLUX, ObjectClear or Qwen-Image on the GPU — one at a time (16 GB): switching unloads the
         others, and SAM 3 for FLUX and Qwen-Image. OSOR is FLUX's engine with OSOR's adapter (loaded the first time)."""
         with self._engine_lock:
-            name = "flux" if model == "osor" else model
-            for other in ("sdxl", "rorem", "flux", "objectclear", "qwen"):
+            cls = ENGINES[model].engine
+            name = ENGINE_ATTRS[cls]  # OSOR: FLUX's
+            for other in ENGINE_ATTRS.values():
                 if other != name and getattr(self, other) is not None:
                     getattr(self, other).unload()
                     setattr(self, other, None)
@@ -1172,8 +1194,7 @@ class Session:
                 self.sam = None
             t0 = time.time()
             if getattr(self, name) is None:
-                setattr(self, name, {"sdxl": engines.SDXL, "flux": engines.FLUX, "objectclear": engines.ObjectClear,
-                                     "qwen": engines.Qwen, "rorem": engines.RORem}[name](log))
+                setattr(self, name, getattr(engines, cls)(log))
             if model == "osor" and not self.flux.osor_loaded():
                 self.flux.load_osor(log)
             if time.time() - t0 > 1:
@@ -1227,8 +1248,7 @@ class Session:
         eng = self.get_engine(model)
         k = r.counts.get(model, 0) + 1
         r.counts[model] = k
-        seed = self.seed + 97 * r.id + {"flux": 1000, "osor": 2000, "objectclear": 3000, "qwen": 4000,
-                                        "rorem": 5000}.get(model, 0) + k
+        seed = self.seed + 97 * r.id + ENGINES[model].seed + k
         if model == "flux":  # the text is encoded once per prompt (CPU, slow): not part of a variant's time
             eng.embeddings(f"{prompt}, {engines.DEFAULT_PROMPT}" if prompt else engines.DEFAULT_PROMPT, log)
         elif model == "osor":
@@ -1469,9 +1489,7 @@ class Session:
         side = max(r.reg_mask.shape)
         if model in ("flux", "osor"):
             return side / (engines.FLUX_SIZES[0] if side <= sum(engines.FLUX_SIZES) // 2 else engines.FLUX_SIZES[1])
-        own = {"sdxl": engines.SDXL.S, "rorem": engines.SDXL.S, "objectclear": engines.ObjectClear.S,
-               "qwen": engines.QWEN_SIZE}
-        return side / own.get(model, 512)
+        return side / ENGINES[model].sizes[0]
 
     def refine_check(self, r):
         """Whether "Full detail" would redraw r's chosen variant sharper — a long removal's variant drawn smaller than
@@ -1599,7 +1617,7 @@ class Session:
             if box2[1] - box2[0] > box[1] - box[0]:  # not already the whole photo's height or width
                 log("shadow: it goes beyond the area, looked again in a larger one")
                 e, box = e2, box2
-        y0, y1, x0, x1 = box
+        y0, y1, __, __ = box
         # the effect map is coarse (OSOR: 1/8 of its 512/768 px view, ObjectClear: 1/16 of 512 px): the band of one
         # or two of its cells around the object is its blur, not a shadow
         side = y1 - y0
@@ -1690,8 +1708,7 @@ def check():
         rep["torch_error"] = f"{type(e).__name__}: {e}"
     rep["models"] = engines.available()
     rep["model_folders"] = engines.model_folders()  # parts used from the user's own folders (the rest: models/)
-    rep["usable_models"] = [m for m in ("lama", "sdxl", "rorem", "flux", "osor", "objectclear", "qwen")
-                            if engines.usable(m, rep.get("device", "cpu"))]
+    rep["usable_models"] = [m for m in ENGINES if engines.usable(m, rep.get("device", "cpu"))]
     print(json.dumps(rep, indent=1, ensure_ascii=False))
     return 0
 
@@ -1700,10 +1717,10 @@ def auto(args):
     """--auto MODEL[N]: no window. One removal from the photo's "Rimuovi" masks, made with MODEL; variant N (default
     1) is the one used; the DNG is written and stacked like "Salva in LightCraft". --shadow: the object's shadow and
     reflection are added to the selection first ("Includi l'ombra"). Prints a JSON line."""
-    m = re.fullmatch(r"(lama|sdxl|rorem|flux|osor|objectclear|qwen)(\d*)", args.auto.strip().lower())
+    m = re.fullmatch(rf"({'|'.join(ENGINES)})(\d*)", args.auto.strip().lower())
     if not m:
-        raise Fail(_("--auto: lama | sdxl | rorem | flux | osor | objectclear | qwen, optionally the number of the "
-                     "variant to use (e.g. sdxl2)"))
+        raise Fail(_("--auto: {models}, optionally the number of the variant to use (e.g. sdxl2)",
+                     models=" | ".join(ENGINES)))
     model, pick = m.group(1), max(1, int(m.group(2) or 1))
     if model != "lama" and not engines.usable(model, engines.device()):
         raise Fail(_("{model} is not installed or does not run on this computer (see --check)", model=MODELS[model]))
@@ -1740,8 +1757,7 @@ def main():
     ap.add_argument("raw", nargs="?", help="path passed by LightCraft's external-editor command")
     ap.add_argument("--id", type=int, help="LightCraft photo id (default: the active photo)")
     ap.add_argument("--variants", type=int, default=None, help="variants per removal (window default: last used)")
-    ap.add_argument("--auto", help="no window: lama | sdxl | rorem | flux | osor | objectclear | qwen[N] on the "
-                                   "photo's Rimuovi masks")
+    ap.add_argument("--auto", help=f"no window: {' | '.join(ENGINES)}[N] on the photo's Rimuovi masks")
     ap.add_argument("--shadow", action="store_true", help="--auto: remove the object's shadow and reflection too")
     ap.add_argument("--check", action="store_true", help="print a JSON report and exit")
     args = ap.parse_args()

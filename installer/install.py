@@ -518,7 +518,7 @@ def get_models(d, wanted, token, models_from, paths):
     if token:
         env["HF_TOKEN"] = token
     env["PYTHONIOENCODING"] = "utf-8"
-    code, txt = run(cmd, env=env, check=False)
+    __, txt = run(cmd, env=env, check=False)  # what failed is in its MODEL_FAIL lines, not its exit code
     done = re.findall(r"^MODEL_OK (\w+)", txt, re.M)
     failed = re.findall(r"^MODEL_FAIL (\w+) (.*)$", txt, re.M)
     return done, failed
@@ -894,8 +894,7 @@ def uninstall(d, keep_models, yes):
 def parse():
     ap = argparse.ArgumentParser(description="Install AI Remove for LightCraft")
     ap.add_argument("--dir", help="install folder (default: ~/AIRemove)")
-    ap.add_argument("--models", default=None, help="lama,sam3,sdxl,rorem,flux,osor,objectclear,qwen | recommended | "
-                                                             "none")
+    ap.add_argument("--models", default=None, help=",".join(MODELS) + " | recommended | none")
     ap.add_argument("--hf-token", default=None, help="Hugging Face token (only for SAM 3 / FLUX, models with a licence to accept)")
     ap.add_argument("--hf-token-file", default=None, help="file holding the token (read, then deleted: the MCP server uses it)")
     ap.add_argument("--torch", default="auto", choices=["auto"] + list(TORCH_FLAVOURS))

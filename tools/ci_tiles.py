@@ -152,7 +152,7 @@ def main():
     lplan = s.tile_plan(r, "lama")
     expect(lplan is not None, f"LaMa on a {SIDE} px cord: {len(lplan[1]) if lplan else 0} squares of "
                               f"{lplan[1].T if lplan else 0} px")
-    label, im = s.run_lama(r)
+    __, im = s.run_lama(r)
     a = np.asarray(im).astype(np.float64)
     expect(np.array_equal(np.asarray(im)[~hole], src[~hole]), "outside the hole the photo is untouched")
     core = ndi.binary_erosion(hole, iterations=8)
