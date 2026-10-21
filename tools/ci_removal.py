@@ -15,9 +15,8 @@ Checks: the orientation is found; the blown sky renders neutral white (not the m
 give after white balance) and, filled with that white, goes back as the sensor's clipped values; the DNG reads back
 with the export's tags; every sensor value of the disc changed and the disc is gone (its colour is the ground's around
 it, with sensor-like noise); nothing changed outside the removal's area or farther than a few pixels from the disc; the
-project lists the removal; reopened, it rebuilds the same sensor data, and saving again rewrites the same file. The
-preview's tone curve (airemove.tone_curve) follows the photo and ignores a handful of stray pixels. Exit status 1 at
-the first check that fails.
+project lists the removal; reopened, it rebuilds the same sensor data, and saving again rewrites the same file. Exit
+status 1 at the first check that fails.
 
   ci_removal.py DIR [--keep FOLDER]    FOLDER: where the photo, base.png, the DNG and the project are left to look
                                        at (default: a temporary folder, deleted)
@@ -237,6 +236,20 @@ def run(d, out):
                                           f"(made with {NOISE[0]} * signal + {NOISE[1]})")
     clipped_sky(s.raw, cfa0)
 
+    # the preview's tone curve (Session._place, airemove.tone_curve): render values to the photo's, here the photo's
+    # = 0.8 x render + 10 with noise, and 5 stray pixels at 0 that are 183 in the photo (a clipped highlight beside a
+    # man in a Pompeii street did that: the old fit took red 0-160 to 174, and the fill showed red)
+    rng = np.random.default_rng(1)
+    xs = rng.integers(20, 236, 300_000).astype(np.uint8)
+    ys = np.clip(0.8 * xs + 10 + rng.normal(0, 2, xs.size), 0, 255).astype(np.uint8)
+    xs, ys = np.concatenate([xs, np.zeros(5, np.uint8)]), np.concatenate([ys, np.full(5, 183, np.uint8)])
+    lut = ar.tone_curve(xs, ys)
+    err = max(abs(int(lut[v]) - (0.8 * v + 10)) for v in (40, 80, 120, 160, 200))
+    expect(err <= 3 and np.all(np.diff(lut.astype(int)) >= 0),
+           f"tone curve: monotone, within {err:.1f} of the photo's at 40-200, 5 stray pixels ignored")
+    expect(np.array_equal(ar.tone_curve(xs[:100], ys[:100]), np.arange(256)),
+           "tone curve: too few pixels, the identity")
+
     t0 = time.time()
     r = s.new_removal(sel)
     y0, x0 = s.raw.frame[:2]
@@ -307,20 +320,6 @@ def run(d, out):
            f"saved again: {dng2.name} updated and reloaded (photo {nid2})")
     expect(dng.read_bytes() == before, "the same file, byte for byte")
     s2.close()
-
-    # the preview's tone curve (Session._place, airemove.tone_curve): render values to the photo's, here the photo's
-    # = 0.8 x render + 10 with noise, and 5 stray pixels at 0 that are 183 in the photo (a clipped highlight beside a
-    # man in a Pompeii street did that: the old fit took red 0-160 to 174, and the fill showed red)
-    rng = np.random.default_rng(1)
-    xs = rng.integers(20, 236, 300_000).astype(np.uint8)
-    ys = np.clip(0.8 * xs + 10 + rng.normal(0, 2, xs.size), 0, 255).astype(np.uint8)
-    xs, ys = np.concatenate([xs, np.zeros(5, np.uint8)]), np.concatenate([ys, np.full(5, 183, np.uint8)])
-    lut = ar.tone_curve(xs, ys)
-    err = max(abs(int(lut[v]) - (0.8 * v + 10)) for v in (40, 80, 120, 160, 200))
-    expect(err <= 3 and np.all(np.diff(lut.astype(int)) >= 0),
-           f"tone curve: monotone, within {err:.1f} of the photo's at 40-200, 5 stray pixels ignored")
-    expect(np.array_equal(ar.tone_curve(xs[:100], ys[:100]), np.arange(256)),
-           "tone curve: too few pixels, the identity")
 
 
 def main():
