@@ -4,7 +4,8 @@ The photo fills the left side and always shows the result: every removal with it
 remove (Clic SAM: SAM 3 outlines the whole object · Alt/Option+click / Shift+click refine it · Pennello + / Gomma −),
 then "Rimuovi selezione": it becomes removal #n with its own area and its own variants (LaMa + SDXL or FLUX).
 On the right: the removals; click one to see only its variants, pick one, ask for more or delete it — the other
-removals are not touched. "Salva in LightCraft" writes one DNG with all of them, stacked on the original.
+removals are not touched. "Salva in LightCraft" writes one DNG with all of them, stacked on the original; a RAW
+opened on its own ("Apri RAW…", or AI Remove started without LightCraft) gets it next to the file, "Salva come DNG".
 Zoom: Ctrl+wheel (Cmd+wheel on a Mac) or + / −, 0 = whole photo; pan with the wheel, middle button or Space+drag.
 With the Brush or the Eraser, Ctrl+wheel (Cmd+wheel) sets its size and Alt+wheel (Option+wheel) zooms.
 Hold "Originale" (or \\) to compare with the photo before the removals.
@@ -682,7 +683,7 @@ class App:
 
         foot = tk.Frame(sp, bg=SIDE)
         foot.pack(fill="x", pady=(int(14 * k), 0))
-        self.save_btn = self.button(foot, _("Save to LightCraft"), self.save, kind="green")
+        self.save_btn = self.button(foot, self.save_label(), self.save, kind="green")
         self.save_btn.configure(state="disabled", font=self.f_bold)
         self.save_btn.pack(fill="x")
         self.button(foot, _("Close"), self.cancel, kind="ghost", small=True).pack(fill="x", pady=(int(6 * k), 0))
@@ -705,6 +706,10 @@ class App:
             text=_("AI Remove on GitHub: the code, the releases and where to report a problem"))))
         self.title = tk.Label(head, text="", font=self.font(13), fg=FG, bg=BG)
         self.title.pack(side="left", padx=(int(10 * k), 0))
+        self.mode_lbl = tk.Label(head, text="", font=self.f_small, fg=DIM, bg=BG)  # a RAW opened on its own says so
+        self.mode_lbl.pack(side="left", anchor="s", padx=(int(8 * k), 0), pady=(0, int(2 * k)))
+        # another RAW, from anywhere: AI Remove opens again on it (A.reopen), on its own or as LightCraft's photo
+        self.button(head, _("Open RAW…"), self.open_other, small=True).pack(side="left", padx=(int(14 * k), 0))
         # the window's language, far right: as LightCraft's (Auto) or one of ours; it applies at the next opening
         chosen = A.setting("language", "auto")
         self.lang_code = tk.StringVar(value=chosen if chosen in i18n.LANGUAGES else "auto")
@@ -982,7 +987,7 @@ class App:
         self.clear_btn.configure(state="normal" if self.ops else "disabled")
         live = [r for r in self.s.removals if not r.deleted]
         self.save_btn.configure(state="normal" if (ready and any(r.chosen is not None for r in live)) else "disabled",
-                                text=_("Update in LightCraft") if self.s.dng_path else _("Save to LightCraft"))
+                                text=self.save_label())
         on = self.cur is not None and not self.cur.deleted and not self.writing
         self.update_more()
         self.del_btn.configure(state="normal" if on else "disabled")
@@ -999,7 +1004,7 @@ class App:
     def worker(self):
         s = self.s
         try:
-            self.post("task", _("Reading the photo from LightCraft"))
+            self.post("task", _("Reading the RAW") if s.standalone else _("Reading the photo from LightCraft"))
             s.find()
             self.post("found")
             threading.Thread(target=self.sam_worker, daemon=True).start()
@@ -1046,7 +1051,7 @@ class App:
                     self.post("job_part", (_("Looking for the shadow"), 0.0, secs))
                     self.post("shadow", s.find_shadow(mask))
                 elif job[0] == "save":
-                    self.post("job_start", (_("Writing the DNG for LightCraft"), A.expected("save")))
+                    self.post("job_start", (self.save_task(), A.expected("save")))
                     self.post("job_part", (_("Saving"), 0.0, A.expected("save")))
                     self.post("saved", s.write_all())
             except A.Stopped:
@@ -1248,7 +1253,7 @@ class App:
         self.busy = True
         self.job = {"label": label, "total": total, "t0": time.time(), "mode": "timed", "base": 0.0, "secs": 1.0,
                     "t_part": time.time(), "exact": 0.0}
-        if label != _("Writing the DNG for LightCraft"):  # a save is not stopped
+        if label != self.save_task():  # a save is not stopped
             self.stop_btn.pack(side="left", padx=(0, int(10 * self.k)), before=self.status)
         self.update_buttons()
 
@@ -1271,7 +1276,7 @@ class App:
             self.busy = False
             self.stop_btn.pack_forget()
             msg, self.next_status = getattr(self, "next_status", None), None
-            self.set_idle_status(msg or (_("Click something else to remove, or \"Save to LightCraft\"")
+            self.set_idle_status(msg or (_("Click something else to remove, or \"{save}\"", save=self.save_label())
                                          if self.s.removals else _("Click what you want to remove")))
         self.update_buttons()
 
@@ -1302,13 +1307,17 @@ class App:
         """No SAM 3 model: selection with the brush (and LightCraft's "Rimuovi" masks) only."""
         self.tool_btns["sam"].configure(state="disabled")
         self.set_tool("brush")
-        self.set_idle_status(_("SAM 3 is not installed: select with the Brush (or with a \"Remove\" mask in LightCraft)"))
+        self.set_idle_status(_("SAM 3 is not installed: select with the Brush") if self.s.standalone else
+                             _("SAM 3 is not installed: select with the Brush (or with a \"Remove\" mask in LightCraft)"))
 
     def on_models(self, _data):
         self.refresh_models()
 
     def on_found(self, _data):
         self.title.configure(text=self.s.info['file_name'])
+        if self.s.standalone:  # said once, where it stays: what this photo is shown with and where it is saved
+            self.mode_lbl.configure(text=_("on its own: LightCraft's default development · the DNG goes next to "
+                                           "the RAW"))
         self.prompt_text["fill"] = self.s.prompt or ""  # "Remove: <text>" on a LightCraft mask: what to put there
         if self.prompt_mode == "fill":
             self.prompt.set_text(self.prompt_text["fill"])
@@ -1395,11 +1404,52 @@ class App:
     def on_saved(self, data):
         out, __, updated = data
         self.writing, self.dng_dirty = False, False
-        self.set_idle_status((_("{file} updated in LightCraft", file=out.name) if updated else
-                              _("{file} created and stacked on the original in LightCraft", file=out.name)) + " ✓")
+        if self.s.standalone:
+            msg = (_("{file} updated, next to the RAW", file=out.name) if updated else
+                   _("{file} saved next to the RAW", file=out.name))
+        else:
+            msg = (_("{file} updated in LightCraft", file=out.name) if updated else
+                   _("{file} created and stacked on the original in LightCraft", file=out.name))
+        self.set_idle_status(msg + " ✓")
         self.update_buttons()
-        if getattr(self, "quit_after_save", False):
+        if getattr(self, "open_after_save", None) is not None:
+            self.root.after(800, lambda: self.open_now(self.open_after_save))
+        elif getattr(self, "quit_after_save", False):
             self.root.after(800, self.quit)
+
+    def save_label(self):
+        """The save button: into LightCraft (stacked, then updated there) or, on its own, the DNG next to the RAW."""
+        if self.s.standalone:
+            return _("Update the DNG") if self.s.dng_path else _("Save as DNG")
+        return _("Update in LightCraft") if self.s.dng_path else _("Save to LightCraft")
+
+    def save_task(self):
+        return _("Writing the DNG") if self.s.standalone else _("Writing the DNG for LightCraft")
+
+    def open_other(self):
+        """"Open RAW…": another photo, in a new AI Remove (A.reopen); this one offers to save its changes first."""
+        if self.writing or self.extracting:
+            self.status.configure(text=_("One moment: finishing with this photo first"))
+            return
+        path = A.ask_raw(self.root)
+        if path is None:
+            return
+        live = any(not r.deleted and r.chosen is not None for r in self.s.removals)
+        if self.dng_dirty and live:
+            ans = messagebox.askyesnocancel("AI Remove", _("Save the changes to this photo before opening {file}?",
+                                                           file=path.name), parent=self.root)
+            if ans is None:
+                return
+            if ans:
+                self.open_after_save = path
+                self.save()
+                return
+        self.open_now(path)
+
+    def open_now(self, path):
+        A.log(f"opening {path}")
+        A.reopen(path)
+        self.quit()
 
     def on_error(self, msg):
         self.writing = False
@@ -2172,16 +2222,18 @@ class App:
         if self.writing:
             self.status.configure(text=_("Writing the DNG: one moment…"))
             return
-        if self.extracting:  # LightCraft's crop/lens are temporarily neutral: wait for the restore
+        if self.extracting and not self.s.standalone:  # LightCraft's crop/lens are neutral for a moment: wait
             self.status.configure(text=_("Waiting for LightCraft to restore the development…"))
             self.root.after(300, self.cancel)
             return
         live = any(not r.deleted and r.chosen is not None for r in self.s.removals)
         if self.dng_dirty and live:
-            ans = messagebox.askyesnocancel(
-                "AI Remove", _("Update the photo in LightCraft with the latest changes?\n\n(The removals and "
-                               "variants stay saved in the project next to the RAW anyway: opening AI Remove on this "
-                               "photo brings them back.)"), parent=self.root)
+            ask = (_("Save the DNG with the latest changes?\n\n(The removals and variants stay saved in the project "
+                     "next to the RAW anyway: opening AI Remove on this photo brings them back.)")
+                   if self.s.standalone else
+                   _("Update the photo in LightCraft with the latest changes?\n\n(The removals and variants stay "
+                     "saved in the project next to the RAW anyway: opening AI Remove on this photo brings them back.)"))
+            ans = messagebox.askyesnocancel("AI Remove", ask, parent=self.root)
             if ans is None:
                 return
             if ans:

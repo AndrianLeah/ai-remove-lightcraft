@@ -2,8 +2,12 @@
 
 How to use:
   1. In LightCraft select a raw photo and press Ctrl+Shift+X (Cmd+Shift+X on a Mac) = Photo > Edit In > "Open Original
-     in Other Editor (RAW, no copy)": the installer makes AI Remove LightCraft's external editor. AI Remove can also
-     be started on its own (Start menu, Applications, app menu): it always works on LightCraft's active photo.
+     in Other Editor (RAW, no copy)": the installer makes AI Remove LightCraft's external editor.
+     It also works on its own, on a RAW file (open_session): started from the Start menu / Applications / app menu
+     (LightCraft's active photo when LightCraft answers, else a file to pick), on a file given to it (a path; on a
+     Mac, dropped on its icon; a double-clicked .airemove project: its RAW), or with "Open RAW…" in its window.
+     The file is then read through lightcraft-cli, without LightCraft's window (extract_headless: LightCraft must be
+     installed, not open), and the DNG is written next to it.
   2. The AI Remove window (ui.py) shows the whole photo: select what to remove (SAM 3 clicks on the GPU, refine
      with Alt/Shift+click, brush/eraser). Masks named "Rimuovi..." made in LightCraft start the selection.
   3. "Rimuovi selezione" makes a removal (like a Lightroom Generative Remove spot) with its own area and variants
@@ -17,19 +21,20 @@ How to use:
   4. Everything is kept in ONE project file next to the raw (<raw name>.airemove, see project.py), saved after every
      change; reopening AI Remove on the photo (or on its -AIRemove.dng) brings all removals back.
      "Salva in LightCraft" writes the chosen fills into <name>-AIRemove.dng — created and stacked the first time,
-     then always the same file, rewritten and reloaded in LightCraft. The raw is never modified.
+     then always the same file, rewritten and reloaded in LightCraft (on its own: just written next to the raw).
+     The raw is never modified.
 
 It talks to the running LightCraft through LightCraft's control channel (JSON lines on 127.0.0.1, see system.py):
 LightCraft must be started with it on — the installer sets LIGHTCRAFT_CONTROL_PORT for it on every OS.
 
-usage: airemove.py [RAW] [--id PHOTO_ID] [--variants N]
+usage: airemove.py [RAW] [--id PHOTO_ID] [--variants N]   a RAW LightCraft does not have selected opens on its own
        airemove.py --auto lama|sdxl|rorem|flux|osor|objectclear|qwen[N] [--shadow] [--id PHOTO_ID]
                                                              no window: one removal from the "Rimuovi" masks with
                                                              that model, variant N used, written into the DNG;
                                                              --shadow: the object's shadow too (as the button)
        airemove.py --check                                   JSON report: GPU, models, LightCraft connection
 """
-import argparse, base64, collections, json, os, re, socket, sys, threading, time, traceback, zlib
+import argparse, base64, collections, json, os, re, socket, subprocess, sys, threading, time, traceback, zlib
 from pathlib import Path
 import numpy as np
 from PIL import Image, ImageFilter
@@ -48,6 +53,9 @@ from i18n import _  # noqa: E402
 
 SHORTCUT = "Cmd+Shift+X" if system.system() == "macos" else "Ctrl+Shift+X"
 MASK_PREFIXES = ("rimuovi", "remove")
+# raw files a photo opened on its own can be (what LightCraft reads; X-Trans RAF and linear DNGs fail later, clearly)
+RAW_EXTS = (".dng", ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2", ".rwl",
+            ".pef", ".srw", ".3fr", ".fff", ".iiq", ".erf", ".mef", ".mos", ".kdc", ".dcr", ".x3f", ".raw")
 ALL_GROUPS = ["profile", "treatment", "whiteBalance", "light", "toneCurve", "color", "colorMixer", "colorGrading",
               "effects", "vignette", "grain", "detail", "optics", "geometry", "crop", "masks", "spots", "redEye",
               "lensBlur", "calibration"]
@@ -438,9 +446,147 @@ def extract(lc, pid, info, targets, work):
         log("starting mask: from the renders (brush/gradient)")
     if mask_e is not None and mask_e.sum() < 20:
         mask_e = None
+    return mask_e, base_luminance(base_png), dng
+
+
+def base_luminance(base_png):
+    """base.png's linear luminance, for matching it to the sensor (match_orientation)."""
     lum_e = np.asarray(Image.open(base_png).convert("L")).astype(np.float64) / 255.0
-    lum_e = np.where(lum_e <= 0.04045, lum_e / 12.92, ((lum_e + 0.055) / 1.055) ** 2.4)
-    return mask_e, lum_e, dng
+    return np.where(lum_e <= 0.04045, lum_e / 12.92, ((lum_e + 0.055) / 1.055) ** 2.4)
+
+
+# ------------------------------------------------------------------------------------------------ a RAW on its own
+def standalone_info(path):
+    """What find_photo learns from LightCraft, for a RAW opened on its own. A result (<stem>-AIRemove.dng) opens its
+    original next to it, whose project it belongs to."""
+    path = Path(path)
+    if not path.is_file():
+        raise Fail(_("{file} does not exist.", file=str(path)))
+    m = re.match(r"(.+)-AIRemove(?:-\d+)?$", path.stem)
+    if m and path.suffix.lower() == ".dng":
+        orig = next((p for p in sorted(path.parent.iterdir())
+                     if p.stem == m.group(1) and p.suffix.lower() in RAW_EXTS and p.is_file()), None)
+        if orig is None:
+            raise Fail(_("{file} is an AI Remove result, but its original ({stem}) is not next to it: open the "
+                         "original RAW.", file=path.name, stem=m.group(1)))
+        log(f"{path.name} is an AI Remove result: opening its original {orig.name}")
+        path = orig
+    if path.suffix.lower() not in RAW_EXTS:
+        raise Fail(_("{file} is not a RAW: AI Remove works on raw files only.", file=path.name))
+    return {"file_name": path.name, "source": {"path": str(path)}, "develop": {}, "kind": "raw"}
+
+
+def extract_headless(path, work):
+    """base.png and the raw DNG of a RAW opened on its own, from lightcraft-cli (LightCraft installed, its window not
+    needed): the photo with LightCraft's default development, uncropped and without lens and geometry corrections —
+    the frame extract() makes from the running app."""
+    cli = system.lightcraft_cli()
+    if cli is None:
+        raise Fail(_("LightCraft's command line (lightcraft-cli) was not found: AI Remove reads RAW files through "
+                     "it, also with LightCraft closed. Install LightCraft, or open AI Remove from it."))
+    neutral = work / "neutral.json"
+    neutral.write_text(json.dumps({"crop": {"geometry": {"angle": 0.0, "rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0,
+                                                                                 "y1": 1.0}}},
+                                   "optics": {"lens_profile": False, "distortion": 0}, "geometry": NEUTRAL_GEOMETRY}),
+                       encoding="utf-8")
+    base_png, dng = work / "base.png", work / "source.dng"
+    no_window = {"creationflags": 0x08000000} if system.system() == "windows" else {}  # CREATE_NO_WINDOW
+    for out, extra in ((base_png, ["--size", "2400", "--settings", str(neutral)]),
+                       (dng, ["--opt", "dngCompression=uncompressed"])):
+        t0 = time.time()
+        try:
+            p = subprocess.run(cli + ["render", str(path), "-o", str(out)] + extra, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=300, **no_window)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise Fail(_("LightCraft could not read {file}:\n{error}", file=path.name, error=e)) from e
+        if p.returncode or not out.exists():
+            raise Fail(_("LightCraft could not read {file}:\n{error}", file=path.name,
+                         error=(p.stderr or p.stdout).strip()[-400:]))
+        log(f"lightcraft-cli: {out.name} in {time.time() - t0:.1f}s")
+    return None, base_luminance(base_png), str(dng)
+
+
+def lightcraft_has(lc, path):
+    """Whether LightCraft has this file selected (it passes the selected photo's file to its external editor)."""
+    want = os.path.normcase(os.path.abspath(path))
+    sel = lc.state().get("selection") or {}
+    for i in ([sel.get("active")] + list(sel.get("ids") or []))[:50]:
+        if i:
+            p = (lc.one("photo.inspect", {"id": i}).get("source") or {}).get("path", "")
+            if p and os.path.normcase(os.path.abspath(p)) == want:
+                return True
+    return False
+
+
+def ask_raw(parent=None):
+    """A RAW chosen in the system's file dialog (None if cancelled); parent: the window's Tk root, else its own."""
+    import tkinter as tk
+    from tkinter import filedialog
+    root = parent or tk.Tk()
+    if parent is None:
+        root.withdraw()
+    pats = " ".join(f"*{e} *{e.upper()}" for e in RAW_EXTS + (".airemove",))
+    f = filedialog.askopenfilename(parent=root, title=_("Open a RAW photo"), initialdir=setting("last_dir") or None,
+                                   filetypes=[(_("RAW photos and AI Remove projects"), pats), (_("All files"), "*")])
+    if parent is None:
+        root.destroy()
+    if not f:
+        return None
+    remember("last_dir", str(Path(f).parent))
+    return Path(f)
+
+
+def project_raw(path):
+    """The file to open for a path given or picked: a project (<raw>.airemove) stands for its RAW, next to it."""
+    path = Path(path)
+    if path.suffix.lower() != ".airemove":
+        return path
+    raw = project.raw_for(path)
+    if not raw.is_file():
+        raise Fail(_("{file} is the AI Remove project of {raw}, which is no longer next to it: put the RAW back in "
+                     "that folder and open it again.", file=path.name, raw=raw.name))
+    return raw
+
+
+def open_session(args):
+    """The window's session, or None when no photo was chosen:
+    - LightCraft's photo when LightCraft answers and passes it (its external editor: the file is its selection) or,
+      started without a file, has one active: its development shown, the result stacked there;
+    - else a RAW on its own (a file given or picked): read through lightcraft-cli, the DNG written next to it. Also
+      when LightCraft is open but its control channel does not answer: the photo opens anyway.
+    A project (<raw>.airemove: double-clicked, picked) opens its RAW."""
+    if args.id is not None:
+        return Session(LC(), args)
+    path = project_raw(args.raw) if args.raw else None
+    args.raw = str(path) if path else None  # what find_photo looks for in LightCraft's selection
+    if system.lightcraft_reachable():
+        lc = LC()
+        try:
+            if path is None:
+                if (lc.state().get("selection") or {}).get("active"):
+                    return Session(lc, args)
+            elif lightcraft_has(lc, path):
+                return Session(lc, args)
+        except Fail as e:
+            log(f"LightCraft: {e}")
+        lc.close()
+    if path is None:
+        path = ask_raw()
+        if path is None:
+            return None
+        path = project_raw(path)
+    log(f"on its own: {path} (LightCraft {'answers' if system.lightcraft_reachable() else 'does not answer'})")
+    return Session(None, args, path)
+
+
+def reopen(path):
+    """AI Remove again, on another RAW (the window's "Open RAW…"): a new process, so the models and the GPU memory
+    of this one go with it."""
+    exe = Path(sys.executable)
+    if system.system() == "windows" and exe.name.lower() == "python.exe" and exe.with_name("pythonw.exe").exists():
+        exe = exe.with_name("pythonw.exe")  # no console window
+    flags = {"creationflags": 0x00000008 | 0x00000200} if system.system() == "windows" else {"start_new_session": True}
+    subprocess.Popen([str(exe), str(Path(__file__).resolve()), str(path)], close_fds=True, **flags)
 
 
 def plan_region(raw, mask_e, lum_e, t=None, margin=1.35, square=True, box=None):
@@ -679,8 +825,10 @@ def label_text(label):
 class Session:
     """Everything for one photo: the export from LightCraft, the removals, the engines, writing the DNG."""
 
-    def __init__(self, lc, args):
+    def __init__(self, lc, args, path=None):
+        """lc None: a RAW on its own (path), read through lightcraft-cli; the DNG is written next to it only."""
         self.lc, self.args = lc, args
+        self.standalone, self.file = lc is None, path
         self.raw = self.info = self.sam = None
         for attr in ENGINE_ATTRS.values():  # self.sdxl, self.flux, ...: the engine loaded, if any
             setattr(self, attr, None)
@@ -696,25 +844,35 @@ class Session:
     # -------------------------------------------------------------- photo
     def find(self):
         """Which photo (and any "Rimuovi" masks made in LightCraft). Quick; fails early with a clear message."""
-        self.pid, self.info, self.targets, self.prompt = find_photo(self.lc, self.args)
+        if self.standalone:
+            self.pid, self.info, self.targets, self.prompt = None, standalone_info(self.file), [], ""
+        else:
+            self.pid, self.info, self.targets, self.prompt = find_photo(self.lc, self.args)
         self.src_path = Path(self.info["source"]["path"])
         log(f"{self.info['file_name']} (id {self.pid}) | maschere: {', '.join(m['name'] for m in self.targets)}"
             + (f" | prompt: {self.prompt}" if self.prompt else ""))
 
     def prepare(self):
-        """From LightCraft: base.png (whole uncropped photo as developed: what the window shows and where the
-        selection is made), the raw DNG, the Rimuovi masks if any (self.init_mask)."""
+        """From LightCraft (or, on its own, lightcraft-cli): base.png (whole uncropped photo as developed: what the
+        window shows and where the selection is made), the raw DNG, the Rimuovi masks if any (self.init_mask)."""
         lc = self.lc
         if self.info is None:
             self.find()
         self.work = ROOT / "work" / f"{self.src_path.stem}-{time.strftime('%Y%m%d-%H%M%S')}"
         self.work.mkdir(parents=True, exist_ok=True)
-        if self.targets:
-            wait_sam(lc)
-        self.init_mask, self.lum_e, dng = extract(lc, self.pid, self.info, self.targets, self.work)
+        if self.standalone:
+            self.init_mask, self.lum_e, dng = extract_headless(self.src_path, self.work)
+        else:
+            if self.targets:
+                wait_sam(lc)
+            self.init_mask, self.lum_e, dng = extract(lc, self.pid, self.info, self.targets, self.work)
         self.base = Image.open(self.work / "base.png").convert("RGB")
         self.base_arr = np.asarray(self.base)
-        self.raw = RawDNG(dng)
+        try:
+            self.raw = RawDNG(dng)
+        except (ValueError, KeyError, IndexError) as e:  # a 6x6 X-Trans pattern, a linear (demosaiced) DNG...
+            raise Fail(_("AI Remove cannot work on this camera's RAW yet: it needs a sensor with a 2x2 colour "
+                         "pattern (Fuji X-Trans and already demosaiced DNGs are not supported).")) from e
         self.t, score = match_orientation(self.raw.preview_lum(), self.lum_e)
         self.gain = self.raw.global_gain()  # one render space for every removal
         __, __, h, w = self.raw.frame
@@ -1644,7 +1802,8 @@ class Session:
     def write_all(self):
         """The photo with every removal's chosen fill, always into the same <stem>-AIRemove.dng: created, stacked and
         given the original's development the first time; afterwards rewritten and reloaded in LightCraft (its own
-        edits kept). The project file is saved with it. Returns (path, photo id, updated?)."""
+        edits kept). A RAW opened on its own: only written next to it. The project file is saved with it.
+        Returns (path, photo id, updated?)."""
         rs = [r for r in self.removals if not r.deleted and r.chosen is not None]
         if not rs:
             raise Fail(_("No removal to save."))
@@ -1664,6 +1823,18 @@ class Session:
         log(f"{'updated' if update else 'written'} {out} | removals: "
             + ", ".join(f"#{r.id} {r.chosen_label()}" for r in rs)
             + f" | rumore sensore var={self.raw.cached_noise()[0]:.2f}*S+{self.raw.cached_noise()[1]:.0f}")
+        if self.standalone:  # on its own: the file only; a LightCraft id from an earlier save stays for the next one
+            nid = self.dng_id
+            log("saved next to the RAW (opened on its own: not imported into LightCraft)")
+        else:
+            nid = self._to_lightcraft(out, update)
+        self.dng_path, self.dng_id = out, nid
+        self.save_project()
+        measured("save", time.time() - t0)
+        return out, nid, update
+
+    def _to_lightcraft(self, out, update):
+        """The DNG just written, in LightCraft: reloaded where it already is, else imported and stacked. Its id."""
         nid = None
         if update and self.dng_id:
             try:
@@ -1679,10 +1850,7 @@ class Session:
         else:
             nid = import_stacked(self.lc, self.pid, self.info, out)
             log(f"imported into LightCraft (id {nid}), stacked with the original, same development")
-        self.dng_path, self.dng_id = out, nid
-        self.save_project()
-        measured("save", time.time() - t0)
-        return out, nid, update
+        return nid
 
     def close(self):
         if self.raw is not None:
@@ -1694,7 +1862,8 @@ def check():
     """--check: what this install has and whether it can reach LightCraft, as JSON (the installer and the MCP
     server read it)."""
     rep = {"version": system.VERSION, "os": system.system(), "python": sys.version.split()[0], "root": str(ROOT),
-           "port": system.control_port(), "lightcraft_settings": str(system.lightcraft_config_dir())}
+           "port": system.control_port(), "lightcraft_settings": str(system.lightcraft_config_dir()),
+           "lightcraft_cli": " ".join(system.lightcraft_cli() or []) or None}  # RAWs opened on their own: read with it
     try:
         sel = LC().state().get("selection") or {}
         rep["lightcraft"] = {"connected": True, "active_photo": sel.get("active"), "selected": len(sel.get("ids") or [])}
@@ -1754,7 +1923,8 @@ def auto(args):
 
 def main():
     ap = argparse.ArgumentParser(description="AI Remove for LightCraft")
-    ap.add_argument("raw", nargs="?", help="path passed by LightCraft's external-editor command")
+    ap.add_argument("raw", nargs="?", help="a RAW: the one LightCraft passes (its external editor), or any file, "
+                                           "opened on its own")
     ap.add_argument("--id", type=int, help="LightCraft photo id (default: the active photo)")
     ap.add_argument("--variants", type=int, default=None, help="variants per removal (window default: last used)")
     ap.add_argument("--auto", help=f"no window: {' | '.join(ENGINES)}[N] on the photo's Rimuovi masks")
@@ -1767,8 +1937,12 @@ def main():
     log(f"AI Remove {system.VERSION} started ({system.system()})", f"(file: {args.raw})" if args.raw else "")
     if args.auto:
         return auto(args)
+    session = open_session(args)
+    if session is None:  # no photo chosen
+        log("no photo chosen")
+        return 0
     import ui
-    return ui.run(Session(LC(), args), args)
+    return ui.run(session, args)
 
 
 def _quiet_streams():

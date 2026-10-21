@@ -50,6 +50,10 @@ Setup of the server: `mcp/README.md`.
 
 - **For the user:** in LightCraft, select a raw photo and press Ctrl+Shift+X (Cmd+Shift+X on a Mac). Or open
   "AI Remove" from the Start menu / Applications / app menu; it works on LightCraft's active photo.
+- **On its own (no LightCraft window):** `airemove <path to a RAW>`, or the app with LightCraft closed, which asks for
+  a file. It reads the RAW through `lightcraft-cli` (LightCraft must be installed; `LIGHTCRAFT_CLI` points to it
+  elsewhere) with LightCraft's default development, and "Save as DNG" writes `<name>-AIRemove.dng` next to the RAW
+  without importing it. A RAW that is LightCraft's current selection opens as LightCraft's photo instead.
 - **Check:** `~/AIRemove/venv/(Scripts|bin)/airemove-cli --check` prints a JSON report: GPU, models, LightCraft
   connection.
 - **Headless:**
@@ -60,7 +64,8 @@ Setup of the server: `mcp/README.md`.
      ObjectClear installed).
   3. It prints one JSON line with the DNG path and its LightCraft photo id.
 - **Projects:** `<raw>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each
-  raw.
+  raw. The installer registers it as a file type for the user (Windows `HKCU\Software\Classes\.airemove`, macOS the
+  app's Info.plist, Linux `~/.local/share/mime/packages/airemove.xml`): a double-click opens its RAW in AI Remove.
 
 ## Uninstall
 

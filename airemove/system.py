@@ -132,6 +132,29 @@ def lightcraft_app():
     return str(found) if found else None
 
 
+def lightcraft_cli():
+    """The command that runs LightCraft without its window (lightcraft-cli), as an argument list, or None: next to
+    the program LightCraft's installers put (on a Mac inside its app bundle), on the PATH, or the Flatpak's.
+    LIGHTCRAFT_CLI overrides it. AI Remove reads a RAW opened on its own through it."""
+    v = os.environ.get("LIGHTCRAFT_CLI")
+    if v:
+        return [v]
+    app = lightcraft_app()
+    if app and app.startswith("flatpak:"):
+        return ["flatpak", "run", "--command=lightcraft-cli", LIGHTCRAFT_ID]
+    s = system()
+    cands = []
+    if app:
+        a = Path(app)
+        cands.append(a.with_name("lightcraft-cli.exe") if s == "windows" else
+                     a / "Contents" / "MacOS" / "lightcraft-cli" if s == "macos" else a.with_name("lightcraft-cli"))
+    w = shutil.which("lightcraft-cli")
+    if w:
+        cands.append(Path(w))
+    found = next((c for c in cands if c.exists()), None)
+    return [str(found)] if found else None
+
+
 def hard_exit(code=0):
     """End the process now. On Windows not through ExitProcess (os._exit): the AMD ROCm runtime can hang forever in
     its DLL shutdown, leaving a windowless AI Remove holding memory; TerminateProcess skips the DLLs' shutdown."""

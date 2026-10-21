@@ -33,8 +33,9 @@ def files(for_os):
             continue
         if rel.name in ("airemove.json", "install-status.json", "desktop.ini") or rel.name.startswith("."):
             continue
-        if p.suffix == ".vectorcraft" or (rel.parts[:3] == ("assets", "icon", "source") and p.suffix == ".png"):
-            continue  # the icon's working files stay here: the packages carry its scripts and outputs
+        if (p.suffix == ".vectorcraft" or (rel.parts[:3] == ("assets", "icon", "source") and p.suffix == ".png")
+                or (rel.parent == Path("assets", "icon") and p.name.startswith("airemove-project") and p.suffix == ".svg")):
+            continue  # the icons' working files stay here: the packages carry their scripts and outputs
         yield p, rel
 
 

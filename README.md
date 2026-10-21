@@ -5,8 +5,8 @@
 <h1 align="center">AI Remove for LightCraft</h1>
 
 Remove objects and people from RAW photos with local AI, from inside
-[LightCraft](https://github.com/storytold/lightcraft) — like Lightroom's Generative Remove, but on your own computer.
-The result goes back into a **RAW DNG**, so you keep developing it like any raw file.
+[LightCraft](https://github.com/storytold/lightcraft) or on its own — like Lightroom's Generative Remove, but on your
+own computer. The result goes back into a **RAW DNG**, so you keep developing it like any raw file.
 
 [Italiano](README.it.md)
 
@@ -26,6 +26,12 @@ The result goes back into a **RAW DNG**, so you keep developing it like any raw 
 
 Every removal stays editable: regenerate it, pick another variant or delete it whenever you like. Everything lives in
 one project file next to the raw (`<raw>.airemove`). The original raw is never modified.
+
+**On its own.** AI Remove also works on a RAW that is not in LightCraft: open it from the Start menu, Applications or
+the app menu with LightCraft closed (or no photo selected there) and it asks for a file; **Open RAW…** in the window
+opens another one. LightCraft must be installed, not open: AI Remove reads the RAW through LightCraft's command line,
+with its default development. **Save as DNG** writes `<name>-AIRemove.dng` next to the RAW, and nothing is imported
+anywhere.
 
 ## Features
 
@@ -185,7 +191,8 @@ Qwen-Image it names what to remove, when it recognised it wrongly ("the lamp pos
 | Previous / next variant | ← / → | ← / → |
 | Delete a variant | right-click it | right-click (or Ctrl+click) it |
 
-AI Remove also opens from the Start menu, Applications or the app menu. It always works on LightCraft's active photo.
+AI Remove also opens from the Start menu, Applications or the app menu: on LightCraft's active photo when LightCraft is
+open, otherwise on a RAW you choose ([on its own](#how-it-works)). On a Mac you can also drop a RAW on its icon.
 
 **Headless.** A LightCraft mask named `Remove` (or `Rimuovi`, or `Remove: <English prompt>`) on the photo is the
 starting selection. `airemove-cli --auto sdxl` fills it without opening the window, writes the DNG, and prints the
@@ -195,8 +202,8 @@ result as JSON.
 
 | File | Where | What |
 |---|---|---|
-| `<name>-AIRemove.dng` | next to the original, stacked with it in LightCraft | the retouched photo |
-| `<raw name>.airemove` | next to the raw | the project: every removal and its variants |
+| `<name>-AIRemove.dng` | next to the original, stacked with it in LightCraft (on its own: only next to it) | the retouched photo |
+| `<raw name>.airemove` | next to the raw | the project: every removal and its variants. Double-click it to open the photo in AI Remove |
 | `install.log`, `work/last-run.log` | in `~/AIRemove` | logs |
 
 ## Languages

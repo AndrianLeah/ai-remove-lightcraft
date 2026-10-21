@@ -68,6 +68,12 @@ EDIT_COMMAND = "photo.openOriginalInExternal"
 APP_NAME = "AI Remove"
 WIN_UNINSTALL_KEY = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\AIRemoveLightCraft"
 MAC_AGENT = "com.airemove.lightcraft-control"
+# a photo's project (<raw>.airemove): its own file type, which opens the photo in AI Remove when double-clicked
+WIN_PROJECT_CLASS = "AIRemove.Project"
+MAC_PROJECT_UTI = "com.airemove.project"
+LINUX_PROJECT_MIME = "application/x-airemove-project"
+LSREGISTER = ("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/"
+              "lsregister")
 
 
 # ------------------------------------------------------------------------------------------------ output
@@ -564,6 +570,7 @@ def make_shortcuts(d, cfg):
             output(["reg", "add", WIN_UNINSTALL_KEY, "/v", name, "/t", typ, "/d", val, "/f"])
         out.write("  " + _("Start menu: {app} · Settings > Apps: \"AI Remove for LightCraft\" (to uninstall)",
                                 app=APP_NAME))
+        win_project_type(f'"{launcher_exe(d)}" "%1"', str(icon / "airemove-project.ico"))
         return str(launcher_exe(d))
     if s == "macos":
         app = Path.home() / "Applications" / f"{APP_NAME}.app"
@@ -584,20 +591,24 @@ def make_shortcuts(d, cfg):
         app.parent.mkdir(parents=True, exist_ok=True)
         run(["osacompile", "-o", str(app), str(script)])
         shutil.copyfile(icon / "airemove.icns", app / "Contents" / "Resources" / "applet.icns")
+        mac_project_type(app, icon / "airemove-project.icns")
         # a new icon breaks the applet's signature (it seals its resources): sign it again, ad hoc. Made here, not
         # downloaded, it carries no quarantine, so Gatekeeper lets it run; Apple Silicon needs the valid signature
         output(["codesign", "--force", "--deep", "--sign", "-", str(app)])
         output(["xattr", "-dr", "com.apple.quarantine", str(app)])
         output(["touch", str(app)])
+        output([LSREGISTER, "-f", str(app)])  # Finder learns the .airemove type now, not at the next login
         cfg["shortcut"] = str(app)
         out.write("  " + _("app: {app} (drag it to the Dock if you like)", app=app))
         return str(app)
     # Linux: a menu entry with the icon in the user's icon theme
     data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    for sz_dir in (icon / "hicolor").iterdir():
-        dst = data / "icons" / "hicolor" / sz_dir.name / "apps"
+    for sz_dir, kind in ((s, k) for s in (icon / "hicolor").iterdir() for k in ("apps", "mimetypes")):
+        if not (sz_dir / kind).is_dir():  # apps: the app's icon; mimetypes: the .airemove files'
+            continue
+        dst = data / "icons" / "hicolor" / sz_dir.name / kind
         dst.mkdir(parents=True, exist_ok=True)
-        for f in (sz_dir / "apps").iterdir():
+        for f in (sz_dir / kind).iterdir():
             shutil.copyfile(f, dst / f.name)
     entry = data / "applications" / "airemove.desktop"
     entry.parent.mkdir(parents=True, exist_ok=True)
@@ -606,8 +617,10 @@ def make_shortcuts(d, cfg):
                      "Comment=Removes objects from LightCraft's RAW photos with AI\n"
                      "Comment[it]=Rimuove oggetti dai RAW di LightCraft con l'AI\n"
                      f'Exec="{launcher_exe(d)}" %f\nIcon=airemove\nTerminal=false\n'
-                     "Categories=Graphics;Photography;\nStartupWMClass=Airemove\n", encoding="utf-8")
+                     f"Categories=Graphics;Photography;\nMimeType={LINUX_PROJECT_MIME};\nStartupWMClass=Airemove\n",
+                     encoding="utf-8")
     output(["update-desktop-database", str(entry.parent)])
+    linux_project_type(data)
     cfg["shortcut"] = str(entry)
     editor = str(launcher_exe(d))
     if system.flatpak_lightcraft():  # LightCraft in its sandbox starts the editor inside it: hop out to the host
@@ -617,6 +630,77 @@ def make_shortcuts(d, cfg):
         editor = str(hop)
     out.write("  " + _("applications menu: AI Remove ({entry})", entry=entry))
     return editor
+
+
+def win_project_type(command=None, icon=None):
+    """Windows, for this user: a double-clicked .airemove runs `command` ("%1" = the file); without a command the
+    file type is removed, with what Explorer noted about it once a project was opened (FileExts: its "open with"
+    list). Explorer is told, so the files' icons change at once."""
+    classes = "HKCU\\Software\\Classes\\"
+    if command is None:
+        for key in (classes + ".airemove", classes + WIN_PROJECT_CLASS,
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.airemove"):
+            output(["reg", "delete", key, "/f"])
+    else:
+        for key, val in ((".airemove", WIN_PROJECT_CLASS), (WIN_PROJECT_CLASS, _("AI Remove project")),
+                         (WIN_PROJECT_CLASS + "\\DefaultIcon", icon),
+                         (WIN_PROJECT_CLASS + "\\shell\\open\\command", command)):
+            output(["reg", "add", classes + key, "/ve", "/d", val, "/f"])
+        out.write("  " + _(".airemove projects: a double-click opens the photo in AI Remove"))
+    import ctypes
+    ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)  # SHCNE_ASSOCCHANGED
+
+
+def mac_project_type(app, icns):
+    """macOS: the app declares the .airemove type and opens it (its applet's `on open` gets the file); the files
+    show `icns`, copied into the app as project.icns. Written into the app before it is signed; LaunchServices is
+    told after."""
+    import plistlib
+    shutil.copyfile(icns, app / "Contents" / "Resources" / "project.icns")
+    plist = app / "Contents" / "Info.plist"
+    info = plistlib.loads(plist.read_bytes())
+    info.setdefault("CFBundleIdentifier", "com.airemove.app")  # LaunchServices files document types under it
+    info["UTExportedTypeDeclarations"] = [{
+        "UTTypeIdentifier": MAC_PROJECT_UTI, "UTTypeDescription": _("AI Remove project"),
+        "UTTypeConformsTo": ["public.data"], "UTTypeIconFile": "project",
+        "UTTypeTagSpecification": {"public.filename-extension": ["airemove"]}}]
+    info.setdefault("CFBundleDocumentTypes", []).append({
+        "CFBundleTypeName": _("AI Remove project"), "CFBundleTypeRole": "Editor", "LSHandlerRank": "Owner",
+        "LSItemContentTypes": [MAC_PROJECT_UTI], "CFBundleTypeIconFile": "project"})
+    plist.write_bytes(plistlib.dumps(info))
+    out.write("  " + _(".airemove projects: a double-click opens the photo in AI Remove"))
+
+
+def linux_project_type(data, remove=False):
+    """Linux: *.airemove is its own file type (a zip, as it is), opened by AI Remove's menu entry (its MimeType=)."""
+    mime = data / "mime"
+    xml = mime / "packages" / "airemove.xml"
+    apps = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "mimeapps.list"
+    if remove:
+        xml.unlink(missing_ok=True)
+        try:  # the default xdg-mime set below
+            lines = apps.read_text(encoding="utf-8").splitlines(keepends=True)
+            kept = [x for x in lines if not x.startswith(LINUX_PROJECT_MIME + "=")]
+            if kept != lines:
+                apps.write_text("".join(kept), encoding="utf-8")
+        except OSError:
+            pass
+    else:
+        xml.parent.mkdir(parents=True, exist_ok=True)
+        xml.write_text('<?xml version="1.0" encoding="UTF-8"?>\n'
+                       '<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">\n'
+                       f'  <mime-type type="{LINUX_PROJECT_MIME}">\n'
+                       '    <comment>AI Remove project</comment>\n'
+                       '    <comment xml:lang="it">Progetto di AI Remove</comment>\n'
+                       '    <sub-class-of type="application/zip"/>\n'
+                       '    <icon name="airemove-project"/>\n'
+                       '    <glob pattern="*.airemove"/>\n'
+                       '  </mime-type>\n'
+                       '</mime-info>\n', encoding="utf-8")
+    output(["update-mime-database", str(mime)])
+    if not remove:  # before the archive managers, which open any zip
+        output(["xdg-mime", "default", "airemove.desktop", LINUX_PROJECT_MIME])
+        out.write("  " + _(".airemove projects: a double-click opens the photo in AI Remove"))
 
 
 # ------------------------------------------------------------------------------------------------ 6. LightCraft
@@ -851,14 +935,19 @@ def uninstall(d, keep_models, yes):
                         f"--nofilesystem={d}", "--no-talk-name=org.freedesktop.Flatpak", system.LIGHTCRAFT_ID])
         out.write("  " + _("LightCraft's control channel: removed"))
     sc = cfg.get("shortcut")
+    if sc and s == "macos" and Path(sc).exists():
+        output([LSREGISTER, "-u", sc])  # its .airemove type goes with it
     if sc and Path(sc).exists():
         (shutil.rmtree if Path(sc).is_dir() else os.remove)(sc)
     if s == "windows":
         output(["reg", "delete", WIN_UNINSTALL_KEY, "/f"])
+        win_project_type(None)
     elif s == "linux":
         data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-        for f in (data / "icons" / "hicolor").glob("*/apps/airemove.*"):
-            f.unlink(missing_ok=True)
+        for pattern in ("*/apps/airemove.*", "*/mimetypes/airemove-project.*"):
+            for f in (data / "icons" / "hicolor").glob(pattern):
+                f.unlink(missing_ok=True)
+        linux_project_type(data, remove=True)
     keep = {"models"} if keep_models else set()
     left = []
     for item in list(d.iterdir()) if d.exists() else []:

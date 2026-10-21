@@ -2,7 +2,8 @@
 installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on the runners.
 
   ci_smoke.py check DIR        airemove-cli --check prints JSON: PyTorch of the build asked for, LaMa installed and
-                               usable, LightCraft not connected; uv in DIR/bin, the menu entry / app made
+                               usable, LightCraft not connected; uv in DIR/bin, the menu entry / app made, the
+                               .airemove file type registered to open with it, with the project icon
   ci_smoke.py folder DIR       a model the user already has in a folder of their own (--model-dir): DIR's LaMa moved
                                into a folder laid out like a Hugging Face cache, next to DIR; the installer run again
                                with --model-dir lama=<an empty folder> must stop, changing nothing, and with
@@ -15,12 +16,13 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                tools/ci_removal.py (a synthetic raw DNG, LaMa, the blend, the DNG and the project),
                                then a long one in tiles: tools/ci_tiles.py (a cord across a synthetic area, LaMa)
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
-                               app, its menu entry and, on Windows, its Settings > Apps entry are gone; the user's own
-                               model folders are still there
+                               app, its menu entry, its .airemove file type and, on Windows, its Settings > Apps entry
+                               are gone; the user's own model folders are still there
 Exit status 1 at the first check that fails. Standard library only.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -76,6 +78,48 @@ def config(d):
         raise Failed(f"no readable {d / 'airemove.json'}")
 
 
+def project_type(shortcut):
+    """What a double-clicked .airemove (a photo's project) opens, as registered for this user, "" when nothing:
+    Windows the command, macOS the extensions the app declares, Linux the type's definition and the menu entry's
+    MimeType=."""
+    if WIN:
+        cls = "HKCU\\Software\\Classes\\"
+        ext = subprocess.run(["reg", "query", cls + ".airemove", "/ve"], capture_output=True, text=True)
+        cmd = subprocess.run(["reg", "query", cls + "AIRemove.Project\\shell\\open\\command", "/ve"],
+                             capture_output=True, text=True)
+        return cmd.stdout.strip() if "AIRemove.Project" in ext.stdout and cmd.returncode == 0 else ""
+    if OS == "macos":
+        import plistlib
+        plist = Path(shortcut) / "Contents" / "Info.plist"
+        info = plistlib.loads(plist.read_bytes()) if plist.exists() else {}
+        return " ".join(e for t in info.get("UTExportedTypeDeclarations", [])
+                        for e in t.get("UTTypeTagSpecification", {}).get("public.filename-extension", []))
+    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    xml, entry = data / "mime" / "packages" / "airemove.xml", Path(shortcut)
+    lines = entry.read_text(encoding="utf-8").splitlines() if entry.is_file() else []
+    return " ".join(([str(xml)] if xml.exists() else []) + [x for x in lines if x.startswith("MimeType=")])
+
+
+def project_icon(shortcut):
+    """The icon file .airemove files show, as registered ("" when none): Windows the type's DefaultIcon, macOS the
+    document type's .icns in the app, Linux the 48 px one of the icon the type's definition names."""
+    if WIN:
+        r = subprocess.run(["reg", "query", "HKCU\\Software\\Classes\\AIRemove.Project\\DefaultIcon", "/ve"],
+                           capture_output=True, text=True)
+        return r.stdout.split("REG_SZ", 1)[1].strip() if r.returncode == 0 and "REG_SZ" in r.stdout else ""
+    if OS == "macos":
+        import plistlib
+        plist = Path(shortcut) / "Contents" / "Info.plist"
+        info = plistlib.loads(plist.read_bytes()) if plist.exists() else {}
+        name = next((t.get("CFBundleTypeIconFile") for t in info.get("CFBundleDocumentTypes", [])
+                     if "com.airemove.project" in t.get("LSItemContentTypes", [])), None)
+        return str(Path(shortcut) / "Contents" / "Resources" / f"{name}.icns") if name else ""
+    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    xml = data / "mime" / "packages" / "airemove.xml"
+    m = re.search(r'<icon name="([^"]+)"', xml.read_text(encoding="utf-8")) if xml.exists() else None
+    return str(data / "icons" / "hicolor" / "48x48" / "mimetypes" / f"{m.group(1)}.png") if m else ""
+
+
 def app_check(d):
     cli = d / "venv" / ("Scripts/airemove-cli.exe" if WIN else "bin/airemove-cli")
     expect(cli.exists(), f"{cli} exists")
@@ -99,6 +143,12 @@ def check(d):
     uv = "uv.exe" if WIN else "uv"
     expect((d / "bin" / uv).exists() or (d / "bin" / "bin" / uv).exists(), "uv fetched into <install>/bin")
     expect(cfg.get("shortcut") and Path(cfg["shortcut"]).exists(), f"menu entry / app: {cfg.get('shortcut')}")
+    pt = project_type(cfg["shortcut"])
+    want = {"windows": [str(d / "venv" / "Scripts" / "airemove.exe").lower(), "%1"], "macos": ["airemove"],
+            "linux": ["airemove.xml", "mimetype=application/x-airemove-project"]}[OS]
+    expect(all(w in pt.lower() for w in want), f".airemove projects open AI Remove: {pt}")
+    ic = project_icon(cfg["shortcut"])
+    expect(ic and Path(ic).is_file() and "project" in Path(ic).name, f".airemove files show the project icon: {ic}")
 
 
 def installer(d, args):
@@ -230,6 +280,11 @@ def uninstall(d):
     expect(r.returncode == 0, f"uninstaller exit status 0 (it was {r.returncode})")
     expect(not (d / "venv").exists() and not (d / "airemove.json").exists(), "venv and airemove.json removed")
     expect(not shortcut or not Path(shortcut).exists(), f"menu entry / app removed: {shortcut}")
+    expect(not project_type(shortcut or ""), ".airemove file type removed")
+    if OS == "linux":
+        data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+        left = sorted(str(p) for p in (data / "icons" / "hicolor").glob("*/*/airemove*"))
+        expect(not left, f"the app's and the .airemove files' icons removed (left: {left})")
     expect(all(Path(f).is_dir() and any(Path(f).iterdir()) for f in mine), f"the user's model folders are left: {mine}")
     if WIN:
         q = subprocess.run(["reg", "query", WIN_UNINSTALL_KEY], capture_output=True)
