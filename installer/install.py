@@ -278,7 +278,7 @@ def retire_models(models_dir):
                 if p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction()):
                     p.unlink()
                 else:
-                    size = sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 1e9
+                    size = sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 2 ** 30  # as the sizes shown
                     shutil.rmtree(p)
                     out.write("  " + _("{model} is no longer used by AI Remove: its folder removed ({gb} GB freed)",
                                        model=model, gb=num(size)))
