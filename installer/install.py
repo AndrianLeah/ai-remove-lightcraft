@@ -632,11 +632,13 @@ def make_shortcuts(d, cfg):
 
 def win_project_type(command=None, icon=None):
     """Windows, for this user: a double-clicked .airemove runs `command` ("%1" = the file); without a command the
-    file type is removed. Explorer is told, so the files' icons change at once."""
+    file type is removed, with what Explorer noted about it once a project was opened (FileExts: its "open with"
+    list). Explorer is told, so the files' icons change at once."""
     classes = "HKCU\\Software\\Classes\\"
     if command is None:
-        for key in (".airemove", WIN_PROJECT_CLASS):
-            output(["reg", "delete", classes + key, "/f"])
+        for key in (classes + ".airemove", classes + WIN_PROJECT_CLASS,
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.airemove"):
+            output(["reg", "delete", key, "/f"])
     else:
         for key, val in ((".airemove", WIN_PROJECT_CLASS), (WIN_PROJECT_CLASS, _("AI Remove project")),
                          (WIN_PROJECT_CLASS + "\\DefaultIcon", icon),
