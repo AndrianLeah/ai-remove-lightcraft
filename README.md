@@ -60,17 +60,14 @@ embedded preview, which would still show what was removed.
   park photo: 98 people instead of 39; ~1–2 s on a GPU). Where two people touch, no strip between them is left out: like
   LightCraft's own Describe since 0.11, each person's mask is joined by SAM 3's semantic mask where that person is
   the nearest.
-- **Three fill models.** LaMa is fast and runs on the processor. SDXL Inpainting makes generative variants. FLUX.1 Fill
-  [dev] with Turbo-Alpha is the most realistic.
+- **Four fill models, each with a job.** LaMa: quick, on the processor, small things on plain backgrounds and
+  cables. RORem (the default): people and objects, SDXL Inpainting retrained only to remove, so it draws no one back;
+  commercial use allowed. FLUX.1 Fill [dev] with Turbo-Alpha: architecture and large areas, the most realistic, but
+  not for people. Qwen-Image 2.1 (optional, 16 GB GPUs): people and objects on complex backgrounds; it first names
+  everything selected ("the woman and her handbag"), then removes it by name and redraws the scene behind it.
 - **Shadows and reflections.** "Include the shadow" adds the selected objects' shadows to the selection, so every
   model removes them: SAM 3 finds the shadows that touch them (a long shadow at a low sun), and OSOR, if installed,
-  what goes with each object (its shadow, its reflection), part by part. OSOR and ObjectClear (optional) also remove
-  an object together with its shadow and reflection, though only the object is selected.
-- **No person drawn back (optional).** RORem is SDXL Inpainting retrained only to remove: where SDXL draws a person
-  or an odd object back into the hole (the other one of two people, the owner of a bag left outside the selection),
-  it draws the background. Commercial use allowed, like SDXL.
-- **Large areas on complex backgrounds (optional, 16 GB GPUs).** Qwen-Image 2.1 first recognises what is selected
-  ("the woman with a handbag", "the floor lamp"), then removes it by name and redraws the scene behind it.
+  what goes with each object (its shadow, its reflection), part by part.
 - **Writes a real RAW.** The fill is converted back into the camera's linear space and re-mosaicked into the Bayer data
   with matching sensor noise, so the DNG develops like the original.
 - **Seamless blending:** a Poisson membrane plus texture transfer from the ring around the hole.
@@ -126,13 +123,13 @@ The installer:
 Non-interactive install:
 
 ```bash
-sh installer/bootstrap.sh --yes --models lama,sam3,sdxl
+sh installer/bootstrap.sh --yes --models lama,sam3,rorem
 ```
 
 On Windows:
 
 ```bash
-powershell -ExecutionPolicy Bypass -File installer\bootstrap.ps1 --yes --models lama,sam3,sdxl
+powershell -ExecutionPolicy Bypass -File installer\bootstrap.ps1 --yes --models lama,sam3,rorem
 ```
 
 Other options:
@@ -179,31 +176,34 @@ it does not find there is downloaded, for example FLUX's text encoders when only
 used where it is: nothing is copied, and uninstalling AI Remove leaves that folder alone. The folders are recorded in
 `airemove.json` (`model_paths`), so keep them where they are.
 
-Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/huggingface/hub`.
+Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cache/huggingface/hub`.
 
 ## Models
 
 | Model | Best for | Not for | Size | Licence |
 |---|---|---|---|---|
 | LaMa | Small and medium objects on plain backgrounds; runs on the processor in seconds | Large areas and structures (doors, windows): it blurs them | 0.2 GB | Apache-2.0 |
-| SDXL Inpainting | Medium areas with detail; every variant differs; ~8–15 s each on a GPU | A person among others: it may draw a person back | 6.8 GB | CreativeML Open RAIL++-M |
-| RORem (optional, on SDXL's files) | People and objects: SDXL retrained only to remove, no person or odd object drawn back where SDXL draws one; ~7 s per variant on a GPU | Long thin holes (a pole): it can leave a seam, SDXL is cleaner | 4.8 GB | Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M |
+| RORem (with SDXL Inpainting's files) | People and objects, the default: SDXL Inpainting retrained only to remove, no person or odd object drawn back where SDXL draws one; ~7 s per variant on a GPU | Long thin holes (a pole): it can leave a seam, LaMa or FLUX are cleaner | 11.6 GB (SDXL 6.8 + RORem 4.8) | Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M |
 | FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | People: in a street or a crowd it draws people back where they were | 16.4 GB | FLUX.1 [dev] Non-Commercial |
 | SAM 3 | One-click selection, and selecting by describing ("people"); without it: the brush | | 3.2 GB (0 if LightCraft has it) | SAM License (Meta) |
-| OSOR (optional, on FLUX) | The object with its shadow and reflection, one step (~3–8 s); finds the shadow for "Include the shadow" | Large areas: softer than FLUX | 0.6 GB | FLUX.1 [dev] Non-Commercial |
-| ObjectClear (optional) | The object with its shadow and reflection, ~5 s per variant, 512 px | Large areas: softer detail | 7.3 GB | S-Lab License 1.0 (non-commercial) |
+| OSOR (optional, on FLUX) | Finds the shadows and reflections next to what you select, for "Include the shadow" (with SAM 3) | | 0.6 GB | FLUX.1 [dev] Non-Commercial |
 | Qwen-Image 2.1 Turbo (optional) | People and objects on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~30 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | When in a hurry: about a minute for a removal's first variant | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
 
 The installer shows the same descriptions, sizes and licences (from `airemove/model_files.py`).
 
-**Commercial use.** FLUX, OSOR, ObjectClear and Qwen-Image are for non-commercial use only. They are fine for your own
-photos, but not for paid work or clients without a licence from their makers: Black Forest Labs for FLUX and OSOR,
-S-Lab for ObjectClear, Alibaba's Qwen team for Qwen-Image. For paid work, use LaMa, SDXL or RORem (SDXL and RORem
-with SDXL's usage restrictions). FLUX's licence also asks you to check its results before sharing them, and to say they were edited with
+**Retired models.** SDXL Inpainting is no longer in the menu: it drew a person or an odd object back where RORem drew
+none (11 of 12 test removals against 0), and RORem, which runs on its files, does its job. ObjectClear is gone: at
+512 px its fills were always soft, and "Include the shadow" with RORem or FLUX does the same sharper. Updating removes
+its folder from AI Remove's own models (7.3 GB). OSOR is no longer a fill model of the menu: it finds the shadows for
+"Include the shadow". Projects keep the variants these models made, and `--auto sdxl` / `--auto osor` still work.
+
+**Commercial use.** FLUX, OSOR and Qwen-Image are for non-commercial use only. They are fine for your own photos, but
+not for paid work or clients without a licence from their makers: Black Forest Labs for FLUX and OSOR, Alibaba's Qwen
+team for Qwen-Image. For paid work, use LaMa or RORem (with SDXL's usage restrictions). FLUX's licence also asks you to check its results before sharing them, and to say they were edited with
 AI where the law requires it. This is a summary, not legal advice: the licences themselves decide.
 
-An optional prompt **in English** guides SDXL and FLUX, for example "old plaster wall" or "dark doorway". For
-Qwen-Image it names what to remove, when it recognised it wrongly ("the lamp post").
+An optional prompt **in English** guides FLUX, for example "old plaster wall" or "dark doorway". For Qwen-Image it
+names what to remove, when it recognised it wrongly ("the lamp post").
 
 ## Using it
 
@@ -228,7 +228,7 @@ AI Remove also opens from the Start menu, Applications or the app menu: on Light
 open, otherwise on a photo you choose ([on its own](#how-it-works)). On a Mac you can also drop a photo on its icon.
 
 **Headless.** A LightCraft mask named `Remove` (or `Rimuovi`, or `Remove: <English prompt>`) on the photo is the
-starting selection. `airemove-cli --auto sdxl` fills it without opening the window, writes the result, and prints it
+starting selection. `airemove-cli --auto rorem` fills it without opening the window, writes the result, and prints it
 as JSON.
 
 ### Files it writes

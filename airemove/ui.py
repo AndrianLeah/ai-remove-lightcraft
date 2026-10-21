@@ -3,7 +3,8 @@
 The photo fills the left side and always shows the result: every removal with its chosen variant. Select what to
 remove (Clic SAM: SAM 3 outlines the whole object · Alt/Option+click / Shift+click refine it · Pennello + / Gomma −;
 or "Descrivi": every instance of what is typed, e.g. "people", each its own object — a right-click drops one),
-then "Rimuovi selezione": it becomes removal #n with its own area and its own variants (LaMa + SDXL or FLUX).
+then "Rimuovi selezione": it becomes removal #n with its own area and its own variants (LaMa, RORem, FLUX Fill or
+Qwen-Image).
 On the right: the removals; click one to see only its variants, pick one, ask for more or delete it — the other
 removals are not touched. "Salva in LightCraft" writes one DNG with all of them, stacked on the original; a photo
 opened on its own ("Apri foto…", or AI Remove started without LightCraft) gets it next to the file, "Salva come DNG".
@@ -89,22 +90,25 @@ PANEL = CARD
 RED = (235, 64, 52)
 SHADOW_RGB = (56, 198, 244)  # the selection's shadow part ("Include the shadow")
 WHITE = (240, 240, 240)
-MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "objectclear", "qwen", "rorem"]  # tests: remove:n,i / model:i use these
+MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "qwen", "rorem"]  # tests: remove:n,i / model:i use these
 # the models' own names, as the menu shows them (variant labels keep their short ones: airemove.MODELS)
-MODEL_NAMES = {"sdxl": "SDXL", "flux": "FLUX Fill", "lama": "LaMa", "osor": "OSOR", "objectclear": "ObjectClear",
+MODEL_NAMES = {"sdxl": "SDXL", "flux": "FLUX Fill", "lama": "LaMa", "osor": "OSOR",
                "qwen": "Qwen-Image", "rorem": "RORem"}
 # the menu: what fills the selection, quickest first, then what takes the object's shadow too
-MODEL_GROUPS = ((N_("Fill the selection"), ("lama", "sdxl", "rorem", "flux", "qwen")),
-                (N_("Object and its shadow"), ("objectclear", "osor")))
+# the menu: four models, each with a job of its own (model_caveat says what each is not for). SDXL stays an engine
+# (RORem runs on its files, "Full detail" without FLUX) and OSOR too ("Include the shadow"), out of the menu: SDXL drew
+# a person back where RORem drew none, OSOR's fills are softer than FLUX's after "Include the shadow".
+MENU_MODELS = ("lama", "rorem", "flux", "qwen")
+MODEL_GROUPS = ((N_("Fill the selection"), MENU_MODELS),)
 # what the text field is for: what to put there (SDXL, FLUX Fill), the name of what to remove (Qwen-Image: it names
-# the selection itself, a name corrects it) or nothing (LaMa, OSOR and ObjectClear read no text; RORem works with its
+# the selection itself, a name corrects it) or nothing (LaMa and OSOR read no text; RORem works with its
 # authors' fixed prompt and no guidance, which a text would hardly steer)
-PROMPT_MODE = {"sdxl": "fill", "flux": "fill", "qwen": "name", "lama": None, "osor": None, "objectclear": None,
+PROMPT_MODE = {"sdxl": "fill", "flux": "fill", "qwen": "name", "lama": None, "osor": None,
                "rorem": None}
 # every model of airemove.ENGINES (the one list of models) has a name, a place in the menu and a text mode here: a model
 # added there and forgotten here stops the window at once, instead of a menu that cannot show it
-assert (set(MODEL_KEYS) == set(MODEL_NAMES) == set(PROMPT_MODE) == {m for __, ms in MODEL_GROUPS for m in ms}
-        == set(A.ENGINES)), "ui.py's model tables differ from airemove.ENGINES"
+assert (set(MODEL_KEYS) == set(MODEL_NAMES) == set(PROMPT_MODE) == set(A.ENGINES)
+        and set(MENU_MODELS) <= set(A.ENGINES)), "ui.py's model tables differ from airemove.ENGINES"
 
 
 def elide(text, font, width):
@@ -748,7 +752,7 @@ class App:
         self.clear_btn.pack(side="left", fill="x", expand=True, padx=(int(6 * k), 0))
         self.shadow_btn = None
         self.shadow_wait, self.shadow_found, self.shadow_next = 0, [], None
-        # SAM 3 (Describe "shadow") or OSOR / ObjectClear installed: they find the objects' shadows (and reflections)
+        # SAM 3 (Describe "shadow") or OSOR installed: they find the objects' shadows (and reflections)
         if self.s.shadow_model() or engines.installed("sam3"):
             self.shadow_btn = self.button(sel, "☀  " + _("Include the shadow"), self.include_shadow, small=True)
             self.shadow_btn.configure(state="disabled")
@@ -963,19 +967,17 @@ class App:
         """The menu shows each model by name, what it is for and what one variant takes on this PC (from the last
         runs); its list says what each one is best for (model_best), the details go under it (show_model_info)."""
         keys = self.model_keys()
-        cur = self.model_key() if self.model_var.get() else A.setting("model", keys[0])
-        cur = cur if cur in keys else keys[0]
+        first = "rorem" if "rorem" in keys else keys[0]  # people and objects, none drawn back: the default
+        cur = self.model_key() if self.model_var.get() else A.setting("model", first)
+        cur = cur if cur in keys else first  # also a model no longer in the menu (SDXL, OSOR, ObjectClear)
 
         def each(key):
             return _("~{time} each", time=self.fmt_s(A.expected(key)))
         self.model_meta = {
             "lama": ("LaMa", _("Quick fill · plain backgrounds"), "~" + self.fmt_s(A.expected("lama"))),
-            "sdxl": ("SDXL", _("Generative · varied results"), each("sdxl_variant")),
             "rorem": ("RORem", _("People and objects · draws no one back"), each("rorem_variant")),
             "flux": ("FLUX Fill", _("Architecture · large areas"), each("flux_variant")),
-            "qwen": ("Qwen-Image", _("People and objects · complex backgrounds"), each("qwen_variant")),
-            "objectclear": ("ObjectClear", _("Object and its shadow"), each("objectclear_variant")),
-            "osor": ("OSOR", _("Object and its shadow · softer"), each("osor_variant"))}
+            "qwen": ("Qwen-Image", _("People and objects · complex backgrounds"), each("qwen_variant"))}
         # one line per model (tests and the saved setting go by it): its name first
         self.model_labels = {m: f"{n} · {u} · {t}" for m, (n, u, t) in self.model_meta.items()}
         self.picker.set_models(self.model_meta, keys)
@@ -987,35 +989,27 @@ class App:
         return {
             "lama": _("Small or medium objects on a wall, the sky, a lawn, tarmac. One result, in seconds, on the "
                       "processor."),
-            "sdxl": _("Medium areas with some detail. Every variant is different: make 3–4 and pick one. Your text "
-                      "says what to put there."),
             "rorem": _("A person next to others, or with something of theirs left outside the selection: where SDXL "
                        "draws a person or an odd object back, it draws the background. Commercial use allowed."),
-            "flux": _("Large or difficult areas: architecture, perspective, light. When SDXL invents odd things."),
+            "flux": _("Large or difficult areas: architecture, perspective, light."),
             "qwen": _("A person or an object in front of steps, columns, railings: it names what you selected and "
-                      "redraws what is behind it."),
-            "objectclear": _("An object together with its shadow or reflection. Quick; the detail is softer on large "
-                             "areas."),
-            "osor": _("Object, shadow and reflection in one step, on FLUX. For the most detail: \"Include the "
-                      "shadow\", then FLUX Fill.")}[m]
+                      "redraws what is behind it.")}[m]
+
 
     def model_caveat(self, m):
         """What the model is not for, to choose knowing it (the menu and its list say it, in orange); "" if nothing
         stands out. Seen on this PC's photos: FLUX Fill put tourists back where tourists were in a Pompeii street."""
         return {
             "lama": _("Blurs large areas and structures (doors, windows, people in front of buildings)."),
-            "sdxl": _("Not for a person among others: it may draw a person back. For people: RORem."),
-            "rorem": _("On a long thin hole (a pole) it can leave a seam: there SDXL or FLUX Fill."),
+            "rorem": _("On a long thin hole (a pole) it can leave a seam: there LaMa or FLUX Fill."),
             "flux": _("Not for people: in a street or a crowd it draws people back where they were. For people: "
                       "RORem or Qwen-Image."),
-            "qwen": _("Slow: about a minute for the first variant of a removal. Non-commercial licence."),
-            "objectclear": _("Softer detail on large areas (it works at 512 px)."),
-            "osor": _("Softer detail than FLUX Fill on large areas.")}.get(m, "")
+            "qwen": _("Slow: about a minute for the first variant of a removal. Non-commercial licence.")}.get(m, "")
 
     def model_keys(self):
-        """Models installed and sensible on this computer (LaMa always)."""
+        """The menu's models installed and sensible on this computer (LaMa always), in its order."""
         if not hasattr(self, "_keys"):
-            self._keys = [k for k in MODEL_KEYS if k == "lama" or engines.usable(k)]
+            self._keys = [k for k in MENU_MODELS if k == "lama" or engines.usable(k)]
         return self._keys
 
     def show_model_info(self):
@@ -1026,27 +1020,11 @@ class App:
                       "lawn, tarmac): very good for small and medium objects on plain or repetitive backgrounds. On "
                       "large areas or structures (doors, windows, people in front of buildings) it tends to blur.",
                       time=self.fmt_s(A.expected("lama"))),
-            "sdxl": (_("SDXL — on the processor (no GPU: slow), ~{time} per variant, each one different.",
-                       time=self.fmt_s(A.expected("sdxl_variant"))) if engines.device() == "cpu" else
-                     _("SDXL — on the GPU, ~{time} per variant, each one different.",
-                       time=self.fmt_s(A.expected("sdxl_variant"))))
-            + " " + _("It invents new content that fits the scene: good for medium areas with detail. Sometimes it "
-                      "adds things that were not there: make 3–4 and pick one. Text in English guides it (e.g. "
-                      "\"dark doorway\")."),
             "flux": _("FLUX Fill — the most realistic: it respects light, perspective and the lines of architecture; "
-                      "best for large or difficult areas and when SDXL invents odd things. ~{time} per variant (Turbo, "
-                      "8 steps). It takes almost the whole GPU: switching to FLUX unloads SDXL and SAM (~15 s the first "
-                      "time; SAM reloads by itself at the next click). Non-commercial licence (FLUX.1 [dev]).",
+                      "best for large or difficult areas. ~{time} per variant (Turbo, 8 steps). It takes almost the "
+                      "whole GPU: switching to FLUX unloads RORem and SAM (~15 s the first time; SAM reloads by itself "
+                      "at the next click). Non-commercial licence (FLUX.1 [dev]).",
                       time=self.fmt_s(flux)),
-            "osor": _("OSOR — removes the object together with its shadow and reflection, in one step (~{time}): you "
-                      "select only the object, OSOR decides how far its shadow goes. Softer than FLUX on large areas: "
-                      "for the most detail use \"Include the shadow\" and then FLUX. It runs on FLUX's GPU memory. "
-                      "Non-commercial licence, like FLUX.",
-                      time=self.fmt_s(A.expected("osor_variant"))),
-            "objectclear": _("ObjectClear — removes the object together with its shadow and reflection, ~{time} per "
-                             "variant, each one different. It works at 512 px: on large areas the detail is softer. "
-                             "Non-commercial licence (S-Lab).",
-                             time=self.fmt_s(A.expected("objectclear_variant"))),
             "qwen": _("Qwen-Image — it first recognises what you selected (the progress bar says what), then removes "
                       "it and redraws the scene behind it: steps, columns, railings carry on. For large areas on "
                       "complex backgrounds, where FLUX invents a bush or a blob. ~{time} per variant, ~1 min more for "
@@ -1057,8 +1035,8 @@ class App:
             "rorem": _("RORem — SDXL retrained only to remove, ~{time} per variant, each one different. Where SDXL "
                        "draws a person or an odd object back into the hole (the other one of two people, the owner of a "
                        "bag left outside the selection), RORem draws what is behind. On a long thin hole (a pole) or up a "
-                       "path it can leave a seam or a rock face: there SDXL or FLUX. It uses SDXL's files. Licence "
-                       "Apache-2.0 (commercial use allowed).",
+                       "path it can leave a seam or a rock face: there LaMa or FLUX Fill. It uses SDXL's files. "
+                       "Licence Apache-2.0 (commercial use allowed).",
                        time=self.fmt_s(A.expected("rorem_variant")))}
         if hasattr(self, "model_info"):
             self.model_info.configure(text=info[self.model_key()])
@@ -1072,7 +1050,7 @@ class App:
 
     def apply_prompt_mode(self):
         """The text field for the chosen model (PROMPT_MODE): what to put there (SDXL, FLUX Fill), the name of what to
-        remove (Qwen-Image), or disabled (LaMa, OSOR and ObjectClear read no text). The two texts are kept apart, so
+        remove (Qwen-Image), or disabled (LaMa and OSOR read no text). The two texts are kept apart, so
         a name typed for Qwen-Image never reaches SDXL as what to draw."""
         if not hasattr(self, "prompt"):
             return
@@ -1195,7 +1173,7 @@ class App:
                     "removal.", variant=label, model=model),
             "none": _("Full detail: choose a variant first."),
             "done": _("{variant} is in full detail already.", variant=label),
-            "model": _("Full detail needs FLUX Fill or SDXL: install one of them."),
+            "model": _("Full detail needs FLUX Fill or RORem: install one of them."),
             "shape": _("Full detail is only for long removals (a pole, a cable, a railing): on a person or an object, "
                        "redrawing in squares invents things."),
             "sharp": _("Full detail: {variant} is drawn near the photo's resolution already, nothing to gain.",
@@ -1471,10 +1449,10 @@ class App:
         if os.environ.get("AIREMOVE_TEST_NO_SDXL"):
             return
         try:
-            if self.model_key() == "sdxl" and engines.device() != "cpu":
-                self.s.load_sdxl()
+            if self.model_key() in ("rorem", "sdxl") and engines.device() != "cpu":
+                self.s.get_engine(self.model_key())
         except Exception:
-            A.log("ERROR loading SDXL:", traceback.format_exc())
+            A.log("ERROR loading RORem:", traceback.format_exc())
 
     # ------------------------------------------------------------------------------------------ events
     def poll(self):
@@ -1570,7 +1548,7 @@ class App:
         A.log(f"update available: {version}")
 
     def on_shadow(self, m):
-        """A shadow finder's answer ("Include the shadow": SAM 3, OSOR / ObjectClear). Once each has answered, what
+        """A shadow finder's answer ("Include the shadow": SAM 3, OSOR). Once each has answered, what
         they found joins the selection (one step: Undo takes it out)."""
         self.shadow_wait = max(0, self.shadow_wait - 1)
         if m is not None:
@@ -2050,7 +2028,8 @@ class App:
         if r is None or r.deleted:
             return
         if self.model_key() == "lama" and any(c[0] == "LaMa" for c in r.candidates):
-            self.status.configure(text=_("LaMa always gives the same result: pick SDXL or FLUX for more variants"))
+            self.status.configure(text=_("LaMa always gives the same result: pick RORem or FLUX Fill for more "
+                                         "variants"))
             return
         if self.waiting(r):  # a part's first variants: "Generate"
             self.pending_gen.add(r.id)
@@ -2134,12 +2113,12 @@ class App:
 
     def include_shadow(self):
         """"Include the shadow": SAM 3 finds the shadows that touch the selection (Describe "shadow":
-        airemove.shadows_touching), OSOR (or ObjectClear) what goes with each selected object — its shadow, its
+        airemove.shadows_touching), OSOR what goes with each selected object — its shadow, its
         reflection, part by part — and they join the selection, in blue, to check before "Remove selection"."""
         if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None or self.shadow_wait:
             return
         sel = self.sel_mask.copy()
-        osor = self.s.shadow_model() is not None  # OSOR / ObjectClear: what goes with each object, its reflection too
+        osor = self.s.shadow_model() is not None  # OSOR: what goes with each object, its reflection too
         self.shadow_wait = int(self.sam_ready) + int(osor)
         if self.sam_ready:  # SAM 3's Describe "shadow" first (a few seconds): loading FLUX for OSOR unloads SAM 3
             self.clicks.put(("shadows", sel))
@@ -2431,7 +2410,7 @@ class App:
     def run_test_actions(self, actions):
         """Tests: drive the window through the real handlers. Actions (coordinates normalized to the photo):
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
-        snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear/5 qwen/6 rorem] · more:n · pick:i ·
+        snap:n · shadow · remove:n[,model 1 flux/2 lama/4 qwen/5 rorem (MODEL_KEYS)] · more:n · pick:i ·
         detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit ·
         menu (opens / closes the model list) · wheel:notches,mods (on the photo; mods 1 Ctrl/Cmd, 2 Alt/Option) ·
         describe:text (Describe's field and "Select all") · right:x,y (a right-click) · split ("Split into parts") ·

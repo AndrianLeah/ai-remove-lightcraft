@@ -130,25 +130,29 @@ lì non c'è lo scarica: per esempio gli encoder di testo di FLUX, se in ComfyUI
 lo usa dov'è: non copia niente, e disinstallare AI Remove non tocca quella cartella. Le cartelle restano scritte in
 `airemove.json` (`model_paths`), quindi non spostarle.
 
-Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/huggingface/hub`.
+Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cache/huggingface/hub`.
 
 ## I modelli
 
 | Modello | Quando usarlo | Non per | Peso | Licenza |
 |---|---|---|---|---|
 | **LaMa** | Oggetti piccoli e medi su sfondi semplici (muro, cielo, prato, asfalto). Gira sul processore, un solo risultato in pochi secondi. | Aree grandi e strutture (porte, finestre): le sfoca | 0,2 GB | Apache-2.0 |
-| **SDXL** | Aree medie con dettagli: inventa contenuto coerente con la scena e ogni variante è diversa. Circa 8–15 s a variante con una GPU. | Una persona in mezzo ad altre: può ridisegnarne una | 6,8 GB | CreativeML Open RAIL++-M |
-| **RORem** (facoltativo, sui file di SDXL) | Persone e oggetti: SDXL riaddestrato solo per togliere; dove SDXL ridisegna una persona o un oggetto strano nel buco (l'altra di due persone vicine, chi porta una borsa rimasta fuori dalla selezione), disegna lo sfondo. Circa 7 s a variante con una GPU. | Buchi lunghi e sottili (un palo): può lasciare una giuntura, SDXL è più pulito | 4,8 GB | Apache-2.0, su CreativeML Open RAIL++-M di SDXL |
+| **RORem** (con i file di SDXL Inpainting) | Persone e oggetti, il modello predefinito: SDXL riaddestrato solo per togliere; dove SDXL ridisegna una persona o un oggetto strano nel buco (l'altra di due persone vicine, chi porta una borsa rimasta fuori dalla selezione), disegna lo sfondo. Circa 7 s a variante con una GPU. | Buchi lunghi e sottili (un palo): può lasciare una giuntura, LaMa o FLUX sono più puliti | 11,6 GB (SDXL 6,8 + RORem 4,8) | Apache-2.0, su CreativeML Open RAIL++-M di SDXL |
 | **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. | Le persone: in una strada o tra la folla ridisegna persone dove c'erano | 16,4 GB | FLUX.1 [dev] Non-Commercial |
 | **SAM 3** | La selezione con un clic, o descrivendo cosa selezionare ("people"). Senza, si usa il pennello. | | 3,2 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
-| **OSOR** (facoltativo, su FLUX) | Toglie l'oggetto insieme alla sua ombra e al riflesso, in un solo passo (3–8 s). È lui che trova l'ombra per "Includi l'ombra". | Aree grandi: più morbido di FLUX | 0,6 GB | FLUX.1 [dev] Non-Commercial |
-| **ObjectClear** (facoltativo) | Toglie l'oggetto insieme alla sua ombra e al riflesso, circa 5 s a variante, a 512 px. | Aree grandi: dettaglio più morbido | 7,3 GB | S-Lab License 1.0 (non commerciale) |
+| **OSOR** (facoltativo, su FLUX) | Trova le ombre e i riflessi accanto a ciò che selezioni, per "Includi l'ombra" (insieme a SAM 3). | | 0,6 GB | FLUX.1 [dev] Non-Commercial |
 | **Qwen-Image 2.1 Turbo** (facoltativo) | Persone e oggetti su sfondi complessi (una persona davanti a una scalinata, un palo davanti alle colonne): riconosce cosa hai selezionato e lo toglie chiamandolo per nome. Circa 30 s a variante a 1024 px. Serve una GPU NVIDIA o AMD da 16 GB. | Quando hai fretta: circa un minuto per la prima variante di una rimozione | 14,4 GB | Qwen Research License (non commerciale); il suo encoder del testo Qwen3-VL: Apache-2.0 |
 
-**Uso commerciale.** FLUX, OSOR, ObjectClear e Qwen-Image sono solo per uso non commerciale. Vanno bene per le tue foto,
-ma non per lavori pagati o per clienti senza una licenza dei loro autori: Black Forest Labs per FLUX e OSOR, S-Lab per
-ObjectClear, il team Qwen di Alibaba per Qwen-Image. Per i lavori pagati usa LaMa, SDXL o RORem (SDXL e RORem con le
-limitazioni d'uso di SDXL). La licenza di FLUX chiede anche di controllare i risultati prima di condividerli, e di dire che sono stati
+**Modelli tolti.** SDXL Inpainting non è più nel menu: ridisegnava una persona o un oggetto strano dove RORem non ne
+ridisegnava nessuno (11 rimozioni di prova su 12, contro 0), e RORem, che usa i suoi file, fa il suo lavoro. ObjectClear
+non c'è più: a 512 px i suoi riempimenti erano sempre morbidi, e "Includi l'ombra" con RORem o FLUX fa lo stesso più
+nitido. L'aggiornamento toglie la sua cartella dai modelli di AI Remove (7,3 GB). OSOR non è più un modello del menu:
+trova le ombre per "Includi l'ombra". I progetti tengono le varianti fatte con questi modelli, e `--auto sdxl` /
+`--auto osor` funzionano ancora.
+
+**Uso commerciale.** FLUX, OSOR e Qwen-Image sono solo per uso non commerciale. Vanno bene per le tue foto, ma non per
+lavori pagati o per clienti senza una licenza dei loro autori: Black Forest Labs per FLUX e OSOR, il team Qwen di
+Alibaba per Qwen-Image. Per i lavori pagati usa LaMa o RORem (con le limitazioni d'uso di SDXL). La licenza di FLUX chiede anche di controllare i risultati prima di condividerli, e di dire che sono stati
 modificati con l'AI dove la legge lo richiede. È un riassunto, non un parere legale: valgono le licenze.
 
 Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plaster wall" o "dark doorway". Con
@@ -221,7 +225,7 @@ istruzioni in [AGENTS.md](AGENTS.md).
   poi va veloce.
 - **Mac: "Python vorrebbe accedere a…"**: se i RAW sono su un disco esterno, sulla Scrivania o in Documenti, macOS
   chiede una volta il permesso. Rispondi *Consenti*.
-- **Memoria della GPU esaurita**: usa SDXL invece di FLUX, oppure meno varianti, e chiudi gli altri programmi che
+- **Memoria della GPU esaurita**: usa RORem invece di FLUX, oppure meno varianti, e chiudi gli altri programmi che
   usano la GPU.
 - **LightCraft Flatpak (Linux)**: l'installer gli dà i permessi necessari: rete locale, cartella `AIRemove`, avvio di
   programmi esterni. Si possono togliere con `flatpak override --user --reset ai.storyteller.lightcraft`.

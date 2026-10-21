@@ -34,8 +34,8 @@ Setup of the server: `mcp/README.md`.
    has not downloaded it. The token is the user's own Read token, and they must have accepted the licence on the model
    page. Never invent one. Never print it back.
 5. **Install, non-interactively:**
-   - macOS / Linux: `sh installer/bootstrap.sh --yes --models lama,sam3,sdxl [--hf-token T]`
-   - Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File installer\bootstrap.ps1 --yes --models lama,sam3,sdxl`
+   - macOS / Linux: `sh installer/bootstrap.sh --yes --models lama,sam3,rorem [--hf-token T]`
+   - Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File installer\bootstrap.ps1 --yes --models lama,sam3,rorem`
 
    **Windows, inside the Claude desktop app** (or any packaged MSIX app): processes you start write AppData into a
    private copy that LightCraft and the Start menu cannot see. So start the installer through Explorer instead:
@@ -61,9 +61,9 @@ Setup of the server: `mcp/README.md`.
 - **Headless:**
   1. Put a mask named `Remove` (or `Rimuovi`), or `Remove: <English prompt>`, on the photo in LightCraft. For example, with
      LightCraft's MCP: an Object mask on the thing, then rename it.
-  2. Run `airemove-cli --auto sdxl` (or `lama`, `rorem`, `flux`, `osor`, `objectclear`, `qwen`, `sdxl3` to use the 3rd variant),
-     optionally with `--id PHOTO_ID`. Add `--shadow` to remove the object's shadow and reflection too (needs OSOR or
-     ObjectClear installed).
+  2. Run `airemove-cli --auto rorem` (or `lama`, `flux`, `qwen`; `rorem3` to use the 3rd variant; `sdxl` and `osor`
+     still work, `objectclear` runs OSOR), optionally with `--id PHOTO_ID`. Far-apart parts of the masks become
+     removals of their own. Add `--shadow` to remove the object's shadow and reflection too (needs OSOR installed).
   3. It prints one JSON line with the result's path (`dng`, and `file`: the same, also for a picture) and its
      LightCraft photo id.
 - **Projects:** `<photo>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each

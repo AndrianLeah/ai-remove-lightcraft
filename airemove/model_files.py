@@ -101,8 +101,10 @@ class Part:
 
 
 class Model:
-    def __init__(self, name, what, licence, parts):
-        self.name, self.what, self.licence, self.parts = name, what, licence, parts
+    """offered=False: not a choice of its own in the installer (SDXL: RORem brings its files)."""
+
+    def __init__(self, name, what, licence, parts, offered=True):
+        self.name, self.what, self.licence, self.parts, self.offered = name, what, licence, parts, offered
 
     @property
     def gb(self):
@@ -120,8 +122,6 @@ SDXL_FILES = ["model_index.json", "scheduler/scheduler_config.json",
               "vae/config.json", "vae/diffusion_pytorch_model.fp16.safetensors"]
 FLUX_FILES = ["model_index.json", "LICENSE.md", "scheduler/*", "text_encoder/*", "text_encoder_2/*", "tokenizer/*",
               "tokenizer_2/*", "transformer/config.json", "vae/*"]
-OBJECTCLEAR_FILES = ["model_index.json", "scheduler/*", "tokenizer/*", "tokenizer_2/*", "*/config.json",
-                     "*/model.fp16.safetensors", "*/diffusion_pytorch_model.fp16.safetensors"]
 PARTS = {p.name: p for p in (
     Part("lama", 0.19, ["lama_fp32.onnx"], "Carve/LaMa-ONNX", ["lama_fp32.onnx"]),
     Part("sam3", 3.21, [SAM3_WEIGHTS], "facebook/sam3", [SAM3_WEIGHTS], check=_sam3, gated=True),
@@ -148,13 +148,6 @@ PARTS = {p.name: p for p in (
     Part("flux-turbo-alpha", 0.65, [TURBO_WEIGHTS], "alimama-creative/FLUX.1-Turbo-Alpha", [TURBO_WEIGHTS],
          anywhere=False, optional=True),
     Part("osor", 0.56, [OSOR_WEIGHTS], "QinmingZhou/OSOR", [OSOR_WEIGHTS, "README.md"]),
-    Part("objectclear", 7.29, ["model_index.json"] + [f"{c}/model.fp16.safetensors" for c in
-                                                     ("text_encoder", "text_encoder_2", "image_prompt_encoder",
-                                                      "postfuse_module")]
-         + ["unet/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.fp16.safetensors"],
-         "jixin0101/ObjectClear", OBJECTCLEAR_FILES, check=_pipeline("ObjectClearPipeline")),
-    # its pipeline code, from GitHub (S-Lab licence: not shipped with AI Remove)
-    Part("objectclear/code", 0.0, ["objectclear/pipelines/pipeline_objectclear.py"]),
     # Qwen-Image 2.1 Turbo: the configs, processor and VAE (the transformer is the GGUF, the text encoder Qwen's own
     # FP8 Qwen3-VL — byte for byte the bf16 one inside Qwen-Image's repo, at 10 GB instead of 17.5)
     Part("qwen-image-2.1-turbo", 0.64, ["model_index.json", "processor/tokenizer.json", "transformer/config.json",
@@ -175,23 +168,21 @@ MODELS = {
     "sam3": Model("SAM 3", N_("One-click selection: the same model as LightCraft's Object masks. Without it you "
                               "select with the brush."),
                   "SAM License (Meta)", ["sam3"]),
+    # no longer in the window's menu: RORem runs on its files (and "Full detail" without FLUX)
     "sdxl": Model("SDXL Inpainting", N_("Generative fill on the GPU, ~8–15 s per variant, each one different: medium "
                                         "areas with detail."),
-                  "CreativeML Open RAIL++-M", ["sdxl-inpaint", "sdxl-vae-fp16-fix"]),
-    "rorem": Model("RORem", N_("SDXL retrained only to remove: where SDXL draws a person or an odd object back into "
-                               "the hole, it draws the background. ~7 s per variant. It uses SDXL's files: needs "
-                               "SDXL."),
-                   "Apache-2.0; on SDXL Inpainting (CreativeML Open RAIL++-M)", ["rorem"]),
+                  "CreativeML Open RAIL++-M", ["sdxl-inpaint", "sdxl-vae-fp16-fix"], offered=False),
+    "rorem": Model("RORem", N_("Removes people and objects without drawing anyone back: SDXL Inpainting retrained "
+                               "only to remove (SDXL's files come with it). ~7 s per variant on a GPU."),
+                   "Apache-2.0; on SDXL Inpainting (CreativeML Open RAIL++-M)",
+                   ["sdxl-inpaint", "sdxl-vae-fp16-fix", "rorem"]),
     "flux": Model("FLUX.1 Fill [dev] + Turbo", N_("The most realistic fill: it respects light, perspective and "
                                                   "architecture; for large or difficult areas. Needs a GPU with 12 GB "
                                                   "or more."),
                   "FLUX.1 [dev] Non-Commercial License", ["FLUX.1-Fill-dev", "gguf", "flux-turbo-alpha"]),
-    "osor": Model("OSOR", N_("Removes an object together with its shadow and reflection, in one step (~3–8 s); it "
-                             "also finds the shadow for \"Include the shadow\". Runs on FLUX."),
+    "osor": Model("OSOR", N_("Finds the shadows and reflections next to what you select, for \"Include the "
+                             "shadow\" (with SAM 3). Runs on FLUX."),
                   "FLUX.1 [dev] Non-Commercial License", ["osor"]),
-    "objectclear": Model("ObjectClear", N_("Removes an object together with its shadow and reflection, ~5 s per "
-                                           "variant, at 512 px (softer detail on large areas)."),
-                         "S-Lab License 1.0 (non-commercial)", ["objectclear", "objectclear/code"]),
     "qwen": Model("Qwen-Image 2.1 Turbo", N_("Removes what you select by name: it recognises the object and redraws "
                                              "the scene behind it, at 1024 px. For large areas on complex "
                                              "backgrounds (a person in front of steps, a pole across columns). Needs "

@@ -1,10 +1,10 @@
 """Engines for AI Remove: SAM 3 (selection), LaMa (ONNX, processor), SDXL Inpainting and FLUX.1 Fill (diffusers),
-RORem (SDXL Inpainting retrained to remove: its UNet in SDXL's pipeline), two that remove an object together with its
-shadow and reflection: OSOR (a mode of the FLUX engine: the same transformer with OSOR's adapter) and ObjectClear (its
-own SDXL-based pipeline), and Qwen-Image 2.1, which removes the selection by name.
+RORem (SDXL Inpainting retrained to remove: its UNet in SDXL's pipeline), OSOR (a mode of the FLUX engine: the same
+transformer with OSOR's adapter), which removes an object together with its shadow and reflection and finds the
+shadow for "Include the shadow", and Qwen-Image 2.1, which removes the selection by name.
 
 The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by torch as "cuda"), Intel Arc (xpu),
-Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and ObjectClear
+Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and Qwen-Image
 don't fit together: the session unloads one before loading another."""
 import os
 import numpy as np
@@ -40,9 +40,11 @@ OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was train
 OSOR_T = 0.4  # its single denoising step starts from 40 % noise on the photo itself (object included)
 QWEN_SIZE = 1024  # on the area's short side: an oblong area keeps its shape (qwen_dims)
 QWEN_COND_SIZE, QWEN_MASK_SIZE, QWEN_NAME_SIZE = 1024, 512, 768  # the photo, the hole and the picture it is named in
-QWEN_ASK = ("The area outlined in red in this photo will be erased. Name the object that the red outline traces "
-            "(not what is behind it). Answer with a short noun phrase only, such as \"the man with a backpack\", "
-            "\"the street sign\" or \"the parked car\".")
+# everything inside the outline: a person and their bag in one removal were named "the woman", and the bag stayed
+QWEN_ASK = ("The area outlined in red in this photo will be erased. Name everything that the red outline traces: every "
+            "person and every object inside it, such as a bag, an umbrella or a sign (not what is behind them). Answer "
+            "with one short noun phrase only, such as \"the man with a backpack\", \"the woman and her handbag\", "
+            "\"two people with an umbrella\" or \"the street sign\".")
 QWEN_REMOVE = ("Remove {what} from the photo and fill the area with the background that naturally continues the "
                "surrounding scene. Keep everything else exactly as it is. Do not add any person or object.")
 QWEN_LOCK = True  # outside the hole the latents follow the photo's at every step (the edit cannot drift there)
@@ -143,14 +145,14 @@ def model_folders():
 
 def usable(model, dev=None):
     """Installed and sensible on this machine: FLUX (and OSOR, which runs on it) and Qwen-Image need a GPU; SDXL,
-    RORem and ObjectClear work on the processor but take minutes."""
+    RORem work on the processor but take minutes."""
     dev = dev or device()
     if not installed(model):
         return False
     return model not in ("flux", "osor", "qwen") or dev != "cpu"
 
 
-SHADOW_MODELS = ("osor", "objectclear")  # remove the object together with its shadow and reflection
+SHADOW_MODELS = ("osor",)  # finds the object's shadow and reflection ("Include the shadow")
 
 
 # ------------------------------------------------------------------------------------------------ LaMa
@@ -860,7 +862,7 @@ class Qwen:
         te.lm_head = te.head  # logits, for the last token only (generate asks for no more)
         try:
             with torch.no_grad():
-                ids = te.generate(**inputs, max_new_tokens=16, do_sample=False)
+                ids = te.generate(**inputs, max_new_tokens=24, do_sample=False)
         finally:
             te.lm_head = torch.nn.Identity()
         what = proc.batch_decode(ids[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0].strip()
@@ -1018,71 +1020,4 @@ class Qwen:
     def unload(self):
         del self.pipe
         self.cond = {}
-        _free_gpu()
-
-
-# ------------------------------------------------------------------------------------------------ ObjectClear
-def _cv2_shim():
-    """ObjectClear's fusion imports OpenCV for five calls; without opencv in the venv, the same with scipy."""
-    import sys
-    import types
-    from scipy import ndimage as ndi
-    cv2 = types.ModuleType("cv2")
-    cv2.THRESH_BINARY, cv2.INTER_NEAREST, cv2.MORPH_ELLIPSE = 0, 0, 2
-    cv2.threshold = lambda a, t, mx, _type: (t, np.where(a > t, mx, 0).astype(a.dtype))
-    cv2.resize = lambda a, size, interpolation=0: np.asarray(
-        Image.fromarray(a.astype(np.float32), "F").resize(size, Image.NEAREST))
-
-    def ellipse(_shape, ksize):
-        w, h = ksize
-        yy, xx = np.mgrid[:h, :w]
-        return ((((xx - (w - 1) / 2) / (w / 2)) ** 2 + ((yy - (h - 1) / 2) / (h / 2)) ** 2) <= 1).astype(np.uint8)
-    cv2.getStructuringElement = ellipse
-    cv2.dilate = lambda a, k, iterations=1: ndi.grey_dilation(a, footprint=k.astype(bool))
-    cv2.GaussianBlur = lambda a, ksize, sigmaX=0: ndi.gaussian_filter(a, sigmaX, truncate=(ksize[0] // 2) / sigmaX)
-    sys.modules["cv2"] = cv2
-
-
-class ObjectClear:
-    """ObjectClear (CVPR 2026, NTU S-Lab): SDXL fine-tuned to remove objects with their effects; the object is also
-    shown to it through a CLIP image encoder, and an attention map of object + effects guides the final fusion.
-    Trained at 512 px, 20 steps, ~3 s on a 7800 XT, ~8 GB. Licence: S-Lab 1.0, NON-commercial. Its pipeline code is
-    downloaded by the installer into models/objectclear/code (not shipped with AI Remove: same licence)."""
-    name = "ObjectClear"
-    S = 512
-
-    def __init__(self, log=print):
-        import sys
-        dev = device()
-        import torch
-        code = str(mf.part_dir("objectclear/code"))
-        if code not in sys.path:
-            sys.path.insert(0, code)
-        try:
-            import cv2  # noqa: F401
-        except ImportError:
-            _cv2_shim()
-        from objectclear.pipelines import ObjectClearPipeline
-        self.torch, self.dev = torch, dev
-        dt = torch.float32 if dev == "cpu" else torch.float16  # only the fp16 files are installed: upcast on the CPU
-        self.pipe = ObjectClearPipeline.from_pretrained_with_custom_modules(
-            str(mf.part_dir("objectclear")), torch_dtype=dt, variant="fp16", apply_attention_guided_fusion=True).to(dev)
-        self.pipe.set_progress_bar_config(disable=True)
-        log(f"ObjectClear ready ({dev})")
-
-    def fill(self, src: Image.Image, mask: Image.Image, seed: int = 0, steps: int = 20, guidance: float = 2.5,
-             progress=None, log=print):
-        """Returns (image, effect): effect (L, src size) is its attention map of the object and its effects."""
-        S = self.S
-        res = self.pipe(prompt="remove the instance of object", image=src.convert("RGB").resize((S, S), Image.LANCZOS),
-                        mask_image=mask.resize((S, S), Image.NEAREST), num_inference_steps=steps,
-                        guidance_scale=guidance, height=S, width=S, return_attn_map=True,
-                        generator=self.torch.Generator("cpu").manual_seed(seed),
-                        callback_on_step_end=_step_callback(progress, steps))
-        eff = res.attns[0].convert("L") if getattr(res, "attns", None) else mask
-        _free_gpu()
-        return res.images[0].resize(src.size, Image.LANCZOS), eff.resize(src.size, Image.BILINEAR)
-
-    def unload(self):
-        del self.pipe
         _free_gpu()
