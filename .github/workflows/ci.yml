@@ -5,8 +5,9 @@
 # has in a folder of their own (--model-dir: LaMa moved into a Hugging Face cache layout, used from there); one removal
 # end to end with the installed app and that LaMa (tools/ci_removal.py: a synthetic raw DNG made on the runner, LaMa on
 # the processor, the blend, the DNG and the .airemove project, checked pixel by pixel), a long removal in tiles
-# (tools/ci_tiles.py), one on each kind of picture (tools/ci_pictures.py: JPEG, PNG, TIFF, WebP, HEIC, AVIF), the MCP
-# server over stdio, and the uninstaller (tools/ci_smoke.py). Before the install: a program
+# (tools/ci_tiles.py), one on each kind of picture (tools/ci_pictures.py: JPEG, PNG, TIFF, WebP, HEIC, AVIF),
+# Describe's masks from synthetic SAM 3 output (tools/ci_describe.py), the MCP server over stdio, and the uninstaller
+# (tools/ci_smoke.py). Before the install: a program
 # reading install-status.json cannot stop the installer's writes of it (tools/ci_status.py).
 # No secrets, no photos.
 name: CI

@@ -18,7 +18,8 @@ JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
 
 1. In LightCraft, select a photo and press **Ctrl+Shift+X** (**Cmd+Shift+X** on a Mac).
 2. Click what should go: SAM 3 selects the whole object. Alt/Option+click takes a part out, Shift+click adds one, and
-   the brush and eraser handle the rest.
+   the brush and eraser handle the rest. Or **describe** it: type "people" (in English) and SAM 3 selects every
+   person in the photo, each on its own, so a right-click drops one you want to keep.
 3. **Remove selection** generates a few variants with the model you chose. Pick the best one. To remove the
    object's shadow or reflection too, press **Include the shadow** first: it adds them to the selection, in blue.
    On a long removal (a pole, a cable, a railing), **Full detail** redraws the chosen variant at the photo's own
@@ -48,6 +49,10 @@ embedded preview, which would still show what was removed.
 ## Features
 
 - **One-click selection** with SAM 3, refined with more clicks, a brush and an eraser.
+- **Select by describing:** "people", "car", "sign" selects every instance at once, a crowd included (~0.3 s on a
+  GPU, after a few seconds' load the first time). Where two people touch, no strip between them is left out: like
+  LightCraft's own Describe since 0.11, each person's mask is joined by SAM 3's semantic mask where that person is
+  the nearest.
 - **Three fill models.** LaMa is fast and runs on the processor. SDXL Inpainting makes generative variants. FLUX.1 Fill
   [dev] with Turbo-Alpha is the most realistic.
 - **Shadows and reflections (optional).** OSOR and ObjectClear remove an object together with its shadow and
@@ -169,7 +174,7 @@ Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache
 | SDXL Inpainting | Medium areas with detail; every variant differs; ~8–15 s each on a GPU | 6.8 GB | CreativeML Open RAIL++-M |
 | RORem (optional, on SDXL's files) | SDXL retrained only to remove: no person or odd object drawn back where SDXL draws one; ~7 s per variant on a GPU. On long thin holes (a pole) SDXL is cleaner | 4.8 GB | Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M |
 | FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | 16.4 GB | FLUX.1 [dev] Non-Commercial |
-| SAM 3 | One-click selection (without it: the brush) | 3.2 GB (0 if LightCraft has it) | SAM License (Meta) |
+| SAM 3 | One-click selection, and selecting by describing ("people"); without it: the brush | 3.2 GB (0 if LightCraft has it) | SAM License (Meta) |
 | OSOR (optional, on FLUX) | The object with its shadow and reflection, one step (~3–8 s); finds the shadow for "Include the shadow" | 0.6 GB | FLUX.1 [dev] Non-Commercial |
 | ObjectClear (optional) | The object with its shadow and reflection, ~5 s per variant, 512 px | 7.3 GB | S-Lab License 1.0 (non-commercial) |
 | Qwen-Image 2.1 Turbo (optional) | Large areas on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~30 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
@@ -190,6 +195,7 @@ Qwen-Image it names what to remove, when it recognised it wrongly ("the lamp pos
 | | Windows / Linux | Mac |
 |---|---|---|
 | Select an object | click | click |
+| Select every instance of something | type it under the tools ("people"), Enter | type it under the tools ("people"), Return |
 | Take a part out / add a part | Alt+click / Shift+click | Option+click / Shift+click |
 | SAM click / Brush / Eraser | S / B / E | S / B / E |
 | Brush / Eraser size | `[` `]` or Ctrl+wheel | `[` `]` or Cmd+wheel |

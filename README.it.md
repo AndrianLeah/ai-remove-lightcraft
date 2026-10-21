@@ -11,7 +11,9 @@ Fa quello che in Lightroom è "Rimozione generativa", ma tutto gira sul tuo comp
 PNG, TIFF, WebP, HEIC e AVIF.
 
 1. In LightCraft scegli una foto e premi **Ctrl+Shift+X** (**Cmd+Shift+X** su Mac).
-2. Nella finestra di AI Remove clicca su ciò che vuoi togliere: SAM 3 lo seleziona tutto.
+2. Nella finestra di AI Remove clicca su ciò che vuoi togliere: SAM 3 lo seleziona tutto. Oppure **descrivilo**:
+   scrivi "people" (in inglese) e SAM 3 seleziona tutte le persone della foto, ognuna per conto suo, così con un clic
+   destro togli dalla selezione quella che vuoi tenere.
 3. Premi **Rimuovi selezione**: vengono generate alcune varianti e tu scegli la migliore. Per togliere anche l'ombra
    o il riflesso dell'oggetto, premi prima **Includi l'ombra**: li aggiunge alla selezione, in blu.
    Pali, cavi e cordoni lunghi vengono riempiti a tasselli lungo l'oggetto, ognuno vicino alla misura del modello:
@@ -129,7 +131,7 @@ Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/hug
 | **SDXL** | Aree medie con dettagli: inventa contenuto coerente con la scena e ogni variante è diversa. Circa 8–15 s a variante con una GPU. | 6,8 GB | CreativeML Open RAIL++-M |
 | **RORem** (facoltativo, sui file di SDXL) | SDXL riaddestrato solo per togliere: dove SDXL ridisegna una persona o un oggetto strano nel buco (l'altra di due persone vicine, chi porta una borsa rimasta fuori dalla selezione), disegna lo sfondo. Circa 7 s a variante con una GPU. Sui buchi lunghi e sottili (un palo) SDXL è più pulito. | 4,8 GB | Apache-2.0, su CreativeML Open RAIL++-M di SDXL |
 | **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. | 16,4 GB | FLUX.1 [dev] Non-Commercial |
-| **SAM 3** | La selezione con un clic (senza, si usa il pennello). | 3,2 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
+| **SAM 3** | La selezione con un clic, o descrivendo cosa selezionare ("people"). Senza, si usa il pennello. | 3,2 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
 | **OSOR** (facoltativo, su FLUX) | Toglie l'oggetto insieme alla sua ombra e al riflesso, in un solo passo (3–8 s). È lui che trova l'ombra per "Includi l'ombra". | 0,6 GB | FLUX.1 [dev] Non-Commercial |
 | **ObjectClear** (facoltativo) | Toglie l'oggetto insieme alla sua ombra e al riflesso, circa 5 s a variante, a 512 px. | 7,3 GB | S-Lab License 1.0 (non commerciale) |
 | **Qwen-Image 2.1 Turbo** (facoltativo) | Aree grandi su sfondi complessi (una persona davanti a una scalinata, un palo davanti alle colonne): riconosce cosa hai selezionato e lo toglie chiamandolo per nome. Circa 30 s a variante a 1024 px. Serve una GPU NVIDIA o AMD da 16 GB. | 14,4 GB | Qwen Research License (non commerciale); il suo encoder del testo Qwen3-VL: Apache-2.0 |
@@ -148,6 +150,7 @@ Qwen-Image dice cosa togliere, se lo ha riconosciuto male ("the lamp post").
 | | Windows / Linux | Mac |
 |---|---|---|
 | Seleziona un oggetto | clic | clic |
+| Seleziona tutti gli esemplari di qualcosa | scrivilo sotto gli strumenti ("people"), Invio | scrivilo sotto gli strumenti ("people"), Invio |
 | Togli una parte / aggiungi una parte | Alt+clic / Shift+clic | Option+clic / Shift+clic |
 | Pennello / Gomma / Clic SAM | B / E / S | B / E / S |
 | Dimensione di Pennello / Gomma | `[` `]` oppure Ctrl+rotella | `[` `]` oppure Cmd+rotella |
