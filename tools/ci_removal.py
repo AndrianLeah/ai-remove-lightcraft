@@ -238,6 +238,20 @@ def run(d, out):
                                           f"(made with {NOISE[0]} * signal + {NOISE[1]})")
     clipped_sky(s.raw, cfa0)
 
+    # the preview's tone curve (Session._place, airemove.tone_curve): render values to the photo's, here the photo's
+    # = 0.8 x render + 10 with noise, and 5 stray pixels at 0 that are 183 in the photo (a clipped highlight beside a
+    # man in a Pompeii street did that: the old fit took red 0-160 to 174, and the fill showed red)
+    rng = np.random.default_rng(1)
+    xs = rng.integers(20, 236, 300_000).astype(np.uint8)
+    ys = np.clip(0.8 * xs + 10 + rng.normal(0, 2, xs.size), 0, 255).astype(np.uint8)
+    xs, ys = np.concatenate([xs, np.zeros(5, np.uint8)]), np.concatenate([ys, np.full(5, 183, np.uint8)])
+    lut = ar.tone_curve(xs, ys)
+    err = max(abs(int(lut[v]) - (0.8 * v + 10)) for v in (40, 80, 120, 160, 200))
+    expect(err <= 3 and np.all(np.diff(lut.astype(int)) >= 0),
+           f"tone curve: monotone, within {err:.1f} of the photo's at 40-200, 5 stray pixels ignored")
+    expect(np.array_equal(ar.tone_curve(xs[:100], ys[:100]), np.arange(256)),
+           "tone curve: too few pixels, the identity")
+
     t0 = time.time()
     r = s.new_removal(sel)
     y0, x0 = s.raw.frame[:2]

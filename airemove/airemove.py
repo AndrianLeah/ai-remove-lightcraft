@@ -274,6 +274,42 @@ def grow(mask_bool, px):
     return ndi.distance_transform_edt(~mask_bool) <= px
 
 
+def tone_curve(xs, ys):
+    """One channel's curve from a removal's render space to base.png's developed look (the window's preview), as a
+    256-entry uint8 table, fitted on the pixels around the hole: xs their render values, ys the photo's (uint8).
+    Each value's median, from values with at least 1 in 10,000 of the pixels (and 4): a handful of stray ones — 5
+    pixels at red 0 that were 183 in the photo, beside a man at the edge of a Pompeii street — had taken the whole
+    lower half of the red channel to 174 through the monotone step, and the fill showed red. Made monotone by pooling
+    neighbours weighted by their pixel counts (isotonic regression), then smoothed. Too few pixels: the identity."""
+    ident = np.arange(256, dtype=np.uint8)
+    if xs.size < 500:
+        return ident
+    order = np.argsort(xs, kind="stable")  # the pixels of each value together: one pass, not 256 scans
+    xs_s, ys_s = xs[order], ys[order]
+    cuts = np.searchsorted(xs_s, np.arange(257))
+    least = max(4, int(1e-4 * xs.size))
+    known, vals, weights = [], [], []
+    for v in range(256):
+        sel = ys_s[cuts[v]:cuts[v + 1]]
+        if sel.size >= least:
+            known.append(v)
+            vals.append(float(np.median(sel)))
+            weights.append(sel.size)
+    if len(known) < 8:
+        return ident
+    blocks = []  # pool adjacent violators: [value, weight, values pooled]
+    for v, w in zip(vals, weights):
+        blocks.append([v, w, 1])
+        while len(blocks) > 1 and blocks[-2][0] > blocks[-1][0]:
+            v2, w2, n2 = blocks.pop()
+            v1, w1, n1 = blocks.pop()
+            blocks.append([(v1 * w1 + v2 * w2) / (w1 + w2), w1 + w2, n1 + n2])
+    vals = [b[0] for b in blocks for __ in range(b[2])]
+    lut = np.interp(np.arange(256), known, vals)
+    lut = np.convolve(np.pad(lut, 3, mode="edge"), np.ones(7) / 7, mode="valid")
+    return np.clip(np.maximum.accumulate(lut), 0, 255).astype(np.uint8)
+
+
 def srgb_to_lin(x8):
     x = x8.astype(np.float64) / 255.0
     return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
@@ -1377,27 +1413,7 @@ class Session:
             area = np.asarray(r.src)
         src_o = np.asarray(Image.fromarray(np.ascontiguousarray(apply_t(area, self.t))).resize(size, Image.BILINEAR))
         base_c = self.base_arr[Y0:Y1, X0:X1]
-        r.lut = []
-        for c in range(3):
-            xs, ys = src_o[..., c][keep], base_c[..., c][keep]
-            if xs.size < 500:
-                r.lut.append(np.arange(256, dtype=np.uint8))
-                continue
-            order = np.argsort(xs, kind="stable")  # the pixels of each value together: one pass, not 256 scans
-            xs_s, ys_s = xs[order], ys[order]
-            cuts = np.searchsorted(xs_s, np.arange(257))
-            known, vals = [], []
-            for v in range(256):
-                sel = ys_s[cuts[v]:cuts[v + 1]]
-                if sel.size >= 4:
-                    known.append(v)
-                    vals.append(float(np.median(sel)))
-            if len(known) < 8:
-                r.lut.append(np.arange(256, dtype=np.uint8))
-                continue
-            lut = np.interp(np.arange(256), known, vals)
-            lut = np.convolve(np.pad(lut, 3, mode="edge"), np.ones(7) / 7, mode="valid")
-            r.lut.append(np.clip(np.maximum.accumulate(lut), 0, 255).astype(np.uint8))
+        r.lut = [tone_curve(src_o[..., c][keep], base_c[..., c][keep]) for c in range(3)]
 
     def _base_alpha(self, r, alpha):
         """An area alpha (render space) in base.png's frame, over r.base_rect."""
