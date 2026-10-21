@@ -84,16 +84,18 @@ PANEL = CARD
 RED = (235, 64, 52)
 SHADOW_RGB = (56, 198, 244)  # the selection's shadow part ("Include the shadow")
 WHITE = (240, 240, 240)
-MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "objectclear", "qwen"]  # tests: remove:n,i / model:i use these indices
+MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "objectclear", "qwen", "rorem"]  # tests: remove:n,i / model:i use these
 # the models' own names, as the menu shows them (variant labels keep their short ones: airemove.MODELS)
 MODEL_NAMES = {"sdxl": "SDXL", "flux": "FLUX Fill", "lama": "LaMa", "osor": "OSOR", "objectclear": "ObjectClear",
-               "qwen": "Qwen-Image"}
+               "qwen": "Qwen-Image", "rorem": "RORem"}
 # the menu: what fills the selection, quickest first, then what takes the object's shadow too
-MODEL_GROUPS = ((N_("Fill the selection"), ("lama", "sdxl", "flux", "qwen")),
+MODEL_GROUPS = ((N_("Fill the selection"), ("lama", "sdxl", "rorem", "flux", "qwen")),
                 (N_("Object and its shadow"), ("objectclear", "osor")))
 # what the text field is for: what to put there (SDXL, FLUX Fill), the name of what to remove (Qwen-Image: it names
-# the selection itself, a name corrects it) or nothing (LaMa, OSOR and ObjectClear read no text)
-PROMPT_MODE = {"sdxl": "fill", "flux": "fill", "qwen": "name", "lama": None, "osor": None, "objectclear": None}
+# the selection itself, a name corrects it) or nothing (LaMa, OSOR and ObjectClear read no text; RORem works with its
+# authors' fixed prompt and no guidance, which a text would hardly steer)
+PROMPT_MODE = {"sdxl": "fill", "flux": "fill", "qwen": "name", "lama": None, "osor": None, "objectclear": None,
+               "rorem": None}
 
 
 def outline(u, width=2):
@@ -796,6 +798,7 @@ class App:
         self.model_meta = {
             "lama": ("LaMa", _("Quick fill · plain backgrounds"), "~" + self.fmt_s(A.expected("lama"))),
             "sdxl": ("SDXL", _("Generative · varied results"), each("sdxl_variant")),
+            "rorem": ("RORem", _("Generative · draws no one back"), each("rorem_variant")),
             "flux": ("FLUX Fill", _("Most realistic · large areas"), each("flux_variant")),
             "qwen": ("Qwen-Image", _("By name · complex backgrounds"), each("qwen_variant")),
             "objectclear": ("ObjectClear", _("Object and its shadow"), each("objectclear_variant")),
@@ -813,6 +816,8 @@ class App:
                       "processor."),
             "sdxl": _("Medium areas with some detail. Every variant is different: make 3–4 and pick one. Your text "
                       "says what to put there."),
+            "rorem": _("A person next to others, or with something of theirs left outside the selection: where SDXL "
+                       "draws a person or an odd object back, it draws the background. Commercial use allowed."),
             "flux": _("Large or difficult areas: architecture, perspective, light. When SDXL invents odd things."),
             "qwen": _("A person or an object in front of steps, columns, railings: it names what you selected and "
                       "redraws what is behind it."),
@@ -862,7 +867,13 @@ class App:
                       "the first one of a removal. Select the whole object (a bag, a shadow): what is left outside "
                       "stays. If it names the object wrongly, write its name in English (e.g. \"the lamp post\"). It "
                       "takes almost the whole GPU. Non-commercial licence (Qwen Research).",
-                      time=self.fmt_s(A.expected("qwen_variant")))}
+                      time=self.fmt_s(A.expected("qwen_variant"))),
+            "rorem": _("RORem — SDXL retrained only to remove, ~{time} per variant, each one different. Where SDXL "
+                       "draws a person or an odd object back into the hole (the other one of two people, the owner of a "
+                       "bag left outside the selection), RORem draws what is behind. On a long thin hole (a pole) or up a "
+                       "path it can leave a seam or a rock face: there SDXL or FLUX. It uses SDXL's files. Licence "
+                       "Apache-2.0 (commercial use allowed).",
+                       time=self.fmt_s(A.expected("rorem_variant")))}
         if hasattr(self, "model_info"):
             self.model_info.configure(text=info[self.model_key()])
 
@@ -2014,7 +2025,7 @@ class App:
     def run_test_actions(self, actions):
         """Tests: drive the window through the real handlers. Actions (coordinates normalized to the photo):
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
-        snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear/5 qwen] · more:n · pick:i ·
+        snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear/5 qwen/6 rorem] · more:n · pick:i ·
         detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit ·
         menu (opens / closes the model list) · wheel:notches,mods (on the photo; mods 1 Ctrl/Cmd, 2 Alt/Option)"""
         if not actions:

@@ -4,7 +4,7 @@ the installer found it there and records it in airemove.json) stays where it is:
 Runs in the install's Python (needs huggingface_hub). Prints one line per model for the installer:
 MODEL_OK <name> | MODEL_FAIL <name> <why>.
 
-  fetch_models.py --dest DIR --models lama,sam3,sdxl,flux,osor,objectclear,qwen [--from OTHER_MODELS_DIR]
+  fetch_models.py --dest DIR --models lama,sam3,sdxl,rorem,flux,osor,objectclear,qwen [--from OTHER_MODELS_DIR]
                   [--paths '{"part": "folder", ...}']    (HF_TOKEN for gated ones)
 """
 import argparse
