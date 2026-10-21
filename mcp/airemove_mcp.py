@@ -68,10 +68,12 @@ def doc(name):
 # ------------------------------------------------------------------------------------------------ guide
 GUIDE = {
     "overview": """AI Remove is an unofficial plug-in for LightCraft (the raw photo editor by the ArtCraft team; this
-plug-in is not made or endorsed by them). It removes objects and people from RAW photos with AI (Lightroom's
+plug-in is not made or endorsed by them). It removes objects and people from photos with AI (Lightroom's
 Generative Remove, but local): select with one click (SAM 3), generate variants (LaMa, SDXL or FLUX Fill), pick one;
-the result is written back into a RAW DNG (<name>-AIRemove.dng) stacked on the original in LightCraft, so all the
-development still works on it. Every removal stays editable in a project file next to the raw (<raw>.airemove).
+from a RAW the result is written back into a RAW DNG (<name>-AIRemove.dng) stacked on the original in LightCraft, so
+all the development still works on it; from a JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format
+(<name>-AIRemove.jpg...). Every removal stays editable in a project file next to the photo (<photo>.airemove). It also
+works on its own, on a photo file, without LightCraft's window.
 Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended (NVIDIA, AMD RX 7000/9000, Apple M).""",
     "install": """1. check_system: shows the GPU, the PyTorch build that will be used, the recommended models, sizes and
    licences, free disk space, and whether LightCraft is installed / running.
@@ -87,15 +89,16 @@ Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended 
    install_status every 30-60 s and report progress.
 4. When done: LightCraft must be restarted once (it reads the control-channel setting at start). If install_status
    says pending_lightcraft, ask the user to close LightCraft, then call configure_lightcraft.
-5. Usage: in LightCraft select a raw photo, press Ctrl+Shift+X (Cmd+Shift+X on Mac), or open "AI Remove" from the
-   Start menu / Applications / app menu (it works on LightCraft's active photo).""",
+5. Usage: in LightCraft select a photo, press Ctrl+Shift+X (Cmd+Shift+X on Mac), or open "AI Remove" from the
+   Start menu / Applications / app menu (it works on LightCraft's active photo, else asks for a photo file).""",
     "use": """In the AI Remove window: click an object (SAM 3 selects it whole); Alt/Option+click removes a part,
 Shift+click adds one; Brush (B) / Eraser (E) for manual touch-ups. Pick the model (LaMa = fast, small things on plain
 backgrounds; SDXL = generative variants; FLUX = most realistic, large or structured areas; OSOR / ObjectClear = the
 object together with its shadow and reflection), optionally an English prompt of what should be there ("old plaster
 wall"), the number of variants, then "Remove selection" (Enter). "Include the shadow" (when OSOR or ObjectClear is
 installed) adds the selected object's shadow and reflection to the selection first, so any model removes them too. Each
-removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" writes/updates the DNG.
+removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" writes/updates the result
+(the DNG, or the picture's copy).
 Zoom: Ctrl/Cmd+wheel or + / -, 0 = fit; pan: wheel, middle button or Space+drag; hold "Originale" (or \\) to compare.
 Headless (no window): put a LightCraft mask named "Remove" (or "Remove: <English prompt>"; "Rimuovi" works too) on the photo — e.g. with
 LightCraft's own MCP tools (an Object mask on the thing, renamed) — then call remove_with_masks.""",
@@ -108,12 +111,12 @@ LightCraft's own MCP tools (an Object mask on the thing, renamed) — then call 
   run `sh "Install on Mac.command"` in Terminal (Gatekeeper does not check scripts started that way), or use System
   Settings > Privacy & Security > Open Anyway. The MCP install tool runs the installer through sh, so it is not
   affected. Files the installer downloads (uv, Python, PyTorch, models) carry no quarantine.
-- macOS asks once whether Python may access an external drive or the Desktop/Documents folders when the raws are
+- macOS asks once whether Python may access an external drive or the Desktop/Documents folders when the photos are
   there: allow it.
 - Logs: <install>/install.log (installation), <install>/work/last-run.log (the app).""",
     "uninstall": """uninstall (confirm=true) removes the app, its models (unless keep_models), the menu entries and the
-LightCraft settings it added (external editor, shortcut, control channel). Photos, the -AIRemove.dng files and the
-.airemove projects next to the raws are kept.""",
+LightCraft settings it added (external editor, shortcut, control channel). Photos, the -AIRemove files and the
+.airemove projects next to the photos are kept.""",
 }
 
 
@@ -407,8 +410,9 @@ TOOLS = [
     ("open_ai_remove", "Open the AI Remove window on LightCraft's active photo (or photo_id).",
      {"type": "object", "properties": {"photo_id": {"type": "integer"}}}, open_ai_remove, False),
     ("remove_with_masks", "Headless removal: the photo's LightCraft masks named \"Remove\" (or \"Remove: <English "
-                          "prompt>\") are filled with the model and written into <name>-AIRemove.dng, stacked on the "
-                          "original (like the window's Save). Can take minutes. Returns the DNG path and photo id.",
+                          "prompt>\") are filled with the model and written into <name>-AIRemove.dng (a picture: "
+                          "<name>-AIRemove.jpg..., its own format), stacked on the original (like the window's Save). "
+                          "Can take minutes. Returns the result's path (dng / file) and photo id.",
      {"type": "object", "properties": {
          "model": {"type": "string", "enum": FILL_MODELS,
                    "description": "osor / objectclear also remove the object's shadow and reflection; qwen removes "
@@ -420,18 +424,21 @@ TOOLS = [
          "variant": {"type": "integer", "description": "generate this many variants and use the last (default 1)"},
          "photo_id": {"type": "integer", "description": "default: LightCraft's active photo"}}},
      remove_with_masks, False),
-    ("project_info", "The AI Remove project of a photo: its removals, the chosen variants and the DNG it writes.",
-     {"type": "object", "properties": {"photo_id": {"type": "integer"}, "raw_path": {"type": "string"}}},
+    ("project_info", "The AI Remove project of a photo: its removals, the chosen variants and the result it writes.",
+     {"type": "object", "properties": {"photo_id": {"type": "integer"},
+                                       "raw_path": {"type": "string", "description": "the photo's file (a RAW or "
+                                                                                     "a picture)"}}},
      project_info, True),
     ("uninstall", "Uninstall AI Remove and undo its LightCraft settings (photos and projects are kept). Ask first.",
      {"type": "object", "required": ["confirm"], "properties": {"confirm": {"type": "boolean"},
                                                                  "keep_models": {"type": "boolean"}}},
      uninstall, False),
 ]
-INSTRUCTIONS = """AI Remove: an unofficial LightCraft plug-in that removes objects from RAW photos with local AI and
-writes the result back into a DNG. To install: ai_remove_guide(topic=install), then check_system, explain sizes and
-licences and get the user's consent, install(accept_licenses=true), poll install_status, then tell the user to restart
-LightCraft and press Ctrl+Shift+X (Cmd+Shift+X on Mac) on a raw photo. Never invent a Hugging Face token."""
+INSTRUCTIONS = """AI Remove: an unofficial LightCraft plug-in that removes objects from photos with local AI and
+writes the result back into a DNG (from a RAW) or a copy in the picture's format (JPEG, PNG, TIFF, WebP, HEIC, AVIF).
+To install: ai_remove_guide(topic=install), then check_system, explain sizes and licences and get the user's consent,
+install(accept_licenses=true), poll install_status, then tell the user to restart LightCraft and press Ctrl+Shift+X
+(Cmd+Shift+X on Mac) on a photo. Never invent a Hugging Face token."""
 
 
 # ------------------------------------------------------------------------------------------------ MCP plumbing

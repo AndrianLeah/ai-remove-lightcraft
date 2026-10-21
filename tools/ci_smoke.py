@@ -14,7 +14,9 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                check_system with model_dirs; the install tool's --model-dir arguments
   ci_smoke.py remove DIR       one removal end to end with the install's Python and code, LightCraft left out:
                                tools/ci_removal.py (a synthetic raw DNG, LaMa, the blend, the DNG and the project),
-                               then a long one in tiles: tools/ci_tiles.py (a cord across a synthetic area, LaMa)
+                               then a long one in tiles: tools/ci_tiles.py (a cord across a synthetic area, LaMa),
+                               then one on each kind of picture: tools/ci_pictures.py (JPEG, PNG, TIFF, WebP, HEIC,
+                               AVIF opened on their own, LaMa, the copy in the same format, its metadata)
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
                                app, its menu entry, its .airemove file type and, on Windows, its Settings > Apps entry
                                are gone; the user's own model folders are still there
@@ -137,6 +139,7 @@ def check(d):
         expect(rep["torch"].endswith("+cpu"), f"PyTorch is the processor build ({rep['torch']})")
     print(f"  info device {rep.get('device')}: {rep.get('gpu')}")
     expect((rep.get("models") or {}).get("lama") is True, "models.lama true")
+    expect(rep.get("heic") is True, "HEIC pictures: pillow-heif installed")
     expect("lama" in (rep.get("usable_models") or []), "LaMa usable")
     expect((rep.get("lightcraft") or {}).get("connected") is False,
            f"lightcraft.connected false (no LightCraft here: {(rep.get('lightcraft') or {}).get('error')})")
@@ -269,6 +272,8 @@ def remove(d):
     expect(r.returncode == 0, f"removal end to end: exit status 0 (it was {r.returncode})")
     r = run([py, ROOT / "tools" / "ci_tiles.py", d])
     expect(r.returncode == 0, f"long removal in tiles: exit status 0 (it was {r.returncode})")
+    r = run([py, ROOT / "tools" / "ci_pictures.py", d])
+    expect(r.returncode == 0, f"removals on JPEG, PNG, TIFF, WebP, HEIC, AVIF: exit status 0 (it was {r.returncode})")
 
 
 def uninstall(d):

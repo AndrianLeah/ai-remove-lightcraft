@@ -46,7 +46,8 @@ TORCH, TORCHVISION = "2.9.1", "0.24.1"
 # tested together (Windows / AMD, October 2026); if a pin has no wheel for a platform the newest is taken instead
 PACKAGES = ["diffusers==0.41.0", "transformers==5.20.1", "accelerate==1.15.0", "safetensors==0.8.0",
             "huggingface_hub==1.33.0", "peft==0.21.2", "gguf==0.19.0", "sentencepiece==0.2.2", "protobuf",
-            "onnxruntime==1.31.0", "numpy==2.5.4", "scipy==1.18.1", "pillow==13.0.0", "tifffile==2026.10.15"]
+            "onnxruntime==1.31.0", "numpy==2.5.4", "scipy==1.18.1", "pillow==13.0.0", "tifffile==2026.10.15",
+            "pillow-heif==1.8.1"]  # HEIC pictures (its wheels: GPLv2, see THIRD-PARTY-NOTICES.md); AVIF is Pillow's
 AMD_WIN = "https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/"
 AMD_WIN_FILES = ["rocm_sdk_core-7.2.1-py3-none-win_amd64.whl", "rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl",
                  "rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl", "rocm-7.2.1.tar.gz",

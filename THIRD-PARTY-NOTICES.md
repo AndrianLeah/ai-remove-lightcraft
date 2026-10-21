@@ -47,7 +47,8 @@ tracker. These give the same masks as the checkpoint's own configuration.
 | Hugging Face diffusers, transformers, accelerate, peft, huggingface_hub, safetensors, tokenizers | Apache-2.0 |
 | ONNX Runtime | MIT |
 | NumPy, SciPy | BSD-3-Clause |
-| Pillow | MIT-CMU (HPND) |
+| Pillow (its wheels include libavif, for AVIF pictures) | MIT-CMU (HPND) |
+| pillow-heif, for HEIC pictures | BSD-3-Clause; its binary wheels as a whole: GPLv2 (they include libheif and libde265, LGPLv3, and the x265 encoder, GPLv2). AI Remove does not ship it: the installer downloads it from PyPI into the private environment |
 | tifffile | BSD-3-Clause |
 | gguf | MIT |
 | sentencepiece | Apache-2.0 |

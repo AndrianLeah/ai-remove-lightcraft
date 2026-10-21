@@ -4,8 +4,9 @@ The photo fills the left side and always shows the result: every removal with it
 remove (Clic SAM: SAM 3 outlines the whole object · Alt/Option+click / Shift+click refine it · Pennello + / Gomma −),
 then "Rimuovi selezione": it becomes removal #n with its own area and its own variants (LaMa + SDXL or FLUX).
 On the right: the removals; click one to see only its variants, pick one, ask for more or delete it — the other
-removals are not touched. "Salva in LightCraft" writes one DNG with all of them, stacked on the original; a RAW
-opened on its own ("Apri RAW…", or AI Remove started without LightCraft) gets it next to the file, "Salva come DNG".
+removals are not touched. "Salva in LightCraft" writes one DNG with all of them, stacked on the original; a photo
+opened on its own ("Apri foto…", or AI Remove started without LightCraft) gets it next to the file, "Salva come DNG".
+An ordinary picture (JPEG, PNG, TIFF, WebP, HEIC, AVIF) gets a copy in its own format instead of a DNG.
 Zoom: Ctrl+wheel (Cmd+wheel on a Mac) or + / −, 0 = whole photo; pan with the wheel, middle button or Space+drag.
 With the Brush or the Eraser, Ctrl+wheel (Cmd+wheel) sets its size and Alt+wheel (Option+wheel) zooms.
 Hold "Originale" (or \\) to compare with the photo before the removals.
@@ -464,7 +465,7 @@ class App:
         self.row_widgets, self.tiles = {}, []
         self.outlines = {}  # removal id -> (ys, xs) of its outline in base.png
         self.show_original = False
-        self.dng_dirty = False  # choices changed since the DNG was last written
+        self.dng_dirty = False  # choices changed since the result (DNG or picture) was last written
         self.busy = self.extracting = self.writing = False
         self.sam_ready = False
         self.job = None  # progress of the running job
@@ -706,10 +707,10 @@ class App:
             text=_("AI Remove on GitHub: the code, the releases and where to report a problem"))))
         self.title = tk.Label(head, text="", font=self.font(13), fg=FG, bg=BG)
         self.title.pack(side="left", padx=(int(10 * k), 0))
-        self.mode_lbl = tk.Label(head, text="", font=self.f_small, fg=DIM, bg=BG)  # a RAW opened on its own says so
+        self.mode_lbl = tk.Label(head, text="", font=self.f_small, fg=DIM, bg=BG)  # a photo opened on its own says so
         self.mode_lbl.pack(side="left", anchor="s", padx=(int(8 * k), 0), pady=(0, int(2 * k)))
-        # another RAW, from anywhere: AI Remove opens again on it (A.reopen), on its own or as LightCraft's photo
-        self.button(head, _("Open RAW…"), self.open_other, small=True).pack(side="left", padx=(int(14 * k), 0))
+        # another photo, from anywhere: AI Remove opens again on it (A.reopen), on its own or as LightCraft's photo
+        self.button(head, _("Open photo…"), self.open_other, small=True).pack(side="left", padx=(int(14 * k), 0))
         # the window's language, far right: as LightCraft's (Auto) or one of ours; it applies at the next opening
         chosen = A.setting("language", "auto")
         self.lang_code = tk.StringVar(value=chosen if chosen in i18n.LANGUAGES else "auto")
@@ -1004,7 +1005,7 @@ class App:
     def worker(self):
         s = self.s
         try:
-            self.post("task", _("Reading the RAW") if s.standalone else _("Reading the photo from LightCraft"))
+            self.post("task", _("Reading the photo") if s.standalone else _("Reading the photo from LightCraft"))
             s.find()
             self.post("found")
             threading.Thread(target=self.sam_worker, daemon=True).start()
@@ -1317,7 +1318,8 @@ class App:
         self.title.configure(text=self.s.info['file_name'])
         if self.s.standalone:  # said once, where it stays: what this photo is shown with and where it is saved
             self.mode_lbl.configure(text=_("on its own: LightCraft's default development · the DNG goes next to "
-                                           "the RAW"))
+                                           "the RAW") if self.s.out_format == "DNG" else
+                                    _("on its own · the edited copy goes next to the original"))
         self.prompt_text["fill"] = self.s.prompt or ""  # "Remove: <text>" on a LightCraft mask: what to put there
         if self.prompt_mode == "fill":
             self.prompt.set_text(self.prompt_text["fill"])
@@ -1405,8 +1407,8 @@ class App:
         out, __, updated = data
         self.writing, self.dng_dirty = False, False
         if self.s.standalone:
-            msg = (_("{file} updated, next to the RAW", file=out.name) if updated else
-                   _("{file} saved next to the RAW", file=out.name))
+            msg = (_("{file} updated, next to the original", file=out.name) if updated else
+                   _("{file} saved next to the original", file=out.name))
         else:
             msg = (_("{file} updated in LightCraft", file=out.name) if updated else
                    _("{file} created and stacked on the original in LightCraft", file=out.name))
@@ -1418,20 +1420,24 @@ class App:
             self.root.after(800, self.quit)
 
     def save_label(self):
-        """The save button: into LightCraft (stacked, then updated there) or, on its own, the DNG next to the RAW."""
+        """The save button: into LightCraft (stacked, then updated there) or, on its own, the result next to the
+        original (a DNG for a RAW, a picture in its own format)."""
         if self.s.standalone:
-            return _("Update the DNG") if self.s.dng_path else _("Save as DNG")
+            fmt = self.s.out_format
+            return _("Update the {format} file", format=fmt) if self.s.dng_path else _("Save as {format}", format=fmt)
         return _("Update in LightCraft") if self.s.dng_path else _("Save to LightCraft")
 
     def save_task(self):
-        return _("Writing the DNG") if self.s.standalone else _("Writing the DNG for LightCraft")
+        fmt = self.s.out_format
+        return (_("Writing the {format} file", format=fmt) if self.s.standalone else
+                _("Writing the {format} file for LightCraft", format=fmt))
 
     def open_other(self):
-        """"Open RAW…": another photo, in a new AI Remove (A.reopen); this one offers to save its changes first."""
+        """"Open photo…": another photo, in a new AI Remove (A.reopen); this one offers to save its changes first."""
         if self.writing or self.extracting:
             self.status.configure(text=_("One moment: finishing with this photo first"))
             return
-        path = A.ask_raw(self.root)
+        path = A.ask_photo(self.root)
         if path is None:
             return
         live = any(not r.deleted and r.chosen is not None for r in self.s.removals)
@@ -2220,7 +2226,7 @@ class App:
     # ------------------------------------------------------------------------------------------ closing
     def cancel(self):
         if self.writing:
-            self.status.configure(text=_("Writing the DNG: one moment…"))
+            self.status.configure(text=_("Saving: one moment…"))
             return
         if self.extracting and not self.s.standalone:  # LightCraft's crop/lens are neutral for a moment: wait
             self.status.configure(text=_("Waiting for LightCraft to restore the development…"))
@@ -2228,11 +2234,12 @@ class App:
             return
         live = any(not r.deleted and r.chosen is not None for r in self.s.removals)
         if self.dng_dirty and live:
-            ask = (_("Save the DNG with the latest changes?\n\n(The removals and variants stay saved in the project "
-                     "next to the RAW anyway: opening AI Remove on this photo brings them back.)")
+            ask = (_("Save the {format} file with the latest changes?\n\n(The removals and variants stay saved in the "
+                     "project next to the photo anyway: opening AI Remove on it brings them back.)",
+                     format=self.s.out_format)
                    if self.s.standalone else
                    _("Update the photo in LightCraft with the latest changes?\n\n(The removals and variants stay "
-                     "saved in the project next to the RAW anyway: opening AI Remove on this photo brings them back.)"))
+                     "saved in the project next to the photo anyway: opening AI Remove on it brings them back.)"))
             ans = messagebox.askyesnocancel("AI Remove", ask, parent=self.root)
             if ans is None:
                 return
