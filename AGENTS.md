@@ -1,7 +1,8 @@
 # Instructions for AI agents: installing and using AI Remove
 
-AI Remove is an unofficial LightCraft plug-in that removes objects from RAW photos with local AI and writes the
-result into a DNG. Talk to the user in their language. Most users of this package speak Italian.
+AI Remove is an unofficial LightCraft plug-in that removes objects from photos with local AI: from a RAW it writes
+the result into a DNG, from a JPEG, PNG, TIFF, WebP, HEIC or AVIF into a copy in the same format. Talk to the user in
+their language. Most users of this package speak Italian.
 
 ## Preferred: the MCP server
 
@@ -48,12 +49,13 @@ Setup of the server: `mcp/README.md`.
 
 ## Using it
 
-- **For the user:** in LightCraft, select a raw photo and press Ctrl+Shift+X (Cmd+Shift+X on a Mac). Or open
+- **For the user:** in LightCraft, select a photo and press Ctrl+Shift+X (Cmd+Shift+X on a Mac). Or open
   "AI Remove" from the Start menu / Applications / app menu; it works on LightCraft's active photo.
-- **On its own (no LightCraft window):** `airemove <path to a RAW>`, or the app with LightCraft closed, which asks for
-  a file. It reads the RAW through `lightcraft-cli` (LightCraft must be installed; `LIGHTCRAFT_CLI` points to it
-  elsewhere) with LightCraft's default development, and "Save as DNG" writes `<name>-AIRemove.dng` next to the RAW
-  without importing it. A RAW that is LightCraft's current selection opens as LightCraft's photo instead.
+- **On its own (no LightCraft window):** `airemove <path to a photo>`, or the app with LightCraft closed, which asks
+  for a file. A RAW is read through `lightcraft-cli` (LightCraft must be installed; `LIGHTCRAFT_CLI` points to it
+  elsewhere) with LightCraft's default development; a JPEG, PNG, TIFF, WebP, HEIC or AVIF as it is. "Save as DNG"
+  ("Save as JPEG"…) writes `<name>-AIRemove.dng` (`.jpg`…) next to the photo without importing it. A photo that is
+  LightCraft's current selection opens as LightCraft's photo instead.
 - **Check:** `~/AIRemove/venv/(Scripts|bin)/airemove-cli --check` prints a JSON report: GPU, models, LightCraft
   connection.
 - **Headless:**
@@ -62,10 +64,11 @@ Setup of the server: `mcp/README.md`.
   2. Run `airemove-cli --auto sdxl` (or `lama`, `rorem`, `flux`, `osor`, `objectclear`, `qwen`, `sdxl3` to use the 3rd variant),
      optionally with `--id PHOTO_ID`. Add `--shadow` to remove the object's shadow and reflection too (needs OSOR or
      ObjectClear installed).
-  3. It prints one JSON line with the DNG path and its LightCraft photo id.
-- **Projects:** `<raw>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each
-  raw. The installer registers it as a file type for the user (Windows `HKCU\Software\Classes\.airemove`, macOS the
-  app's Info.plist, Linux `~/.local/share/mime/packages/airemove.xml`): a double-click opens its RAW in AI Remove.
+  3. It prints one JSON line with the result's path (`dng`, and `file`: the same, also for a picture) and its
+     LightCraft photo id.
+- **Projects:** `<photo>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each
+  photo. The installer registers it as a file type for the user (Windows `HKCU\Software\Classes\.airemove`, macOS the
+  app's Info.plist, Linux `~/.local/share/mime/packages/airemove.xml`): a double-click opens its photo in AI Remove.
 
 ## Uninstall
 

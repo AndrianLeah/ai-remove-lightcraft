@@ -4,9 +4,10 @@
 
 <h1 align="center">AI Remove for LightCraft</h1>
 
-Remove objects and people from RAW photos with local AI, from inside
+Remove objects and people from photos with local AI, from inside
 [LightCraft](https://github.com/storytold/lightcraft) or on its own — like Lightroom's Generative Remove, but on your
-own computer. The result goes back into a **RAW DNG**, so you keep developing it like any raw file.
+own computer. From a RAW the result goes back into a **RAW DNG**, so you keep developing it like any raw file. From a
+JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
 
 [Italiano](README.it.md)
 
@@ -15,23 +16,34 @@ own computer. The result goes back into a **RAW DNG**, so you keep developing it
 
 ## How it works
 
-1. In LightCraft, select a raw photo and press **Ctrl+Shift+X** (**Cmd+Shift+X** on a Mac).
+1. In LightCraft, select a photo and press **Ctrl+Shift+X** (**Cmd+Shift+X** on a Mac).
 2. Click what should go: SAM 3 selects the whole object. Alt/Option+click takes a part out, Shift+click adds one, and
    the brush and eraser handle the rest.
 3. **Remove selection** generates a few variants with the model you chose. Pick the best one. To remove the
    object's shadow or reflection too, press **Include the shadow** first: it adds them to the selection, in blue.
    On a long removal (a pole, a cable, a railing), **Full detail** redraws the chosen variant at the photo's own
    resolution.
-4. **Save to LightCraft** writes `<name>-AIRemove.dng`, stacked on the original with the same development.
+4. **Save to LightCraft** writes `<name>-AIRemove.dng` (from a JPEG: `<name>-AIRemove.jpg`, and so on), stacked on
+   the original with the same development.
 
 Every removal stays editable: regenerate it, pick another variant or delete it whenever you like. Everything lives in
-one project file next to the raw (`<raw>.airemove`). The original raw is never modified.
+one project file next to the photo (`<photo>.airemove`). The original is never modified.
 
-**On its own.** AI Remove also works on a RAW that is not in LightCraft: open it from the Start menu, Applications or
-the app menu with LightCraft closed (or no photo selected there) and it asks for a file; **Open RAW…** in the window
-opens another one. LightCraft must be installed, not open: AI Remove reads the RAW through LightCraft's command line,
-with its default development. **Save as DNG** writes `<name>-AIRemove.dng` next to the RAW, and nothing is imported
-anywhere.
+**On its own.** AI Remove also works on a photo that is not in LightCraft: open it from the Start menu, Applications
+or the app menu with LightCraft closed (or no photo selected there) and it asks for a file; **Open photo…** in the
+window opens another one. **Save as DNG** (or **Save as JPEG**…) writes the result next to the photo, and nothing is
+imported anywhere.
+- **A RAW:** LightCraft must be installed, not open. AI Remove reads the RAW through LightCraft's command line, with
+  its default development.
+- **A JPEG, PNG, TIFF, WebP, HEIC or AVIF:** shown as it is, without LightCraft.
+
+**Ordinary pictures** keep what they had: the colour profile, the EXIF and the XMP. The EXIF loses only its small
+embedded preview, which would still show what was removed.
+- **JPEG** is saved with the original's own compression settings: pixels outside the removal move by a level or two,
+  invisibly.
+- **PNG, TIFF and lossless WebP** are saved losslessly; 16-bit TIFFs stay 16-bit.
+- **HEIC** loses its depth map and other extra images.
+- A 16-bit colour PNG, a CMYK picture or an animated one does not open (the message says what to do).
 
 ## Features
 
@@ -192,18 +204,18 @@ Qwen-Image it names what to remove, when it recognised it wrongly ("the lamp pos
 | Delete a variant | right-click it | right-click (or Ctrl+click) it |
 
 AI Remove also opens from the Start menu, Applications or the app menu: on LightCraft's active photo when LightCraft is
-open, otherwise on a RAW you choose ([on its own](#how-it-works)). On a Mac you can also drop a RAW on its icon.
+open, otherwise on a photo you choose ([on its own](#how-it-works)). On a Mac you can also drop a photo on its icon.
 
 **Headless.** A LightCraft mask named `Remove` (or `Rimuovi`, or `Remove: <English prompt>`) on the photo is the
-starting selection. `airemove-cli --auto sdxl` fills it without opening the window, writes the DNG, and prints the
-result as JSON.
+starting selection. `airemove-cli --auto sdxl` fills it without opening the window, writes the result, and prints it
+as JSON.
 
 ### Files it writes
 
 | File | Where | What |
 |---|---|---|
-| `<name>-AIRemove.dng` | next to the original, stacked with it in LightCraft (on its own: only next to it) | the retouched photo |
-| `<raw name>.airemove` | next to the raw | the project: every removal and its variants. Double-click it to open the photo in AI Remove |
+| `<name>-AIRemove.dng` (a picture: `.jpg`, `.png`… as the original) | next to the original, stacked with it in LightCraft (on its own: only next to it) | the retouched photo |
+| `<photo name>.airemove` | next to the photo | the project: every removal and its variants. Double-click it to open the photo in AI Remove |
 | `install.log`, `work/last-run.log` | in `~/AIRemove` | logs |
 
 ## Languages
@@ -253,7 +265,7 @@ LightCraft runs, any program on your computer can drive it. Uninstalling turns t
 
 | Path | What |
 |---|---|
-| `airemove/` | The app: `airemove.py` (session, LightCraft bridge, RAW pipeline, CLI), `ui.py` (Tk window), `engines.py` (SAM 3, LaMa, SDXL, FLUX), `model_files.py` (each model's files, sizes and licence, and where they are), `rawdng.py` (DNG read/write, sensor noise), `blend.py` (seamless blending), `project.py` (`.airemove` files), `system.py` (per-OS paths, LightCraft discovery), `i18n.py` + `locales/` (translations) |
+| `airemove/` | The app: `airemove.py` (session, LightCraft bridge, RAW pipeline, CLI), `ui.py` (Tk window), `engines.py` (SAM 3, LaMa, SDXL, FLUX), `model_files.py` (each model's files, sizes and licence, and where they are), `rawdng.py` (DNG read/write, sensor noise), `imagefile.py` (JPEG, PNG, TIFF, WebP, HEIC, AVIF read/write, with the same calls), `blend.py` (seamless blending), `project.py` (`.airemove` files), `system.py` (per-OS paths, LightCraft discovery), `i18n.py` + `locales/` (translations) |
 | `installer/` | `bootstrap.ps1` / `bootstrap.sh` (fetch uv, then run `install.py`), `install.py` (standard library only), `fetch_models.py` |
 | `mcp/` | The MCP server and its launchers |
 | `assets/icon/` | The icon, and how it was made ([assets/icon/README.md](assets/icon/README.md)) |
