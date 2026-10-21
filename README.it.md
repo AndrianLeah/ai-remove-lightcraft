@@ -21,7 +21,8 @@ PNG, TIFF, WebP, HEIC e AVIF.
    anche i riflessi).
 4. **Dividi in parti** taglia la selezione in parti della misura giusta per i modelli: le cose lontane tra loro (una
    persona a sinistra, un cartello a destra) diventano parti separate, numerate sulla foto, mentre una folla o una
-   persona con la sua ombra restano una sola. Seleziona ogni parte, scegli il suo modello (il menu dice per cosa va
+   persona con la sua ombra restano una sola, finché la loro area resta abbastanza piccola perché i modelli la
+   disegnino nitida (una folla diventa più parti, riempite una dopo l'altra). Seleziona ogni parte, scegli il suo modello (il menu dice per cosa va
    bene ciascuno, e per cosa no: FLUX Fill ridisegna persone in mezzo alla folla) e premi **Genera**, oppure **Genera
    tutte** per le altre. Per ognuna scegli la variante migliore. **Rimuovi selezione** fa tutto in un colpo, con un
    solo modello per tutte le parti. Ogni parte vede quelle prima già riempite.
@@ -166,9 +167,9 @@ Qwen-Image dice cosa togliere, se lo ha riconosciuto male ("the lamp post").
 | Seleziona tutti gli esemplari di qualcosa | scrivilo sotto gli strumenti ("people"), Invio | scrivilo sotto gli strumenti ("people"), Invio |
 | Togli una parte / aggiungi una parte | Alt+clic / Shift+clic | Option+clic / Shift+clic |
 | Pennello / Gomma / Clic SAM | B / E / S | B / E / S |
-| Dimensione di Pennello / Gomma | `[` `]` oppure Ctrl+rotella | `[` `]` oppure Cmd+rotella |
+| Dimensione di Pennello / Gomma | Alt+rotella, `+` `−` oppure `[` `]` | Option+rotella, `+` `−` oppure `[` `]` |
 | Elimina un oggetto dalla selezione | clic destro | clic destro (o Ctrl+clic) |
-| Zoom | Ctrl+rotella (Alt+rotella con Pennello o Gomma), `+` `−`, `0` = adatta | Cmd+rotella (Option+rotella con Pennello o Gomma), `+` `−`, `0` = adatta |
+| Zoom | Ctrl+rotella, Ctrl+`+` `−` (`+` `−` da soli con Clic SAM), `0` = adatta | Cmd+rotella, Cmd+`+` `−` (`+` `−` da soli con Clic SAM), `0` = adatta |
 | Sposta la vista | rotella, tasto centrale, Spazio+trascina | due dita, Spazio+trascina |
 | Annulla | Ctrl+Z | Cmd+Z |
 | Confronta con l'originale | tieni premuto "Originale" o `\` | tieni premuto "Originale" o `\` |

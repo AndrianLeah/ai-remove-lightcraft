@@ -604,7 +604,8 @@ class App:
     def fit_header(self):
         """The top bar on any width (its <Configure>, a photo's name). The view controls stay at the right end of the
         photo's row while the photo's name keeps ~160 px there (or all it needs); on a narrower window they go to a
-        row of their own below it. On the photo's row "Open photo…" always stays, then, as room allows, the photo's
+        row of their own below it. On the photo's row "Open photo…" (on its own) always stays, then, as room allows,
+        the photo's
         name (shortened in the middle to fit), "GitHub" (else just ⓘ), the version and, last, the mode of a photo
         opened on its own."""
         W = self.head.winfo_width()
@@ -617,7 +618,8 @@ class App:
             return (f.measure(text) + lbl.winfo_reqwidth() - f.measure(lbl.cget("text")) + int(pad * k)) if text else 0
         ver, gh_full, gh_short = A.system.VERSION, "ⓘ  GitHub", "ⓘ"
         title_w = width(self.title, self.title_text, 12)
-        fixed = self.app_lbl.winfo_reqwidth() + self.open_btn.winfo_reqwidth() + int(18 * k)
+        fixed = self.app_lbl.winfo_reqwidth() + int(18 * k) + (
+            self.open_btn.winfo_reqwidth() if self.open_btn.winfo_manager() else 0)
         beside = W - self.head_r.winfo_reqwidth() - int(14 * k)  # the photo's row with the controls on it
         one_row = beside - fixed - width(self.repo_lbl, gh_short, 10) >= min(title_w, int(160 * k))
         if one_row != self.head_one_row:
@@ -791,8 +793,8 @@ class App:
         vrow = self.vrow = tk.Frame(gen, bg=CARD)
         vrow.pack(fill="x")
         tk.Label(vrow, text=_("Variants"), font=self.f_small, fg=DIM, bg=CARD).pack(side="left")
-        self.count = Stepper(vrow, int(A.setting("variants", self.args.variants or 4)), 1, 8, self,
-                             on_change=lambda: self.update_more())
+        self.count = Stepper(vrow, int(A.setting("variants", self.args.variants or 2)), 1, 8, self,
+                             on_change=lambda: (self.update_more(), self.n_variants()))  # remembered at once
         self.count.pack(side="right")
         self.gen_btn = self.button(gen, _("Remove selection") + "  ⏎", self.remove_selection, kind="accent")
         self.gen_btn.configure(state="disabled", font=self.f_bold)
@@ -869,7 +871,8 @@ class App:
             text=_("AI Remove on GitHub: the code, the releases and where to report a problem"))))
         # another photo, from anywhere: AI Remove opens again on it (A.reopen), on its own or as LightCraft's photo
         self.open_btn = self.button(head, _("Open photo…"), self.open_other, small=True)
-        self.open_btn.pack(side="left", padx=(int(14 * k), 0))
+        if self.s.standalone:  # opened from LightCraft, the photo is LightCraft's: another one is chosen there
+            self.open_btn.pack(side="left", padx=(int(14 * k), 0))
         self.title = tk.Label(head, text="", font=self.font(13), fg=FG, bg=BG)
         self.title.pack(side="left", padx=(int(12 * k), 0))
         self.mode_lbl = tk.Label(head, text="", font=self.f_small, fg=DIM, bg=BG)  # a photo opened on its own says so
@@ -1072,6 +1075,14 @@ class App:
             self.prompt_lbl.configure(text=_("Text (not used by {model})", model=MODEL_NAMES[m]))
             self.prompt.set_hint(_("{model} needs no text", model=MODEL_NAMES[m]))
         self.prompt.configure(state="normal" if mode else "disabled")
+        if mode:  # a model that reads no text (LaMa, RORem): no field
+            if not self.prompt.winfo_manager():
+                self.prompt_lbl.pack(fill="x", before=self.vrow)
+                self.prompt.pack(fill="x", pady=(int(3 * self.k), int(10 * self.k)), ipady=int(5 * self.k),
+                                 before=self.vrow)
+        else:
+            self.prompt_lbl.pack_forget()
+            self.prompt.pack_forget()
         self.update_prompt_note()
 
     def update_prompt_note(self):
@@ -1079,7 +1090,7 @@ class App:
         r = self.cur
         what = self.qwen_names.get(r.id) if r is not None and not r.deleted else None
         text = (_("Recognised in #{id}: {what}. If that is wrong, write the right name above.", id=r.id, what=what)
-                if self.prompt_mode == "name" and what else "")
+                if self.prompt_mode == "name" and what and self.prompt.winfo_manager() else "")
         self.prompt_note.configure(text=text)
         if text:
             self.prompt_note.pack(after=self.prompt, fill="x", pady=(0, int(10 * self.k)))
@@ -1135,7 +1146,7 @@ class App:
         with its own area; choose a model for each, then "Generate"."""
         if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None:
             return
-        self.jobs.put(("split", self.sel_mask.copy()))
+        self.jobs.put(("split", self.sel_mask.copy()) + self.selected())
         self.ops, self.history, self.pending = [], [], {}
         self.busy = True
         self.render_main()
@@ -1238,23 +1249,27 @@ class App:
             if job[0] != "save":
                 s.stop.clear()  # a Stop pressed before this job was for the one before
             try:
-                if job[0] == "new":  # a selection's far-apart parts: removals of their own, one after another
-                    __, mask, n, model, prompt = job
-                    parts = A.split_selection(mask, s.base_scale)
+                if job[0] == "new":  # a selection's parts: removals of their own, one after another
+                    __, mask, units, described, n, model, prompt = job
+                    parts = A.split_selection(mask, s.base_scale, units=units)
                     if len(parts) > 1:
                         A.log(f"selection in {len(parts)} parts, each a removal in its own area")
                     for i, part in enumerate(parts):
-                        self.run_job(None, part, n, model, prompt, part=(i + 1, len(parts)))
+                        self.run_job(None, part, n, model, prompt, part=(i + 1, len(parts)),
+                                     hints=self.hints_for(part, described))
                 elif job[0] == "split":  # the parts as removals that wait for their model (split_selection)
-                    __, mask = job
+                    __, mask, units, described = job
                     self.post("job_start", (_("Splitting the selection"), 2.0))
                     self.post("job_part", (_("Splitting the selection"), 0.0, 2.0))
-                    parts = A.split_selection(mask, s.base_scale)
+                    parts = A.split_selection(mask, s.base_scale, units=units)
                     ids = []
                     for part in parts:
-                        r = s.plan_removal(part)
+                        r = s.plan_removal(part, self.hints_for(part, described))
                         ids.append(r.id)
                         self.post("removal_new", r)
+                        Y0, Y1, X0, X1 = r.base_rect
+                        A.log(f"  #{r.id}: area {X1 - X0}x{Y1 - Y0} px in base.png"
+                              + (f", described as {', '.join(r.hints)}" if r.hints else ""))
                     A.log(f"selection split into {len(parts)} parts, waiting for their models: "
                           + ", ".join(f"#{i}" for i in ids))
                     self.post("split_done", ids)
@@ -1291,7 +1306,18 @@ class App:
             finally:
                 self.post("job_end")
 
-    def run_job(self, r, mask, n, model, prompt, part=(1, 1)):
+    @staticmethod
+    def hints_for(part, described):
+        """What Describe found in this part ("person", "bag"), once each, in the order it was described."""
+        return list(dict.fromkeys(text for m, text in described if (m & part).any()))
+
+    def selected(self):
+        """The selection's objects (each Describe instance, SAM click, brush stroke: split_selection's units) and
+        what Describe found, as (mask, text)."""
+        units = [op["mask"] for op in self.ops if op["kind"] != "erase"]
+        return units, [(op["mask"], op["describe"]) for op in self.ops if op.get("describe")]
+
+    def run_job(self, r, mask, n, model, prompt, part=(1, 1), hints=None):
         """A new removal (r None: from mask; part: which of a split selection's parts) or more variants for r, with a
         progress plan in expected seconds."""
         s = self.s
@@ -1329,7 +1355,7 @@ class App:
             self.post("job_part", (tag, done, secs))
             if kind in ("area", "fit"):
                 if kind == "area":
-                    r = s.new_removal(mask)
+                    r = s.new_removal(mask, hints)
                     self.post("removal_new", r)
                     if model != "lama" and s.thin(r):  # a cord, a cable: LaMa in squares is the best fill, in seconds
                         A.log(f"#{r.id}: long and thin, LaMa too")
@@ -2133,7 +2159,7 @@ class App:
     def remove_selection(self):
         if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None:
             return
-        self.jobs.put(("new", self.sel_mask.copy(), self.n_variants(), self.model_key(),
+        self.jobs.put(("new", self.sel_mask.copy(), *self.selected(), self.n_variants(), self.model_key(),
                        self.prompt_for(self.model_key())))
         self.ops, self.history, self.pending = [], [], {}
         self.busy = True
@@ -2179,8 +2205,8 @@ class App:
             self.canvas_sel.delete("cursor")
         else:
             what = _("Brush: paint what goes") if name == "brush" else _("Eraser: paint what stays")
-            self.hint_lbl.configure(text=what + "  ·  " + _("{alt}: swaps  ·  {mod}+wheel or [ ]: size  ·  "
-                                                            "{alt}+wheel: zoom", alt=ALT, mod=MOD))
+            self.hint_lbl.configure(text=what + "  ·  " + _("{alt}: swaps  ·  {alt}+wheel, + − or [ ]: size  ·  "
+                                                            "{mod}+wheel: zoom", alt=ALT, mod=MOD))
 
     def on_size_scale(self, v):
         if getattr(self, "_scale_busy", False):
@@ -2346,10 +2372,10 @@ class App:
         if w is self.canvas_sel:
             x, y = e.x_root - w.winfo_rootx(), e.y_root - w.winfo_rooty()
             painting = self.tool != "sam"
-            if painting and ctrl:  # Brush / Eraser: Ctrl+wheel (Cmd on a Mac) sets its size, Alt+wheel zooms
-                self.brush_size(1.15 ** steps)
-            elif ctrl or (painting and alt):
+            if ctrl:  # Ctrl+wheel (Cmd on a Mac): zoom, whatever the tool
                 self.zsel.zoom(1.25 ** steps, x, y)
+            elif painting and alt:  # Brush / Eraser: Alt+wheel (Option) sets its size
+                self.brush_size(1.15 ** steps)
             elif shift:
                 self.zsel.pan(steps * 80 * self.k, 0)
             else:
@@ -2375,6 +2401,9 @@ class App:
     def on_zoom_key(self, e, factor, ctrl=False):
         if not ctrl and self.typing():
             return None  # typing "+", "-" or "0" in a field
+        if not ctrl and factor and self.tool != "sam":  # Brush / Eraser: + and - set its size; Ctrl + / - zoom
+            self.brush_size(1.15 if factor > 1 else 1 / 1.15)
+            return "break"
         c = self.canvas_sel
         if factor == 0:
             self.zsel.reset()
