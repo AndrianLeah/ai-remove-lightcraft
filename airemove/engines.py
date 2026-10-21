@@ -45,6 +45,9 @@ QWEN_ASK = ("The area outlined in red in this photo will be erased. Name everyth
             "person and every object inside it, such as a bag, an umbrella or a sign (not what is behind them). Answer "
             "with one short noun phrase only, such as \"the man with a backpack\", \"the woman and her handbag\", "
             "\"two people with an umbrella\" or \"the street sign\".")
+# the names the user's Describe found in the selection ("person", "bag", "umbrella"): told to Qwen3-VL, so its name
+# leaves none out (what it leaves out, Qwen-Image keeps)
+QWEN_HINT = " The outline was drawn around: {hints}. Name every one of them."
 QWEN_REMOVE = ("Remove {what} from the photo and fill the area with the background that naturally continues the "
                "surrounding scene. Keep everything else exactly as it is. Do not add any person or object.")
 QWEN_LOCK = True  # outside the hole the latents follow the photo's at every step (the edit cannot drift there)
@@ -829,6 +832,7 @@ class Qwen:
         self.names = {}  # key -> what Qwen3-VL saw in an oblong area's selection (named once, for all its squares)
         self.what = None  # what Qwen3-VL saw in the last removal's selection
         self.drawn = None  # (width, height) the last fill was drawn at
+        self.hint = ""  # the names Describe found in the removal's selection (QWEN_HINT), set before each one
         log(f"Qwen-Image ready ({dev}, {self.quant}, {len(QWEN_SIGMAS)} steps)")
 
     def _latents(self, img):
@@ -856,7 +860,8 @@ class Qwen:
         m = np.asarray(hole.resize(S, Image.NEAREST)) > 127
         shown[ndi.binary_dilation(m, iterations=3) & ~ndi.binary_erosion(m)] = (255, 0, 0)
         shown = Image.fromarray(shown)
-        msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": QWEN_ASK}]}]
+        ask = QWEN_ASK + (QWEN_HINT.format(hints=self.hint) if self.hint else "")
+        msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": ask}]}]
         inputs = proc(text=[proc.apply_chat_template(msgs, add_generation_prompt=True)], images=[shown],
                       return_tensors="pt").to(self.dev)
         te.lm_head = te.head  # logits, for the last token only (generate asks for no more)
@@ -873,7 +878,7 @@ class Qwen:
         """The cache key of a condition: its pictures, the prompt and the name given for it (None: its own)."""
         import hashlib
         return hashlib.sha1(image.tobytes() + hole.tobytes() + prompt.encode("utf-8") + b"\0"
-                            + (what or "").encode("utf-8")).digest()
+                            + (what or "").encode("utf-8") + b"\0" + self.hint.encode("utf-8")).digest()
 
     def condition(self, image, hole, prompt, log=print, what=None):
         """Prompt embeddings, image-slot mask, latents and latent shapes of the condition pictures, once per removal

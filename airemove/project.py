@@ -60,6 +60,8 @@ def save(s):
         cands = list(r.candidates)
         e = {"id": r.id, "box": [int(v) for v in r.box], "gain": r.gain, "chosen": r.chosen, "user_picked": r.user_picked,
              "counts": dict(r.counts), "variants": []}
+        if r.hints:  # what Describe found in it, for Qwen-Image's namer
+            e["hints"] = list(r.hints)
         if "selection" not in r.png:
             r.png["selection"] = mask_png(r.mask_e)
             r.png["area"] = mask_png(r.reg_mask)

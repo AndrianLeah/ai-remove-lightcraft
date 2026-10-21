@@ -256,7 +256,6 @@
   "Your own model folders are left as they are: {dirs}": "Le tue cartelle dei modelli restano come sono: {dirs}",
   "{alt}+click a part to take it out · then \"Remove selection\"": "{alt}+clic su una parte per toglierla · poi \"Rimuovi selezione\"",
   "{alt}+click a red area to take it out (or use the Eraser)": "{alt}+clic su una zona rossa per toglierla (o usa la Gomma)",
-  "{alt}: swaps  ·  {mod}+wheel or [ ]: size  ·  {alt}+wheel: zoom": "{alt}: inverte  ·  {mod}+rotella o [ ]: dimensione  ·  {alt}+rotella: zoom",
   "{file} could not be read:\n{error}": "Non riesco a leggere {file}:\n{error}",
   "{file} created and stacked on the original in LightCraft": "{file} creato e impilato sull'originale in LightCraft",
   "{file} does not exist.": "{file} non esiste.",
@@ -297,5 +296,6 @@
   "{task} · step {i}/{total}": "{task} · passo {i}/{total}",
   "{variant} is in full detail already.": "{variant} è già in dettaglio pieno.",
   "~/.config/environment.d (from the next login)": "~/.config/environment.d (dal prossimo accesso)",
-  "~{time} each": "~{time} l'una"
+  "~{time} each": "~{time} l'una",
+  "{alt}: swaps  ·  {alt}+wheel, + − or [ ]: size  ·  {mod}+wheel: zoom": "{alt}: inverte  ·  {alt}+rotella, + − o [ ]: dimensione  ·  {mod}+rotella: zoom"
 }

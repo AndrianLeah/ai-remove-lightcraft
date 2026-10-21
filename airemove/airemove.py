@@ -74,6 +74,9 @@ SDXL_STRENGTH = 1.0
 SDXL_UPRIGHT = True
 SDXL_LIKE = ("sdxl", "rorem")  # RORem is SDXL Inpainting with another UNet: everything above applies to it too
 SHADOW_MARGIN = 1.35  # "Includi l'ombra" looks for the shadow in an area this many times the object's extent
+# a split selection's parts (split_selection): pieces that see each other are joined while the part's area stays
+# within this many sensor px — 1.5 times the generative models' 1024 px: no part is drawn much smaller than the photo
+PART_MOST = 1536
 # Long removals (tiles.py). When one pass would enlarge an engine's fill more than TILE_FROM times and the hole is
 # long and thin (a pole, a cord, a railing — at least TILE_LONG times longer than wide, measured in the area: a pole
 # 21, cords 22, a person 5-7, a person with their shadow 10) so that squares along it see the photo across it (its
@@ -667,28 +670,43 @@ def plan_region(raw, mask_e, lum_e, t=None, margin=1.35, square=True, box=None):
     return t, box, reg_mask
 
 
-def split_selection(mask, scale, margin=1.35):
+def split_selection(mask, scale, margin=1.35, units=None, most=PART_MOST):
     """The selection (bool, base.png's frame) as the parts to remove one after another, each in its own area. In one
     area, a person far on the left and a sign far on the right make that area as wide as the photo, which a model sees
     at about its own size (~1 Mpx): every part of it filled soft. Apart, each is filled near the model's size.
-    - Parts: the selection's pieces, bits closer than plan_region's edge cover joined.
-    - What a part's fill sees: its area (plan_region's: margin x the extent, at least 384 sensor px). A long part
+    - Pieces: each of `units` (the objects selected: a Describe instance, a SAM click, a brush stroke), its bits
+      closer than plan_region's edge cover joined; without units, the selection's own pieces.
+    - What a piece's fill sees: its area (plan_region's: margin x the extent, at least 384 sensor px). A long piece
       filled in squares along it (tiles.py) sees less, but not with every model (SDXL fills a square area in one
-      pass): its whole area is the safe reckoning, which only makes it come after the parts that area holds.
-    - Two parts that each see some of the other are one (a person and their shadow, a crowd shoulder to shoulder):
-      neither could be filled with the other still there, in sight.
-    - The order lets an area hold only parts filled before it: the window fills them one after another, each from the
-      photo with the earlier ones applied (Session.new_removal), so no fill sees a part still to remove. A part that
-      holds no other comes in reading order.
+      pass): its whole area is the safe reckoning, which only makes it come after the pieces that area holds.
+    - Two pieces that each see some of the other are one part (a person and their shadow, a person and their bag):
+      neither could be filled with the other still there, in sight — while that part's area stays within `most`
+      sensor px (or within what one of them takes already). A crowd shoulder to shoulder made one part half the
+      photo wide (a street in Pompeii), which every model drew soft; now it is several, filled one after another.
+    - The order lets an area hold only parts filled before it, when it can: the window fills them one after another,
+      each from the photo with the earlier ones applied (Session.new_removal). A part that holds no other comes in
+      reading order; parts that see each other (a crowd), the one that sees the fewest still to remove first.
     scale: base.png px per sensor px (Session.base_scale). Returns bool masks in that order, whose union is mask."""
     H, W = mask.shape
     if not mask.any():
         return []
     g = max(6 * scale, 0.004 * max(H, W))  # plan_region's cover of the object's soft edge, in base.png px
-    near = ndi.distance_transform_edt(~mask) <= g
-    lab, n = ndi.label(near)
-    lab[~mask] = 0
+    lab = np.zeros((H, W), np.int32)
+    n = 0
+    for u in list(units or []) + [mask]:  # the selection itself last: what no unit covers (an erased unit's rest)
+        own = u & mask & (lab == 0)
+        if not own.any():
+            continue
+        ys, xs = np.nonzero(own)
+        pad = int(np.ceil(g)) + 1
+        sl = (slice(max(0, ys.min() - pad), ys.max() + pad + 1), slice(max(0, xs.min() - pad), xs.max() + pad + 1))
+        sub = own[sl]
+        ul, k = ndi.label(ndi.distance_transform_edt(~sub) <= g)
+        ul[~sub] = 0
+        lab[sl][sub] = ul[sub] + n
+        n += k
     comps = [(i + 1, sl, lab[sl] == i + 1) for i, sl in enumerate(ndi.find_objects(lab)) if sl is not None]
+    cap = most * scale  # in base.png px
 
     def bbox(group):
         return (min(comps[c][1][0].start for c in group), max(comps[c][1][0].stop for c in group),
@@ -712,28 +730,47 @@ def split_selection(mask, scale, margin=1.35):
                 return True
         return False
 
+    def side(a):
+        return max(a[1] - a[0], a[3] - a[2])
+
     groups = [[c] for c in range(len(comps))]
-    while True:
-        areas = [area(gr) for gr in groups]
+    areas = [area(gr) for gr in groups]
+    h = [[i != j and holds(areas[i], groups[j]) for j in range(len(groups))] for i in range(len(groups))]
+    tried = set()  # pairs whose part would be too large: kept apart
+    while True:  # join two parts that see each other, while the joined one stays small enough; one at a time
         k = len(groups)
-        h = [[i != j and holds(areas[i], groups[j]) for j in range(k)] for i in range(k)]
-        pair = next(((i, j) for i in range(k) for j in range(i + 1, k) if h[i][j] and h[j][i]), None)
-        if pair:
-            i, j = pair
-            groups[i] += groups.pop(j)
-            continue
-        order, left = [], set(range(k))
-        while left:  # each part after those its area holds; among the free ones, in reading order
-            free = [i for i in left if not any(h[i][j] for j in left)]
-            if not free:  # parts holding each other in a ring: one part
+        pair = None
+        for i in range(k):
+            for j in range(i + 1, k):
+                if h[i][j] and h[j][i] and (id(groups[i]), id(groups[j])) not in tried:
+                    a = area(groups[i] + groups[j])
+                    if side(a) <= max(cap, 1.05 * max(side(areas[i]), side(areas[j]))):
+                        pair = (i, j, a)
+                        break
+                    tried.add((id(groups[i]), id(groups[j])))
+            if pair:
                 break
-            i = min(free, key=lambda i: (areas[i][0] // max(1, H // 8), areas[i][2]))
-            order.append(i)
-            left.discard(i)
-        if not left:
+        if pair is None:
             break
-        ring = sorted(left)
-        groups = [gr for i, gr in enumerate(groups) if i not in left] + [sum((groups[i] for i in ring), [])]
+        i, j, a = pair
+        groups[i] = groups[i] + groups.pop(j)  # a new list: pairs tried with the old one are tried again
+        areas.pop(j)
+        areas[i] = a
+        h.pop(j)
+        for row in h:
+            row.pop(j)
+        for x in range(len(groups)):  # only the joined part's row and column change
+            h[i][x] = x != i and holds(areas[i], groups[x])
+            h[x][i] = x != i and holds(areas[x], groups[i])
+    order, left = [], set(range(len(groups)))
+    while left:  # each part after those its area holds; among the free ones, in reading order
+        free = [i for i in left if not any(h[i][j] for j in left)]
+        if free:
+            i = min(free, key=lambda i: (areas[i][0] // max(1, H // 8), areas[i][2]))
+        else:  # parts that see each other (too large to be one): the one that sees the fewest still to remove
+            i = min(left, key=lambda i: (sum(h[i][j] for j in left), areas[i][0] // max(1, H // 8), areas[i][2]))
+        order.append(i)
+        left.discard(i)
     return [np.isin(lab, [comps[c][0] for c in groups[i]]) for i in order]
 
 
@@ -910,6 +947,7 @@ class Removal:
         self.chosen = None  # index into candidates
         self.user_picked = False
         self.counts = {}  # model -> variants made so far
+        self.hints = []  # what Describe found in its selection ("person", "bag"): told to Qwen-Image's namer
         self.prefill = None
         self.deleted = False
         self.preview = {}  # label -> (patch uint8 HxWx3, alpha float HxW) in base.png's look and frame
@@ -1035,6 +1073,7 @@ class Session:
             r = Removal(e["id"], sel)
             r.box, r.reg_mask = tuple(e["box"]), area
             r.counts, r.user_picked = dict(e.get("counts") or {}), bool(e.get("user_picked"))
+            r.hints = [str(h) for h in e.get("hints") or []]
             r.gain = e.get("gain") or self.gain
             for label, im, data, hole in variants:
                 r.candidates.append((label, im))
@@ -1304,12 +1343,13 @@ class Session:
             f" ({len(old_cands)} variants kept)")
         return True
 
-    def new_removal(self, mask_e):
+    def new_removal(self, mask_e, hints=None):
         """A removal for mask_e (bool, base.png frame): its area, rendered from the photo as it is now (earlier
-        removals applied)."""
+        removals applied). hints: what Describe found in it (Removal.hints)."""
         self.working_cfa()  # a reopened project's areas are rendered once, first: not part of this one's time
         t0 = time.time()
         r = Removal(self.next_id, mask_e)
+        r.hints = list(hints or [])
         self.next_id += 1
         _, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t, square=False)
         self._init_area(r)
@@ -1317,11 +1357,12 @@ class Session:
         measured("area", time.time() - t0)
         return r
 
-    def plan_removal(self, mask_e):
+    def plan_removal(self, mask_e, hints=None):
         """A removal for mask_e that waits for its model ("Split selection": one per part, split_selection): its area
         is planned now and rendered at its first variant, from the photo with the removals before it applied, as a
         reopened removal's is (_load_area)."""
         r = Removal(self.next_id, mask_e)
+        r.hints = list(hints or [])
         self.next_id += 1
         __, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t, square=False)
         self._masks(r)
@@ -1558,6 +1599,8 @@ class Session:
 
     def _run_model(self, r, model, prompt, progress):
         eng = self.get_engine(model)
+        if model == "qwen":
+            eng.hint = ", ".join(r.hints)
         k = r.counts.get(model, 0) + 1
         r.counts[model] = k
         seed = self.seed + 97 * r.id + ENGINES[model].seed + k

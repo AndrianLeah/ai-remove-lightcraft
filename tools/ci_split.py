@@ -3,12 +3,17 @@ DIR runs this with the install's own Python. DIR's app code is imported.
 
 On synthetic selections in a portrait photo's base.png frame (1600 x 2400 for 3648 x 5472 sensor px):
   - two people far apart are two removals, in reading order;
-  - two people side by side are one (each would see the other in its area);
-  - a crowd shoulder to shoulder is one;
+  - two people side by side are one (each would see the other in its area); a person and their bag, given as two
+    objects (units), one too;
+  - a crowd shoulder to shoulder is several parts, none of whose areas is larger than PART_MOST sensor px (as one,
+    its area was half the photo, drawn soft by every model);
+  - four people who touch in a row, one blob: several parts when given as four objects (too wide as one), one
+    without units; two that take no more room together than apart stay one;
   - a cord across the photo and a person far above it, outside its area, are two; a person just above it, one;
   - a small sign inside a big object's area, whose own area does not reach the object: the sign first, then the
     object (its area then sees the sign already filled);
-  - 40 people scattered over the photo: each part's area holds no part after it;
+  - 40 people scattered over the photo: each part's area holds no part after it, but one that sees it too (too
+    large as one part);
   - every split is exact: the parts do not overlap and together are the selection; an empty selection has none.
 "Include the shadow" keeps of SAM 3's shadows (airemove.shadows_touching) those of the selection: a person's long
 shadow touching them, not a shadow far away, nor a building's shade the person stands in; never the selection itself.
@@ -47,8 +52,8 @@ def main(app_dir):
     sys.path.insert(0, str(Path(app_dir) / "airemove"))
     import airemove as A
 
-    def split(m, what):
-        parts = A.split_selection(m, SCALE)
+    def split(m, what, units=None):
+        parts = A.split_selection(m, SCALE, units=units)
         union = np.zeros_like(m)
         for p in parts:
             if (union & p).any():
@@ -70,10 +75,33 @@ def main(app_dir):
     blob(m, 600, 420, 300, 100)
     expect(len(split(m, "two close")) == 1, "two people side by side: one removal")
 
+    person, bag = np.zeros((H, W), bool), np.zeros((H, W), bool)
+    blob(person, 600, 300, 300, 100)
+    blob(bag, 650, 360, 60, 40)  # against the person's side, overlapping it
+    parts = split(person | bag, "person and bag", units=[person, bag])
+    expect(len(parts) == 1, "a person and their bag, two objects: one removal")
+
     m = np.zeros((H, W), bool)
     for i in range(10):
         blob(m, 1500, 300 + 110 * i, 260, 70)
-    expect(len(split(m, "crowd")) == 1, "a crowd shoulder to shoulder: one removal")
+    parts = split(m, "crowd")
+    cap = A.PART_MOST * SCALE
+    sides = []
+    for p in parts:
+        ys, xs = np.nonzero(p)
+        sides.append(max(ys.max() - ys.min(), xs.max() - xs.min()) * 1.35)
+    expect(len(parts) > 1 and max(sides) <= cap + 1,
+           f"a crowd shoulder to shoulder: {len(parts)} parts, each area at most {max(sides):.0f} px of {cap:.0f}")
+
+    row = []  # four people in a row, each touching the next: one blob 600 px wide, 300 tall
+    for i in range(4):
+        u = np.zeros((H, W), bool)
+        blob(u, 1200, 500 + 150 * i, 300, 150)
+        row.append(u)
+    blob_ = np.logical_or.reduce(row)
+    parts = split(blob_, "touching row, units", units=row)
+    expect(len(parts) > 1, f"four people who touch, given as four objects: {len(parts)} removals (too wide as one)")
+    expect(len(split(blob_, "touching row, no units")) == 1, "the same blob without units: one removal")
 
     m = np.zeros((H, W), bool)
     m[1700:1712, :] = True
@@ -96,20 +124,28 @@ def main(app_dir):
     for __ in range(40):
         blob(m, int(rng.uniform(200, 2200)), int(rng.uniform(100, 1500)), 120, 40)
     parts = split(m, "scattered")
-    # each part's area (as plan_region makes it, these are compact) must hold no pixel of a later part
-    later_seen = False
-    for i, p in enumerate(parts):
+    # each part's area (as plan_region makes it, these are compact) holds no pixel of a later part, but where the two
+    # see each other (kept apart: too large as one part, so neither could come first)
+    g = max(6 * SCALE, 0.004 * max(H, W))
+
+    def sq(p):
         ys, xs = np.nonzero(p)
-        g = max(6 * SCALE, 0.004 * max(H, W))
         by0, by1, bx0, bx1 = ys.min() - g, ys.max() + 1 + g, xs.min() - g, xs.max() + 1 + g
         side = min(max(max(by1 - by0, bx1 - bx0) * 1.35, 384 * SCALE), min(H, W))
         y0 = int(np.clip((by0 + by1 - side) / 2, 0, H - side))
         x0 = int(np.clip((bx0 + bx1 - side) / 2, 0, W - side))
+        return slice(y0, int(np.ceil(y0 + side))), slice(x0, int(np.ceil(x0 + side)))
+    one_way = mutual = 0
+    for i, p in enumerate(parts):
         for q in parts[i + 1:]:
-            if q[y0:int(np.ceil(y0 + side)), x0:int(np.ceil(x0 + side))].any():
-                later_seen = True
-    expect(1 < len(parts) < 40 and not later_seen,
-           f"40 scattered people: {len(parts)} removals, none sees a part still to remove")
+            if q[sq(p)].any():
+                if p[sq(q)].any():
+                    mutual += 1
+                else:
+                    one_way += 1
+    expect(1 < len(parts) < 40 and not one_way,
+           f"40 scattered people: {len(parts)} removals; none sees a part still to remove but {mutual} pairs that see "
+           f"each other, too large as one")
 
     expect(split(np.zeros((H, W), bool), "empty") == [], "an empty selection: nothing")
 

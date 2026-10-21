@@ -25,7 +25,8 @@ JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
    shadow**: it adds them to the selection, in blue.
 4. **Split into parts** cuts the selection into parts sized for the models: things far apart (a person on the left, a
    sign on the right) become parts of their own, numbered on the photo, while a crowd or a person and their shadow
-   stay one. Select each part, choose its model (the menu says what each one is good for, and what it is not for:
+   stay one, as long as their area stays small enough for the models to draw it sharp (a crowd becomes several
+   parts, filled one after another). Select each part, choose its model (the menu says what each one is good for, and what it is not for:
    FLUX Fill draws people back into a crowd) and press **Generate**, or **Generate all** for the rest. Pick the best
    variant of each. **Remove selection** does all of it at once, with one model for every part.
    On a long removal (a pole, a cable, a railing), **Full detail** redraws the chosen variant at the photo's own
@@ -64,7 +65,8 @@ embedded preview, which would still show what was removed.
   cables. RORem (the default): people and objects, SDXL Inpainting retrained only to remove, so it draws no one back;
   commercial use allowed. FLUX.1 Fill [dev] with Turbo-Alpha: architecture and large areas, the most realistic, but
   not for people. Qwen-Image 2.1 (optional, 16 GB GPUs): people and objects on complex backgrounds; it first names
-  everything selected ("the woman and her handbag"), then removes it by name and redraws the scene behind it.
+  everything selected ("the woman and her handbag"; what you described, such as "person", "bag", "umbrella", is
+  named too), then removes it by name and redraws the scene behind it.
 - **Shadows and reflections.** "Include the shadow" adds the selected objects' shadows to the selection, so every
   model removes them: SAM 3 finds the shadows that touch them (a long shadow at a low sun), and OSOR, if installed,
   what goes with each object (its shadow, its reflection), part by part.
@@ -213,9 +215,9 @@ names what to remove, when it recognised it wrongly ("the lamp post").
 | Select every instance of something | type it under the tools ("people"), Enter | type it under the tools ("people"), Return |
 | Take a part out / add a part | Alt+click / Shift+click | Option+click / Shift+click |
 | SAM click / Brush / Eraser | S / B / E | S / B / E |
-| Brush / Eraser size | `[` `]` or Ctrl+wheel | `[` `]` or Cmd+wheel |
+| Brush / Eraser size | Alt+wheel, `+` `−` or `[` `]` | Option+wheel, `+` `−` or `[` `]` |
 | Drop an object from the selection | right-click | right-click (or Control+click) |
-| Zoom | Ctrl+wheel (Alt+wheel with the Brush or Eraser), `+` `−`, `0` = fit | Cmd+wheel (Option+wheel with the Brush or Eraser), `+` `−`, `0` = fit |
+| Zoom | Ctrl+wheel, Ctrl+`+` `−` (`+` `−` alone with SAM click), `0` = fit | Cmd+wheel, Cmd+`+` `−` (`+` `−` alone with SAM click), `0` = fit |
 | Pan | wheel, middle button, Space+drag | two fingers, Space+drag |
 | Undo | Ctrl+Z | Cmd+Z |
 | Compare with the original | hold "Original" or `\` | hold "Original" or `\` |
