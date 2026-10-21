@@ -163,7 +163,8 @@ variabile `AIREMOVE_LANG=it` oppure `AIREMOVE_LANG=en`.
 
 - `<nome>-AIRemove.dng`: la foto ritoccata, nella cartella dell'originale e impilata con lui in LightCraft (da solo:
   solo nella cartella).
-- `<nome del raw>.airemove`: il progetto, con tutte le rimozioni e le varianti, accanto al RAW.
+- `<nome del raw>.airemove`: il progetto, con tutte le rimozioni e le varianti, accanto al RAW. Con un doppio clic
+  apre la foto in AI Remove.
 - `~/AIRemove`: il programma, i modelli, i log (`install.log` e `work/last-run.log`).
 
 ## Con un assistente AI (MCP)

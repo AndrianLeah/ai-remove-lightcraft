@@ -203,7 +203,7 @@ result as JSON.
 | File | Where | What |
 |---|---|---|
 | `<name>-AIRemove.dng` | next to the original, stacked with it in LightCraft (on its own: only next to it) | the retouched photo |
-| `<raw name>.airemove` | next to the raw | the project: every removal and its variants |
+| `<raw name>.airemove` | next to the raw | the project: every removal and its variants. Double-click it to open the photo in AI Remove |
 | `install.log`, `work/last-run.log` | in `~/AIRemove` | logs |
 
 ## Languages

@@ -5,8 +5,9 @@ How to use:
      in Other Editor (RAW, no copy)": the installer makes AI Remove LightCraft's external editor.
      It also works on its own, on a RAW file (open_session): started from the Start menu / Applications / app menu
      (LightCraft's active photo when LightCraft answers, else a file to pick), on a file given to it (a path; on a
-     Mac, dropped on its icon), or with "Open RAW…" in its window. The file is then read through lightcraft-cli, without LightCraft's window
-     (extract_headless: LightCraft must be installed, not open), and the DNG is written next to it.
+     Mac, dropped on its icon; a double-clicked .airemove project: its RAW), or with "Open RAW…" in its window.
+     The file is then read through lightcraft-cli, without LightCraft's window (extract_headless: LightCraft must be
+     installed, not open), and the DNG is written next to it.
   2. The AI Remove window (ui.py) shows the whole photo: select what to remove (SAM 3 clicks on the GPU, refine
      with Alt/Shift+click, brush/eraser). Masks named "Rimuovi..." made in LightCraft start the selection.
   3. "Rimuovi selezione" makes a removal (like a Lightroom Generative Remove spot) with its own area and variants
@@ -524,9 +525,9 @@ def ask_raw(parent=None):
     root = parent or tk.Tk()
     if parent is None:
         root.withdraw()
-    pats = " ".join(f"*{e} *{e.upper()}" for e in RAW_EXTS)
+    pats = " ".join(f"*{e} *{e.upper()}" for e in RAW_EXTS + (".airemove",))
     f = filedialog.askopenfilename(parent=root, title=_("Open a RAW photo"), initialdir=setting("last_dir") or None,
-                                   filetypes=[(_("RAW photos"), pats), (_("All files"), "*")])
+                                   filetypes=[(_("RAW photos and AI Remove projects"), pats), (_("All files"), "*")])
     if parent is None:
         root.destroy()
     if not f:
@@ -535,15 +536,29 @@ def ask_raw(parent=None):
     return Path(f)
 
 
+def project_raw(path):
+    """The file to open for a path given or picked: a project (<raw>.airemove) stands for its RAW, next to it."""
+    path = Path(path)
+    if path.suffix.lower() != ".airemove":
+        return path
+    raw = project.raw_for(path)
+    if not raw.is_file():
+        raise Fail(_("{file} is the AI Remove project of {raw}, which is no longer next to it: put the RAW back in "
+                     "that folder and open it again.", file=path.name, raw=raw.name))
+    return raw
+
+
 def open_session(args):
     """The window's session, or None when no photo was chosen:
     - LightCraft's photo when LightCraft answers and passes it (its external editor: the file is its selection) or,
       started without a file, has one active: its development shown, the result stacked there;
     - else a RAW on its own (a file given or picked): read through lightcraft-cli, the DNG written next to it. Also
-      when LightCraft is open but its control channel does not answer: the photo opens anyway."""
-    path = Path(args.raw) if args.raw else None
+      when LightCraft is open but its control channel does not answer: the photo opens anyway.
+    A project (<raw>.airemove: double-clicked, picked) opens its RAW."""
     if args.id is not None:
         return Session(LC(), args)
+    path = project_raw(args.raw) if args.raw else None
+    args.raw = str(path) if path else None  # what find_photo looks for in LightCraft's selection
     if system.lightcraft_reachable():
         lc = LC()
         try:
@@ -559,6 +574,7 @@ def open_session(args):
         path = ask_raw()
         if path is None:
             return None
+        path = project_raw(path)
     log(f"on its own: {path} (LightCraft {'answers' if system.lightcraft_reachable() else 'does not answer'})")
     return Session(None, args, path)
 

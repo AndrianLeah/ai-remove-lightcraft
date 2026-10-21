@@ -64,7 +64,8 @@ Setup of the server: `mcp/README.md`.
      ObjectClear installed).
   3. It prints one JSON line with the DNG path and its LightCraft photo id.
 - **Projects:** `<raw>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each
-  raw.
+  raw. The installer registers it as a file type for the user (Windows `HKCU\Software\Classes\.airemove`, macOS the
+  app's Info.plist, Linux `~/.local/share/mime/packages/airemove.xml`): a double-click opens its RAW in AI Remove.
 
 ## Uninstall
 

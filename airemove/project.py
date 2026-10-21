@@ -23,6 +23,11 @@ def path_for(raw_path):
     return raw_path.with_name(raw_path.name + ".airemove")
 
 
+def raw_for(project_path):
+    """The RAW a project belongs to (path_for's inverse): IMG_1.CR2.airemove -> IMG_1.CR2."""
+    return project_path.with_name(project_path.name[:-len(".airemove")])
+
+
 def png(im, mode=None):
     buf = io.BytesIO()
     (im.convert(mode) if mode else im).save(buf, "PNG", compress_level=1)
