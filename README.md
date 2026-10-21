@@ -71,6 +71,9 @@ embedded preview, which would still show what was removed.
   continues what is behind them best. **Full detail** redraws the chosen variant the same way, at the photo's
   resolution, keeping what it shows.
 - **Editable removals,** each with its own variants, kept in a project file; reopening a photo brings them back.
+- **Shown as the camera corrects it.** Sony cameras store their lens's distortion correction in the RAW, and
+  LightCraft applies it for few models. AI Remove's window applies it itself (it matches the camera's own JPEG within
+  a pixel), while the removals still go into the RAW's own pixels, so LightCraft's development stays in charge.
 - **Windows, macOS (Apple Silicon) and Linux,** on NVIDIA, AMD (ROCm), Intel Arc or Apple GPUs. It falls back to
   the processor without one.
 - **English and Italian.** More languages are one catalog file away (see [Languages](#languages)).

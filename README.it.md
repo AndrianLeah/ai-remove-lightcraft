@@ -164,6 +164,11 @@ Qwen-Image dice cosa togliere, se lo ha riconosciuto male ("the lamp post").
 | Variante precedente / successiva | ← / → | ← / → |
 | Elimina una variante | clic destro sulla variante | clic destro (o Ctrl+clic) sulla variante |
 
+Le foto delle fotocamere Sony si vedono corrette come le corregge la fotocamera: la correzione della distorsione
+dell'obiettivo è scritta nel RAW e LightCraft la applica solo per pochi modelli, quindi la applica la finestra di AI Remove
+(coincide con il JPEG della fotocamera entro un pixel). Le rimozioni finiscono comunque nei pixel del RAW, e lo sviluppo
+resta quello di LightCraft.
+
 AI Remove si può aprire anche dal menu Start, da Applicazioni o dal menu delle app: lavora sulla foto attiva in
 LightCraft se LightCraft è aperto, altrimenti su una foto che scegli tu (vedi "Da solo" in alto). Su Mac puoi anche
 trascinare una foto sulla sua icona.

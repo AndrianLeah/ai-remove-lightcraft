@@ -32,6 +32,7 @@ from scipy import ndimage as ndi
 import airemove as A
 import engines
 import i18n
+import lens
 from i18n import _, _n, N_
 
 # ---------------------------------------------------------------------------------------------- PLATFORM
@@ -120,12 +121,15 @@ def outline(u, width=2):
 
 class ZoomView:
     """A Canvas showing a PIL image fitted to it, with zoom (1 = fit, up to 400 % of the image's pixels) around a
-    point and panning. Only the visible part is resampled, so it stays quick when zoomed in."""
+    point and panning. Only the visible part is resampled, so it stays quick when zoomed in. With a lens (lens.Lens)
+    the image is given in the sensor's frame and shown corrected: to_image and to_canvas still speak the given
+    image's pixels, so what the window does with them stays in the sensor's frame."""
 
     def __init__(self, canvas, on_change=None):
         self.c, self.on_change = canvas, on_change
         self.img, self._tk, self.last = None, None, None
         self.z, self.cx, self.cy = 1.0, 0.0, 0.0
+        self.lens = None
 
     def size(self):
         w, h = self.c.winfo_width(), self.c.winfo_height()
@@ -142,7 +146,7 @@ class ZoomView:
 
     def set_image(self, img, keep=True):
         fresh = self.img is None or img.size != self.img.size or not keep
-        self.img = img
+        self.img = self.lens.warp(img) if self.lens else img
         if fresh:
             self.z, self.cx, self.cy = 1.0, img.width / 2, img.height / 2
         self.render()
@@ -172,11 +176,18 @@ class ZoomView:
         if self.on_change:
             self.on_change(self)
 
-    def to_image(self, x, y):
+    def _shown(self, x, y):  # a canvas point in the shown image's pixels
         s, (cw, ch) = self.scale(), self.size()
         return self.cx + (x - cw / 2) / s, self.cy + (y - ch / 2) / s
 
-    def to_canvas(self, ix, iy):
+    def to_image(self, x, y):
+        ix, iy = self._shown(x, y)
+        return self.lens.to_sensor(ix, iy) if self.lens else (ix, iy)
+
+    def to_canvas(self, ix, iy, shown=False):
+        """A point of the given image (shown=True: of the image as shown) on the canvas."""
+        if self.lens and not shown:
+            ix, iy = self.lens.to_shown(ix, iy)
         s, (cw, ch) = self.scale(), self.size()
         return (ix - self.cx) * s + cw / 2, (iy - self.cy) * s + ch / 2
 
@@ -186,7 +197,7 @@ class ZoomView:
         cw, ch = self.size()
         x = cw / 2 if x is None else x
         y = ch / 2 if y is None else y
-        ix, iy = self.to_image(x, y)
+        ix, iy = self._shown(x, y)
         z = min(max(self.z * factor, 1.0), max(1.0, 4.0 / self.fit()))
         if abs(z - self.z) < 1e-6:
             return
@@ -198,6 +209,10 @@ class ZoomView:
     def zoom_to(self, y0, y1, x0, x1, margin=1.5):
         if self.img is None:
             return
+        if self.lens:  # the rectangle as shown: around its corners and sides' middles
+            xs, ys = self.lens.to_shown(np.array([x0, x1, x0, x1, (x0 + x1) / 2, (x0 + x1) / 2, x0, x1]),
+                                        np.array([y0, y0, y1, y1, y0, y1, (y0 + y1) / 2, (y0 + y1) / 2]))
+            x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
         cw, ch = self.size()
         want = min(cw / max(1, (x1 - x0) * margin), ch / max(1, (y1 - y0) * margin))
         self.z = min(max(want / self.fit(), 1.0), max(1.0, 4.0 / self.fit()))
@@ -1347,6 +1362,10 @@ class App:
 
     def on_base(self, _data):
         b = self.s.base
+        # a camera that corrects its lens with the RAW's own tables (Sony): shown as the camera does (lens.py)
+        self.zsel.lens = lens.for_photo(self.s.info["source"]["path"], b.size)
+        if self.zsel.lens:
+            A.log(f"lens: shown with the camera's distortion correction ({len(self.zsel.lens.f)} knots)")
         geo = (self.s.info["develop"].get("crop") or {}).get("geometry") or {}
         rc = geo.get("rect")
         self.dim = None
@@ -2141,8 +2160,8 @@ class App:
         W, H = self.s.base.size
         delay = 900
 
-        def ev(x, y):
-            cx, cy = self.zsel.to_canvas(x * W, y * H)
+        def ev(x, y):  # x, y: where on the photo as shown (corrected, with a lens)
+            cx, cy = self.zsel.to_canvas(x * W, y * H, shown=True)
             return type("E", (), {"x": cx, "y": cy, "state": 0})()
         if kind == "zoom":
             e = ev(vals[1], vals[2])
