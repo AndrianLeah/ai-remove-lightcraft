@@ -14,7 +14,6 @@ Standard library only.
 """
 import ast
 import json
-import re
 import string
 import sys
 from pathlib import Path

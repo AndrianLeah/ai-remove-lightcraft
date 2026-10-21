@@ -6,7 +6,6 @@
   "(selection will be with the brush)": "(la selezione si farà col pennello)",
   "(shortcut not set: {error})": "(scorciatoia non impostata: {error})",
   "--auto needs a \"Remove\" mask on the photo in LightCraft (e.g. an Object mask renamed \"Remove\", or \"Remove: old wooden door\" to guide the fill)": "--auto serve una maschera \"Rimuovi\" sulla foto in LightCraft (es. una maschera Oggetto rinominata \"Rimuovi\", o \"Rimuovi: old wooden door\" per guidare il riempimento)",
-  "--auto: lama | sdxl | rorem | flux | osor | objectclear | qwen, optionally the number of the variant to use (e.g. sdxl2)": "--auto: lama | sdxl | rorem | flux | osor | objectclear | qwen, facoltativo il numero della variante da usare (es. sdxl2)",
   "--model-dir wants MODEL=FOLDER, MODEL one of {models} (it was: {value})": "--model-dir vuole MODELLO=CARTELLA, con MODELLO uno tra {models} (era: {value})",
   "1) make an account on huggingface.co  2) open {pages} and accept the licence  3) make a token (Read) at https://huggingface.co/settings/tokens": "1) crea un account su huggingface.co  2) apri {pages} e accetta la licenza  3) crea un token (Read) su https://huggingface.co/settings/tokens",
   "[Y/folder]": "[S/cartella]",
@@ -257,5 +256,6 @@
   "{task} · step {i}/{total}": "{task} · passo {i}/{total}",
   "{variant} is in full detail already.": "{variant} è già in dettaglio pieno.",
   "~/.config/environment.d (from the next login)": "~/.config/environment.d (dal prossimo accesso)",
-  "~{time} each": "~{time} l'una"
+  "~{time} each": "~{time} l'una",
+  "--auto: {models}, optionally the number of the variant to use (e.g. sdxl2)": "--auto: {models}, facoltativo il numero della variante da usare (es. sdxl2)"
 }

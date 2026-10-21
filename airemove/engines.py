@@ -257,6 +257,7 @@ class SDXL:
     name = "SDXL"
     S = 1024  # its working size
     PROMPT, NEGATIVE, GUIDANCE = DEFAULT_PROMPT, NEGATIVE, 7.0  # what every fill is told (a typed prompt goes first)
+    TEXT = True  # a typed prompt (the window's field, a mask's "Remove: <text>") is put before PROMPT
 
     def __init__(self, log=print, unet=None):
         """unet: another UNet for SDXL Inpainting's pipeline (RORem), given its folder and the dtype it gets."""
@@ -315,7 +316,8 @@ class SDXL:
         if hold is not None and strength >= 1.0:
             cb = self._hold(cb, hold[0].resize((S, S), Image.LANCZOS), hold[1], seed, steps)
             inputs = SDXL_CFG_INPUTS + ["latents"]
-        out = self.pipe(prompt=f"{prompt}, {self.PROMPT}" if prompt else self.PROMPT, negative_prompt=self.NEGATIVE,
+        out = self.pipe(prompt=f"{prompt}, {self.PROMPT}" if prompt and self.TEXT else self.PROMPT,
+                        negative_prompt=self.NEGATIVE,
                         image=image, mask_image=mask_image, masked_image_latents=self.masked_latents(image, mask_image),
                         height=S, width=S, strength=strength, guidance_scale=self.GUIDANCE, num_inference_steps=steps,
                         generator=self.torch.Generator("cpu").manual_seed(seed),
@@ -367,6 +369,9 @@ class RORem(SDXL):
     Licence: Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M (commercial use allowed)."""
     name = "RORem"
     PROMPT, NEGATIVE, GUIDANCE = ROREM_PROMPT, None, 1.0
+    # no typed text, from any door (window, --auto, MCP): without guidance it would barely steer the fill, and RORem
+    # was measured with its authors' prompt alone; the window's field says so (ui.PROMPT_MODE)
+    TEXT = False
 
     def __init__(self, log=print):
         super().__init__(log, unet=mf.part_dir("rorem") / "unet")
@@ -720,8 +725,8 @@ class Qwen:
                 ids = te.generate(**inputs, max_new_tokens=16, do_sample=False)
         finally:
             te.lm_head = torch.nn.Identity()
-        what = proc.batch_decode(ids[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0]
-        what = what.strip().splitlines()[0].strip(" .\"'") if what.strip() else "the object"
+        what = proc.batch_decode(ids[:, inputs["input_ids"].shape[1]:], skip_special_tokens=True)[0].strip()
+        what = (what.splitlines()[0].strip(" .\"'") if what else "") or "the object"  # quotes or dots alone: no name
         return what[0].lower() + what[1:] if what.split(" ", 1)[0] in ("The", "A", "An") else what
 
     def _key(self, image, hole, prompt, what=None):

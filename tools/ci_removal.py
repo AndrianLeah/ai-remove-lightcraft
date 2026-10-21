@@ -172,7 +172,7 @@ def session(ar, lc, photo, export, base_png, work):
     s.raw = ar.RawDNG(str(export))
     s.t, s.corr = ar.match_orientation(s.raw.preview_lum(), s.lum_e)
     s.gain = s.raw.global_gain()
-    y0, x0, h, w = s.raw.frame
+    __, __, h, w = s.raw.frame
     s.base_scale = s.base.width / ar.apply_t(np.zeros((h, w), bool), s.t).shape[1]
     s.restore()
     return s

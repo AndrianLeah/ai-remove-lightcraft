@@ -96,6 +96,10 @@ MODEL_GROUPS = ((N_("Fill the selection"), ("lama", "sdxl", "rorem", "flux", "qw
 # authors' fixed prompt and no guidance, which a text would hardly steer)
 PROMPT_MODE = {"sdxl": "fill", "flux": "fill", "qwen": "name", "lama": None, "osor": None, "objectclear": None,
                "rorem": None}
+# every model of airemove.ENGINES (the one list of models) has a name, a place in the menu and a text mode here: a model
+# added there and forgotten here stops the window at once, instead of a menu that cannot show it
+assert (set(MODEL_KEYS) == set(MODEL_NAMES) == set(PROMPT_MODE) == {m for __, ms in MODEL_GROUPS for m in ms}
+        == set(A.ENGINES)), "ui.py's model tables differ from airemove.ENGINES"
 
 
 def outline(u, width=2):
@@ -394,7 +398,7 @@ class ModelPicker(tk.Frame):
 
     def _row(self, box, m, on, wrap):
         app, k = self.app, self.k
-        name, use, t = self.meta[m]
+        name, __, t = self.meta[m]  # the list says what the model is best for (model_best), not its short use
         bg = CARD_HI if on else CARD
         f = tk.Frame(box, bg=bg, cursor="hand2")
         f.pack(fill="x", padx=int(5 * k), pady=1)
@@ -1125,23 +1129,24 @@ class App:
     def run_refine(self, r, prompt):
         """"Full detail" on r's chosen variant, with a progress plan in expected seconds."""
         s = self.s
-        if not s.area_ready(r):  # a reopened removal: its area first
-            self.post("job_start", (f"#{r.id} · " + _("Preparing the area"), A.expected("area")))
-            self.post("job_part", (f"#{r.id} · " + _("Preparing the area"), 0.0, A.expected("area")))
-            s.ensure_area(r)
         model = s.refine_model()
+        prep = 0.0 if s.area_ready(r) else A.expected("area")  # a reopened removal: its area first
         load = 0.0 if s.engine_loaded(model) else A.expected(f"{model}_load")
-        secs = s.refine_seconds(r)
+        secs = s.refine_seconds(r)  # the squares' plan needs the hole only, not the area image
         tag = f"#{r.id} · " + _("Full detail")
-        self.post("job_start", (tag, load + secs))
+        self.post("job_start", (tag, prep + load + secs))  # one plan, as run_job's
+        if prep:
+            self.post("job_part", (f"#{r.id} · " + _("Preparing the area"), 0.0, prep))
+            s.ensure_area(r)
         if load:
-            self.post("job_part", (_("Loading {model}", model=A.MODELS[model]), 0.0, load))
+            self.post("job_part", (_("Loading {model}", model=A.MODELS[model]), prep, load))
             s.get_engine(model)
-        self.post("job_part", (tag, load, secs))
+        base = prep + load
+        self.post("job_part", (tag, base, secs))
 
         def prog(i, tot):
             self.post("job_exact", (_("{task} · step {i}/{total}", task=tag, i=i, total=tot),
-                                    load + secs * i / max(1, tot)))
+                                    base + secs * i / max(1, tot)))
         if s.refine(r, prompt, progress=prog) is not None:
             r.user_picked = True
             self.post("cand", r)
@@ -1388,7 +1393,7 @@ class App:
         threading.Thread(target=self.s.save_project, daemon=True).start()
 
     def on_saved(self, data):
-        out, nid, updated = data
+        out, __, updated = data
         self.writing, self.dng_dirty = False, False
         self.set_idle_status((_("{file} updated in LightCraft", file=out.name) if updated else
                               _("{file} created and stacked on the original in LightCraft", file=out.name)) + " ✓")
@@ -1843,7 +1848,7 @@ class App:
 
     def on_press_any(self, e):
         """Left button: Alt (Option) / Shift from the event's modifiers; on a Mac Control+click is the right click."""
-        ctrl, shift, alt = mods(e)
+        __, shift, alt = mods(e)
         if MAC and (e.state & 0x4):
             return self.on_right_click(e)
         return self.on_press(e, alt=alt, shift=shift)
