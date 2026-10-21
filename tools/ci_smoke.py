@@ -16,7 +16,8 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                tools/ci_removal.py (a synthetic raw DNG, LaMa, the blend, the DNG and the project),
                                then a long one in tiles: tools/ci_tiles.py (a cord across a synthetic area, LaMa),
                                then one on each kind of picture: tools/ci_pictures.py (JPEG, PNG, TIFF, WebP, HEIC,
-                               AVIF opened on their own, LaMa, the copy in the same format, its metadata)
+                               AVIF opened on their own, LaMa, the copy in the same format, its metadata), and
+                               Describe's masks from synthetic SAM 3 output: tools/ci_describe.py
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
                                app, its menu entry, its .airemove file type and, on Windows, its Settings > Apps entry
                                are gone; the user's own model folders are still there
@@ -274,6 +275,8 @@ def remove(d):
     expect(r.returncode == 0, f"long removal in tiles: exit status 0 (it was {r.returncode})")
     r = run([py, ROOT / "tools" / "ci_pictures.py", d])
     expect(r.returncode == 0, f"removals on JPEG, PNG, TIFF, WebP, HEIC, AVIF: exit status 0 (it was {r.returncode})")
+    r = run([py, ROOT / "tools" / "ci_describe.py", d])
+    expect(r.returncode == 0, f"Describe's masks: exit status 0 (it was {r.returncode})")
 
 
 def uninstall(d):

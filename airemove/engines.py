@@ -26,6 +26,9 @@ SDXL_STEPS, SDXL_GUIDED_STEPS = 12, 5  # DPM++ steps; classifier-free guidance o
 SDXL_CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids", "mask", "masked_image_latents"]
 SDXL_HOLD = 0.5  # share of the steps a held region (SDXL.fill hold=) follows its pre-fill
 SAM3_WEIGHTS = mf.SAM3_WEIGHTS
+# Describe (SAM3.describe): an instance SAM 3 finds counts above this score, as in LightCraft's Describe; where it is
+# the strongest instance and its own logit is above DESCRIBE_NEAR, the semantic mask joins it (describe_masks)
+DESCRIBE_SCORE, DESCRIBE_NEAR = 0.5, -4.0
 # RORem's authors' prompt: with it and without classifier-free guidance it removes best (their README)
 ROREM_PROMPT = "4K, high quality, masterpiece, Highly detailed, Sharp focus, Professional, photorealistic, realistic"
 OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was trained with
@@ -166,10 +169,32 @@ def lama(src: Image.Image, mask: Image.Image) -> Image.Image:
 
 
 # ------------------------------------------------------------------------------------------------ SAM 3
+def describe_masks(inst, scores, semantic, size, min_score=DESCRIBE_SCORE, near=DESCRIBE_NEAR):
+    """SAM 3's text detection as one bool mask per instance found, at size=(w, h); returns (masks, their scores).
+    inst: (n, h, w) instance logits, scores: (n,), semantic: (h, w) logits, at the model's resolution (288 x 288).
+
+    An instance's own mask (logit > 0) leaves holes where SAM 3 is unsure inside it, and a seam where two instances
+    touch: both fade there. As LightCraft 0.11 does (its #1963), where an instance is the strongest one and near (its
+    own logit above `near`) it takes the semantic mask too, which is sure inside and runs on across that seam. For
+    removing, its own mask stays as well: a pixel too many is filled, one too few is left in the photo."""
+    scores = np.asarray(scores, np.float32)
+    keep = np.nonzero(scores > min_score)[0]
+    if not len(keep):
+        return [], scores[:0]
+    m = np.asarray(inst, np.float32)[keep]
+    s = np.asarray(semantic, np.float32)
+    strongest = m.argmax(axis=0)
+    masks = []
+    for j in range(len(m)):
+        joined = np.where((strongest == j) & (m[j] > near), np.maximum(m[j], s), m[j])
+        masks.append(np.asarray(Image.fromarray(joined).resize(size, Image.BILINEAR)) > 0)
+    return masks, scores[keep]
+
+
 class SAM3:
     """Click-to-select with SAM 3 (the tracker half: point prompts), using the same weights LightCraft downloaded.
     On a GPU ~0.25 s per photo and ~0.05 s per click — LightCraft's own Object tool runs a ~35 s detail pass after
-    every click."""
+    every click. describe() selects by text with the other half, the detector, loaded the first time."""
 
     def __init__(self, log=print):
         dev = device()
@@ -192,6 +217,7 @@ class SAM3:
             self.model = Sam3TrackerModel.from_pretrained(path, config=Sam3TrackerConfig(), dtype=self.dtype)
         self.model = self.model.to(dev).eval()
         self.img = self.emb = None
+        self.path, self.detector, self.det_proc = path, None, None
         log(f"SAM 3 ready ({dev})")
 
     def set_image(self, img: Image.Image):
@@ -232,8 +258,61 @@ class SAM3:
         out, masks = self._run(pts, labels, logit, multi=False)
         return masks[0].astype(bool), out.pred_masks[:, :, 0:1]
 
+    def describe(self, text, log=print):
+        """Every instance of `text` (in English: "person", "car", "sign") in the photo set_image was given, one bool
+        mask each, with their scores (describe_masks). ~0.3 s on a GPU; the first call loads the detector."""
+        torch = self.torch
+        if self.detector is None:
+            self._load_detector(log)
+        inputs = self.det_proc(images=self.img, text=text, return_tensors="pt").to(self.dev)
+        with torch.no_grad():
+            o = self.detector(pixel_values=inputs["pixel_values"].to(self.dtype), input_ids=inputs["input_ids"],
+                              attention_mask=inputs["attention_mask"])
+        scores = o.pred_logits.float().sigmoid()[0]
+        if o.presence_logits is not None:  # whether the phrase is in the photo at all
+            scores = scores * o.presence_logits.float().sigmoid()[0]
+        keep = torch.nonzero(scores > DESCRIBE_SCORE).flatten()  # only those leave the GPU
+        return describe_masks(o.pred_masks[0, keep].float().cpu().numpy(), scores[keep].cpu().numpy(),
+                              o.semantic_seg[0, 0].float().cpu().numpy(), self.img.size)
+
+    def _load_detector(self, log=print):
+        """SAM 3's detector, next to the tracker. Their image encoders are the same weights but for the neck: each
+        part found identical, tensor by tensor, is the tracker's own (~0.9 GB less on the GPU). The text needs the
+        tokenizer: the full download's, else built from vocab.json and merges.txt (LightCraft keeps those)."""
+        import time
+        from transformers import CLIPTokenizer, Sam3Config, Sam3ImageProcessor, Sam3Model, Sam3Processor
+        torch, t0 = self.torch, time.time()
+        full = (self.path / "config.json").exists()
+        det = (Sam3Model.from_pretrained(self.path, dtype=self.dtype) if full else
+               Sam3Model.from_pretrained(self.path, config=Sam3Config(), dtype=self.dtype))
+        shared = []
+        for name, part in det.vision_encoder.named_children():
+            mine = getattr(self.model.vision_encoder, name, None)
+            if mine is None:
+                continue
+            a, b = part.state_dict(), mine.state_dict()
+            if a.keys() == b.keys() and all(torch.equal(a[k].to(b[k].device, b[k].dtype), b[k]) for k in a):
+                setattr(det.vision_encoder, name, mine)
+                shared.append(name)
+        self.detector = det.to(self.dev).eval()
+        if (self.path / "tokenizer.json").exists() or (self.path / "tokenizer_config.json").exists():
+            self.det_proc = Sam3Processor.from_pretrained(self.path)
+        else:
+            vocab = next((d for d in (self.path, system.lightcraft_sam3_dir())
+                          if (d / "vocab.json").exists() and (d / "merges.txt").exists()), None)
+            if vocab is None:
+                raise FileNotFoundError(_("Describe needs SAM 3's text files (vocab.json and merges.txt), which come "
+                                          "with the model: run the AI Remove installer again"))
+            # from the folder: transformers 5 no longer reads files given to the constructor (checked: the same
+            # token ids as the full download's tokenizer)
+            tok = CLIPTokenizer.from_pretrained(vocab, model_max_length=32, pad_token="<|endoftext|>")
+            self.det_proc = Sam3Processor(image_processor=Sam3ImageProcessor(), tokenizer=tok)
+        log(f"SAM 3 Describe ready in {time.time() - t0:.1f}s "
+            f"(shared with the click model: {', '.join(shared) or 'none'})")
+
     def unload(self):
         del self.model, self.emb
+        self.detector = self.det_proc = None
         _free_gpu()
 
 

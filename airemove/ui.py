@@ -1,7 +1,8 @@
 """AI Remove window, organised like Lightroom's Generative Remove.
 
 The photo fills the left side and always shows the result: every removal with its chosen variant. Select what to
-remove (Clic SAM: SAM 3 outlines the whole object · Alt/Option+click / Shift+click refine it · Pennello + / Gomma −),
+remove (Clic SAM: SAM 3 outlines the whole object · Alt/Option+click / Shift+click refine it · Pennello + / Gomma −;
+or "Descrivi": every instance of what is typed, e.g. "people", each its own object — a right-click drops one),
 then "Rimuovi selezione": it becomes removal #n with its own area and its own variants (LaMa + SDXL or FLUX).
 On the right: the removals; click one to see only its variants, pick one, ask for more or delete it — the other
 removals are not touched. "Salva in LightCraft" writes one DNG with all of them, stacked on the original; a photo
@@ -467,6 +468,7 @@ class App:
         self.show_original = False
         self.dng_dirty = False  # choices changed since the result (DNG or picture) was last written
         self.busy = self.extracting = self.writing = False
+        self.describing = False  # a Describe is on its way (SAM's worker)
         self.sam_ready = False
         self.job = None  # progress of the running job
         self.task, self.task_t0 = "", time.time()
@@ -591,6 +593,17 @@ class App:
             b.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 1, 0))
             seg.columnconfigure(i, weight=1)
             self.tool_btns[name] = b
+        # Describe: every instance of what is typed (SAM 3's detector), each its own object in the selection
+        drow = tk.Frame(sel, bg=CARD)
+        drow.pack(fill="x", pady=(int(8 * k), 0))
+        self.describe_entry = HintEntry(drow, _("Describe, in English: people, car, sign…"), font=self.f_txt, bg=BTN,
+                                        fg=FG, insertbackground=FG, relief="flat", highlightthickness=1,
+                                        highlightbackground=LINE, highlightcolor=ACCENT, disabledbackground=CARD,
+                                        disabledforeground="#666666")
+        self.describe_entry.pack(side="left", fill="x", expand=True, ipady=int(4 * k))
+        self.describe_entry.bind("<Return>", lambda e: (self.describe(), "break")[1])  # not "Remove selection"
+        self.describe_btn = self.button(drow, _("Select all"), self.describe, small=True)
+        self.describe_btn.pack(side="left", padx=(int(6 * k), 0))
         srow = tk.Frame(sel, bg=CARD)
         srow.pack(fill="x", pady=(int(10 * k), 0))
         tk.Label(srow, text=_("Size"), font=self.f_small, fg=DIM, bg=CARD).pack(side="left")
@@ -892,7 +905,7 @@ class App:
         return next((k for k, lbl in getattr(self, "model_labels", {}).items() if lbl == v), self.model_keys()[0])
 
     def typing(self):
-        return self.root.focus_get() in (self.prompt, self.count)
+        return self.root.focus_get() in (self.prompt, self.count, self.describe_entry)
 
     def apply_prompt_mode(self):
         """The text field for the chosen model (PROMPT_MODE): what to put there (SDXL, FLUX Fill), the name of what to
@@ -1187,6 +1200,12 @@ class App:
                     m, logit = sam.click(x, y)
                     A.log(f"click ({x:.0f},{y:.0f}) -> {int(m.sum())} px in {time.time() - t0:.2f}s")
                     self.post("obj", {"id": None, "mask": m, "logit": logit, "pts": [(x, y)], "labels": [1]})
+                elif job[0] == "describe":  # self.describing ends in on_desc (or on_error), on this window's thread
+                    __, text = job
+                    masks, scores = sam.describe(text, log=A.log)
+                    best = ", ".join(f"{s:.2f}" for s in sorted(scores, reverse=True)[:8])
+                    A.log(f"describe \"{text}\": {len(masks)} found (scores {best}) in {time.time() - t0:.2f}s")
+                    self.post("desc", {"text": text, "masks": masks})
                 else:  # ("refine", op id, points, labels, previous logit)
                     __, oid, pts, labels, logit = job
                     m, logit = sam.refine(pts, labels, logit)
@@ -1307,6 +1326,8 @@ class App:
     def on_no_sam(self, _data):
         """No SAM 3 model: selection with the brush (and LightCraft's "Rimuovi" masks) only."""
         self.tool_btns["sam"].configure(state="disabled")
+        self.describe_entry.configure(state="disabled")
+        self.describe_btn.configure(state="disabled")
         self.set_tool("brush")
         self.set_idle_status(_("SAM 3 is not installed: select with the Brush") if self.s.standalone else
                              _("SAM 3 is not installed: select with the Brush (or with a \"Remove\" mask in LightCraft)"))
@@ -1383,6 +1404,29 @@ class App:
         if not self.busy and not self.task:
             self.status.configure(text=_("{alt}+click a part to take it out · then \"Remove selection\"", alt=ALT))
 
+    def describe(self):
+        """"Select all": every instance of the typed text, found by SAM 3 (in the worker that does the clicks)."""
+        text = self.describe_entry.get().strip()
+        if not text or not hasattr(self, "base_ok") or self.writing:
+            return
+        self.describing = True
+        self.clicks.put(("describe", text))
+        self.status.configure(text=_("Looking for \"{what}\"…", what=text))
+
+    def on_desc(self, data):
+        """Each instance found is its own object in the selection: a right-click drops one, and Undo takes them all
+        back in one step."""
+        masks, text = data["masks"], data["text"]
+        self.describing = False
+        if not masks:
+            self.status.configure(text=_("Nothing found for \"{what}\": a plain name in English works best (person, "
+                                         "car, sign)", what=text))
+            return
+        self.commit(self.ops + [self.new_op("add", m, describe=text) for m in masks])
+        self.status.configure(text=_n("{n} found for \"{what}\": right-click it to keep it, then \"Remove selection\"",
+                                      "{n} found for \"{what}\": right-click one to keep it, then \"Remove selection\"",
+                                      len(masks), what=text))
+
     def on_removal_new(self, r):
         ys, xs = np.nonzero(outline(r.mask_e, 2))
         self.outlines[r.id] = (ys, xs)
@@ -1458,7 +1502,7 @@ class App:
         self.quit()
 
     def on_error(self, msg):
-        self.writing = False
+        self.writing = self.describing = False
         self.update_buttons()
         messagebox.showerror("AI Remove", msg, parent=self.root)
 
@@ -2088,11 +2132,12 @@ class App:
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
         snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear/5 qwen/6 rorem] · more:n · pick:i ·
         detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit ·
-        menu (opens / closes the model list) · wheel:notches,mods (on the photo; mods 1 Ctrl/Cmd, 2 Alt/Option)"""
+        menu (opens / closes the model list) · wheel:notches,mods (on the photo; mods 1 Ctrl/Cmd, 2 Alt/Option) ·
+        describe:text (Describe's field and "Select all") · right:x,y (a right-click)"""
         if not actions:
             return
         kind, __, arg = actions[0].partition(":")
-        vals = [float(v) for v in arg.split(",")] if arg else []
+        vals = [float(v) for v in arg.split(",")] if arg and kind != "describe" else []
         W, H = self.s.base.size
         delay = 900
 
@@ -2185,6 +2230,13 @@ class App:
         elif kind == "info":
             self.toggle_model_info()
             delay = 200
+        elif kind == "describe":
+            self.describe_entry.set_text(arg)
+            self.describe()
+            delay = 200
+        elif kind == "right":
+            self.on_right_click(ev(vals[0], vals[1]))
+            delay = 200
         elif kind == "menu":
             self.picker.open()
             A.log(f"TEST model list {'open' if self.picker.pop is not None else 'closed'}")
@@ -2211,7 +2263,7 @@ class App:
             self.delete_cur()
             delay = 300
         elif kind == "waitidle":
-            if self.busy or self.jobs.qsize():
+            if self.busy or self.jobs.qsize() or self.describing:
                 self.root.after(500, lambda: self.run_test_actions(actions))
                 return
             delay = 200
