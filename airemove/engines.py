@@ -36,6 +36,11 @@ QWEN_ASK = ("The area outlined in red in this photo will be erased. Name the obj
 QWEN_REMOVE = ("Remove {what} from the photo and fill the area with the background that naturally continues the "
                "surrounding scene. Keep everything else exactly as it is. Do not add any person or object.")
 QWEN_LOCK = True  # outside the hole the latents follow the photo's at every step (the edit cannot drift there)
+# 4 steps instead of Turbo's own 8: lightx2v's schedule for its 4-step Lightning LoRA, shifted by the picture's size as
+# that LoRA's scheduler does (about 1, 0.86, 0.67, 0.4 at 1024 px), on Turbo alone. Measured on 5 removals, 16 variants
+# each way, at 100 % after the write-back: the same content and detail as 8 steps, 24 s instead of 39 per variant. The
+# Lightning LoRA itself (on Qwen-Image 2.1 or on Turbo) added fake texture, broke railings and drew a column back
+QWEN_SIGMAS = (1.0, 0.75, 0.5, 0.25)
 
 _DEVICE = None
 
@@ -606,8 +611,8 @@ def _qwen_text_encoder(dev):
 
 class Qwen:
     """Qwen-Image-2.1-Turbo (Alibaba, 2026): a 7B image model that generates and edits at up to 2048 px, distilled to
-    8 steps. Its transformer is GGUF-quantized (~4.2 GB at Q4_K_M); its text encoder, Qwen3-VL-8B (~8 GB on the GPU in
-    FP8), reads the prompt and the condition pictures together. The two don't fit on a 16 GB card at once: the encoder runs once per
+    8 steps, run here in 4 (QWEN_SIGMAS). Its transformer is GGUF-quantized (~4.2 GB at Q4_K_M); its text encoder,
+    Qwen3-VL-8B (~8 GB on the GPU in FP8), reads the prompt and the condition pictures together. The two don't fit on a 16 GB card at once: the encoder runs once per
     removal while the transformer waits in RAM, then is freed.
 
     It has no inpainting mode, so a removal is an edit: Qwen3-VL first names what is selected ("the woman and her
@@ -621,7 +626,8 @@ class Qwen:
     def __init__(self, log=print):
         dev = device()
         import torch
-        from diffusers import GGUFQuantizationConfig, QwenImage21Pipeline, QwenImage21Transformer2DModel
+        from diffusers import (FlowMatchEulerDiscreteScheduler, GGUFQuantizationConfig, QwenImage21Pipeline,
+                               QwenImage21Transformer2DModel)
         from diffusers.quantizers.gguf.utils import GGUFLinear, GGUFParameter, dequantize_gguf_tensor
         from diffusers.utils import logging as dl
         from transformers.utils import logging as hf_logging
@@ -645,13 +651,16 @@ class Qwen:
         self.pipe = QwenImage21Pipeline.from_pretrained(self.repo, transformer=tr, text_encoder=None,
                                                         torch_dtype=torch.bfloat16).to(dev)
         self.pipe.set_progress_bar_config(disable=True)
+        # QWEN_SIGMAS shifted by the picture's size (Turbo's own 8 are fixed)
+        self.pipe.scheduler = FlowMatchEulerDiscreteScheduler.from_config(self.pipe.scheduler.config,
+                                                                          use_dynamic_shifting=True)
         # the VAE in 512 px tiles: a 1024 px decode in one piece peaks at ~11 GB, which spills the card's memory
         self.pipe.vae.enable_tiling(512, 512, 384, 384)
         self.cond = {}  # key -> condition of the last removals (squares of an oblong area): the encoder runs once
         self.names = {}  # key -> what Qwen3-VL saw in an oblong area's selection (named once, for all its squares)
         self.what = None  # what Qwen3-VL saw in the last removal's selection
         self.drawn = None  # (width, height) the last fill was drawn at
-        log(f"Qwen-Image ready ({dev}, {self.quant}, {len(self.pipe.config.sample_sigmas)} steps)")
+        log(f"Qwen-Image ready ({dev}, {self.quant}, {len(QWEN_SIGMAS)} steps)")
 
     def _latents(self, img):
         """An RGB(A) PIL image -> its packed, normalized latents (1, tokens, 64)."""
@@ -810,7 +819,7 @@ class Qwen:
             sc = pipe.scheduler.config
             mu = calculate_shift(Lh * Lw, sc.get("base_image_seq_len", 256), sc.get("max_image_seq_len", 4096),
                                  sc.get("base_shift", 0.5), sc.get("max_shift", 1.15))
-            timesteps, n = retrieve_timesteps(pipe.scheduler, None, dev, sigmas=pipe.config.sample_sigmas, mu=mu)
+            timesteps, n = retrieve_timesteps(pipe.scheduler, None, dev, sigmas=list(QWEN_SIGMAS), mu=mu)
             pipe.scheduler.set_begin_index(0)
             slots = torch.cat([slots, slots.new_ones(1, Lh * Lw // 4)], dim=1)
             cache = QwenImage21KVCache(len(pipe.transformer.transformer_blocks))

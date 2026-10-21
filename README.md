@@ -150,7 +150,7 @@ Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache
 | SAM 3 | One-click selection (without it: the brush) | 3.2 GB (0 if LightCraft has it) | SAM License (Meta) |
 | OSOR (optional, on FLUX) | The object with its shadow and reflection, one step (~3–8 s); finds the shadow for "Include the shadow" | 0.6 GB | FLUX.1 [dev] Non-Commercial |
 | ObjectClear (optional) | The object with its shadow and reflection, ~5 s per variant, 512 px | 7.3 GB | S-Lab License 1.0 (non-commercial) |
-| Qwen-Image 2.1 Turbo (optional) | Large areas on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~45 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
+| Qwen-Image 2.1 Turbo (optional) | Large areas on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~30 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
 
 The installer shows the same descriptions, sizes and licences (from `airemove/model_files.py`).
 

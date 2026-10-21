@@ -503,12 +503,12 @@ def unique_path(p):
 TIMINGS = ROOT / "work" / "timings.json"
 DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20, "flux_variant": 90,
                  "osor_load": 25, "osor_variant": 8, "objectclear_load": 20, "objectclear_variant": 5, "shadow": 12,
-                 "qwen_load": 15, "qwen_variant": 50,
+                 "qwen_load": 15, "qwen_variant": 35,
                  "area": 3, "save": 6,
                  # one square of a tiled fill (tiles.py), one redrawn by "Full detail", the blend of the area after
                  "flux_tile512": 13, "flux_tile768": 22, "sdxl_tile1024": 7.5, "lama_tile512": 2,
                  "flux_refine512": 12, "flux_refine768": 21, "sdxl_refine1024": 7, "tiled_blend": 5,
-                 "qwen_tile1024": 60}
+                 "qwen_tile1024": 40}
 
 
 def expected(key):
