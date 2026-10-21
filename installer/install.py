@@ -552,7 +552,7 @@ def make_shortcuts(d, cfg):
               "$s.Description = '%s'; $s.Save()"
               % (str(lnk).replace("'", "''"), str(launcher_exe(d)).replace("'", "''"),
                  str(d).replace("'", "''"), str(icon / "airemove.ico").replace("'", "''"),
-                 _("AI Remove for LightCraft: removes objects from RAW photos").replace("'", "''")))
+                 _("AI Remove for LightCraft: removes objects from photos").replace("'", "''")))
         run(["powershell", "-NoProfile", "-Command", ps], quiet=True, check=False)
         cfg["shortcut"] = str(lnk)
         size_kb = int(sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) / 1024)
@@ -615,8 +615,8 @@ def make_shortcuts(d, cfg):
     entry.parent.mkdir(parents=True, exist_ok=True)
     entry.write_text("[Desktop Entry]\nType=Application\nName=AI Remove\n"
                      "GenericName=Object removal for LightCraft\nGenericName[it]=Rimozione oggetti per LightCraft\n"
-                     "Comment=Removes objects from LightCraft's RAW photos with AI\n"
-                     "Comment[it]=Rimuove oggetti dai RAW di LightCraft con l'AI\n"
+                     "Comment=Removes objects from photos with AI, in LightCraft or on its own\n"
+                     "Comment[it]=Rimuove oggetti dalle foto con l'AI, in LightCraft o da solo\n"
                      f'Exec="{launcher_exe(d)}" %f\nIcon=airemove\nTerminal=false\n'
                      f"Categories=Graphics;Photography;\nMimeType={LINUX_PROJECT_MIME};\nStartupWMClass=Airemove\n",
                      encoding="utf-8")
@@ -1185,9 +1185,9 @@ def main():
     except ValueError:
         out.write(txt[-800:])
     key = "Cmd+Shift+X" if system.system() == "macos" else "Ctrl+Shift+X"
-    final = (_("Done. Restart LightCraft, then select a RAW photo and press {key} (Photo > Edit In > Open Original "
+    final = (_("Done. Restart LightCraft, then select a photo and press {key} (Photo > Edit In > Open Original "
                "in Other Editor). Or open \"AI Remove\" from the menu.", key=key) if lc_state != "skipped" else
-             _("Done. In LightCraft select a RAW photo and press {key} (Photo > Edit In > Open Original in Other "
+             _("Done. In LightCraft select a photo and press {key} (Photo > Edit In > Open Original in Other "
                "Editor). Or open \"AI Remove\" from the menu.", key=key))
     if lc_state == "pending":
         final += " " + _("FIRST: close LightCraft and finish the configuration (see above).")
