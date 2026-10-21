@@ -105,6 +105,19 @@ assert (set(MODEL_KEYS) == set(MODEL_NAMES) == set(PROMPT_MODE) == {m for __, ms
         == set(A.ENGINES)), "ui.py's model tables differ from airemove.ENGINES"
 
 
+def elide(text, font, width):
+    """text shortened in the middle with "…" to fit `width` pixels in `font` (a file name keeps its extension);
+    "" when not even a few letters fit."""
+    if font.measure(text) <= width:
+        return text
+    lo, hi = 0, len(text)  # how many characters are kept, half from each end
+    while lo < hi:
+        n = (lo + hi + 1) // 2
+        cut = text[:(n + 1) // 2] + "…" + text[len(text) - n // 2:]
+        lo, hi = (n, hi) if font.measure(cut) <= width else (lo, n - 1)
+    return "" if lo < 4 else text[:(lo + 1) // 2] + "…" + text[len(text) - lo // 2:]
+
+
 def outline(u, width=2):
     """Edge pixels of a bool mask (computed on its bounding box only: quick on a full-size photo)."""
     e = np.zeros_like(u)
@@ -235,6 +248,41 @@ class Scroll(tk.Frame):
         self.canvas.configure(yscrollcommand=sb.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         sb.pack(side="left", fill="y")
+
+
+class Panel(tk.Frame):
+    """The side panel's body (self.inner): as tall as the window. Content taller than that (a small screen, the
+    model's description open) scrolls, with a scrollbar shown only then, over the content's right margin (so the
+    content keeps its width and nothing wraps anew); on a taller window the content gets the extra height, so what
+    is packed to expand (the variants) grows. fit() follows the content's size: the window calls it on every poll,
+    as no event says that a frame's requested size changed."""
+
+    def __init__(self, master, k, bg):
+        super().__init__(master, bg=bg)
+        self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0, yscrollincrement=int(24 * k))
+        self.sb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview, style="AI.Vertical.TScrollbar")
+        self.inner = tk.Frame(self.canvas, bg=bg)
+        self.win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.sb.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.canvas.bind("<Configure>", lambda e: self.fit())
+        self._last, self.scrolls = None, False
+
+    def fit(self):
+        req, h, w = self.inner.winfo_reqheight(), self.canvas.winfo_height(), self.canvas.winfo_width()
+        if (req, h, w) == self._last or h <= 1:
+            return
+        self._last = (req, h, w)
+        scrolls = req > h
+        if scrolls != self.scrolls:
+            self.scrolls = scrolls
+            if scrolls:
+                self.sb.place(relx=1, rely=0, relheight=1, anchor="ne")
+            else:
+                self.sb.place_forget()
+                self.canvas.yview_moveto(0)
+        self.canvas.itemconfigure(self.win, width=w, height=max(req, h))
+        self.canvas.configure(scrollregion=(0, 0, w, max(req, h)))
 
 
 class Stepper(tk.Frame):
@@ -482,7 +530,7 @@ class App:
             pass
         r = self.root = tk.Tk(className="airemove")  # WM_CLASS "Airemove": the Linux menu entry matches it
         k = self.k = max(1.0, r.winfo_fpixels("1i") / 96.0)
-        self.side_w = int(372 * k)
+        self.side_w = int(min(372 * k, max(300 * k, 0.34 * r.winfo_screenwidth())))  # narrower on a narrow screen
         self.THUMB, self.ROWTHUMB = (self.side_w - int(96 * k)) // 2, int(52 * k)
         r.title("AI Remove")
         r.configure(bg=BG)
@@ -532,6 +580,62 @@ class App:
             return ("Segoe UI Semibold", size)
         return (self._family, size, "bold") if bold else (self._family, size)
 
+    def fit_header(self):
+        """The top bar on any width (its <Configure>, a photo's name). The view controls stay at the right end of the
+        photo's row while the photo's name keeps ~160 px there (or all it needs); on a narrower window they go to a
+        row of their own below it. On the photo's row "Open photo…" always stays, then, as room allows, the photo's
+        name (shortened in the middle to fit), "GitHub" (else just ⓘ), the version and, last, the mode of a photo
+        opened on its own."""
+        W = self.head.winfo_width()
+        if W <= 1:
+            return
+        k = self.k
+
+        def width(lbl, text, pad):  # what a label takes with this text: the text, its own border, its padding
+            f = tkfont.Font(font=lbl.cget("font"))
+            return (f.measure(text) + lbl.winfo_reqwidth() - f.measure(lbl.cget("text")) + int(pad * k)) if text else 0
+        ver, gh_full, gh_short = A.system.VERSION, "ⓘ  GitHub", "ⓘ"
+        title_w = width(self.title, self.title_text, 12)
+        fixed = self.app_lbl.winfo_reqwidth() + self.open_btn.winfo_reqwidth() + int(18 * k)
+        beside = W - self.head_r.winfo_reqwidth() - int(14 * k)  # the photo's row with the controls on it
+        one_row = beside - fixed - width(self.repo_lbl, gh_short, 10) >= min(title_w, int(160 * k))
+        if one_row != self.head_one_row:
+            self.head_one_row = one_row
+            self.head_l.pack_forget()
+            self.head_r.pack_forget()
+            if one_row:
+                self.head_r.pack(side="right")
+                self.head_l.pack(side="left", fill="x", expand=True)
+            else:
+                self.head_l.pack(side="top", fill="x")
+                self.head_r.pack(side="top", anchor="e", pady=(int(8 * k), 0))
+        room = (beside if one_row else W) - fixed
+        mode_w = width(self.mode_lbl, self.mode_text, 8)
+        if room >= title_w + width(self.version_lbl, ver, 6) + width(self.repo_lbl, gh_full, 10) + mode_w:
+            parts = (ver, gh_full, self.mode_text)
+        elif room >= title_w + width(self.version_lbl, ver, 6) + width(self.repo_lbl, gh_full, 10):
+            parts = (ver, gh_full, "")
+        elif room >= title_w + width(self.version_lbl, ver, 6) + width(self.repo_lbl, gh_short, 10):
+            parts = (ver, gh_short, "")
+        else:
+            parts = ("", gh_short, "")
+        self.version_lbl.configure(text=parts[0])
+        self.repo_lbl.configure(text=parts[1])
+        self.mode_lbl.configure(text=parts[2])
+        left = (room - width(self.version_lbl, parts[0], 6) - width(self.repo_lbl, parts[1], 10)
+                - width(self.mode_lbl, parts[2], 8) - int(12 * k))
+        self.title.configure(text=elide(self.title_text, tkfont.Font(font=self.title.cget("font")), left))
+
+    def fit_status(self):
+        """The tool's hint (status bar, right) gives way to the status (left) when both do not fit."""
+        need = self.status.winfo_reqwidth() + self.hint_lbl.winfo_reqwidth() + int(24 * self.k)
+        show = need <= self.status_row.winfo_width()
+        if show != bool(self.hint_lbl.winfo_manager()):
+            if show:
+                self.hint_lbl.pack(side="right")
+            else:
+                self.hint_lbl.pack_forget()
+
     def section(self, parent, title, expand=False):
         """A titled card of the side panel; returns (title label, inner frame)."""
         hdr = tk.Label(parent, text=title.upper(), font=self.f_head, fg=DIM, bg=SIDE, anchor="w")
@@ -556,7 +660,9 @@ class App:
         st.configure("AI.Horizontal.TScale", troughcolor="#3a3a3a", background=ACCENT, bordercolor=CARD,
                      lightcolor=ACCENT, darkcolor=ACCENT, gripcount=0)
         r.configure(bg=BG)
-        r.minsize(int(1100 * k), int(700 * k))
+        # small enough for a laptop at 125-150 %: the side panel scrolls (Panel), the header takes two rows (fit_header)
+        r.minsize(min(int(840 * k), int(0.95 * r.winfo_screenwidth())),
+                  min(int(520 * k), int(0.9 * r.winfo_screenheight())))
 
         # --- status bar (bottom): progress, status, hint for the active tool
         sbar = tk.Frame(r, bg=BG)
@@ -564,7 +670,7 @@ class App:
         self.bar = ttk.Progressbar(sbar, mode="determinate", maximum=1000, value=0,
                                    style="AI.Horizontal.TProgressbar")
         self.bar.pack(fill="x")
-        row = tk.Frame(sbar, bg=BG)
+        row = self.status_row = tk.Frame(sbar, bg=BG)
         row.pack(fill="x", padx=int(16 * k), pady=(int(5 * k), int(8 * k)))
         # shown while something is generated: the first variant may be the one, no need to wait for the others
         self.stop_btn = self.button(row, "■  " + _("Stop") + "  (Esc)", self.stop_jobs, small=True)
@@ -580,8 +686,13 @@ class App:
         side = tk.Frame(body, bg=SIDE, width=self.side_w)
         side.pack(side="right", fill="y")
         side.pack_propagate(False)
-        sp = tk.Frame(side, bg=SIDE)
-        sp.pack(fill="both", expand=True, padx=int(14 * k), pady=(0, int(14 * k)))
+        # Save and Close at the bottom, always in sight; the rest scrolls when the window is too short for it
+        foot = tk.Frame(side, bg=SIDE)
+        foot.pack(side="bottom", fill="x", padx=int(14 * k), pady=(int(10 * k), int(14 * k)))
+        self.panel = Panel(side, k, SIDE)
+        self.panel.pack(fill="both", expand=True)
+        sp = tk.Frame(self.panel.inner, bg=SIDE)
+        sp.pack(fill="both", expand=True, padx=int(14 * k))
 
         _hdr, sel = self.section(sp, _("Selection"))
         seg = tk.Frame(sel, bg=LINE)
@@ -695,8 +806,6 @@ class App:
                                 wraplength=self.side_w - int(56 * k))
         self.hd_note.pack(fill="x", pady=(int(5 * k), 0))
 
-        foot = tk.Frame(sp, bg=SIDE)
-        foot.pack(fill="x", pady=(int(14 * k), 0))
         self.save_btn = self.button(foot, self.save_label(), self.save, kind="green")
         self.save_btn.configure(state="disabled", font=self.f_bold)
         self.save_btn.pack(fill="x")
@@ -707,43 +816,56 @@ class App:
         left.pack(side="left", fill="both", expand=True, padx=(int(16 * k), int(12 * k)), pady=(int(12 * k), 0))
         head = self.head = tk.Frame(left, bg=BG)
         head.pack(fill="x", pady=(0, int(10 * k)))
-        tk.Label(head, text="AI Remove", font=self.font(13, True), fg=ACCENT, bg=BG).pack(side="left")
+        # two groups: the photo's row (name, version, GitHub, "Open photo…", the photo's name) and the view controls,
+        # at its right end or, on a narrow window, on a row of their own below (fit_header)
+        self.head_l, self.head_r = tk.Frame(head, bg=BG), tk.Frame(head, bg=BG)
+        self.head_r.pack(side="right")
+        self.head_l.pack(side="left", fill="x", expand=True)
+        self.head_one_row = True
+        head = self.head_l
+        self.app_lbl = tk.Label(head, text="AI Remove", font=self.font(13, True), fg=ACCENT, bg=BG)
+        self.app_lbl.pack(side="left")
         # the version, quiet, on the title's baseline: what the user reports and compares with the releases page
-        tk.Label(head, text=A.system.VERSION, font=self.f_small, fg=DIM, bg=BG).pack(
-            side="left", anchor="s", padx=(int(6 * k), 0), pady=(0, int(2 * k)))
+        self.version_lbl = tk.Label(head, text=A.system.VERSION, font=self.f_small, fg=DIM, bg=BG)
+        self.version_lbl.pack(side="left", anchor="s", padx=(int(6 * k), 0), pady=(0, int(2 * k)))
         # where AI Remove lives: the code, the releases and where to report a problem
-        repo = tk.Label(head, text="ⓘ  GitHub", font=self.f_small, fg=DIM, bg=BG, cursor="hand2")
+        repo = self.repo_lbl = tk.Label(head, text="ⓘ  GitHub", font=self.f_small, fg=DIM, bg=BG, cursor="hand2")
         repo.pack(side="left", anchor="s", padx=(int(10 * k), 0), pady=(0, int(2 * k)))
         repo.bind("<Enter>", lambda e: repo.configure(fg=ACCENT))
         repo.bind("<Leave>", lambda e: repo.configure(fg=DIM))
         repo.bind("<Button-1>", lambda e: (webbrowser.open(f"https://github.com/{A.system.REPO}"), self.status.configure(
             text=_("AI Remove on GitHub: the code, the releases and where to report a problem"))))
+        # another photo, from anywhere: AI Remove opens again on it (A.reopen), on its own or as LightCraft's photo
+        self.open_btn = self.button(head, _("Open photo…"), self.open_other, small=True)
+        self.open_btn.pack(side="left", padx=(int(14 * k), 0))
         self.title = tk.Label(head, text="", font=self.font(13), fg=FG, bg=BG)
-        self.title.pack(side="left", padx=(int(10 * k), 0))
+        self.title.pack(side="left", padx=(int(12 * k), 0))
         self.mode_lbl = tk.Label(head, text="", font=self.f_small, fg=DIM, bg=BG)  # a photo opened on its own says so
         self.mode_lbl.pack(side="left", anchor="s", padx=(int(8 * k), 0), pady=(0, int(2 * k)))
-        # another photo, from anywhere: AI Remove opens again on it (A.reopen), on its own or as LightCraft's photo
-        self.button(head, _("Open photo…"), self.open_other, small=True).pack(side="left", padx=(int(14 * k), 0))
-        # the window's language, far right: as LightCraft's (Auto) or one of ours; it applies at the next opening
+        self.title_text = self.mode_text = ""
+        # the view controls: the original held down, the zoom, and the window's language, last
+        head = self.head_r
+        self.orig_btn = self.button(head, "◐  " + _("Original"), None, small=True)
+        self.orig_btn.pack(side="left", padx=(0, int(14 * k)))
+        self.orig_btn.bind("<ButtonPress-1>", lambda e: self.set_original(True), add="+")
+        self.orig_btn.bind("<ButtonRelease-1>", lambda e: self.set_original(False), add="+")
+        self.button(head, _("Fit"), self.zsel_reset, small=True).pack(side="left", padx=(0, int(6 * k)))
+        self.button(head, "−", lambda: self.zsel.zoom(0.8), small=True).pack(side="left")
+        self.zoom_lbl = tk.Label(head, text=_("Fit"), font=self.f_small, fg=DIM, bg=BG, width=7)
+        self.zoom_lbl.pack(side="left")
+        self.button(head, "+", lambda: self.zsel.zoom(1.25), small=True).pack(side="left")
+        # the window's language: as LightCraft's (Auto) or one of ours; it applies at the next opening
         chosen = A.setting("language", "auto")
         self.lang_code = tk.StringVar(value=chosen if chosen in i18n.LANGUAGES else "auto")
         self.lang_btn = self.button(head, i18n.language().upper() + "  ▾", self.show_lang_menu, small=True)
-        self.lang_btn.pack(side="right", padx=(int(14 * k), 0))
+        self.lang_btn.pack(side="left", padx=(int(14 * k), 0))
         self.lang_menu = tk.Menu(r, tearoff=0, bg=CARD, fg=FG, activebackground=ACCENT, activeforeground="#1b1b1b",
                                  selectcolor=ACCENT, bd=0, relief="flat", font=self.f_small)
         self.lang_menu.add_radiobutton(label=_("Auto (as LightCraft)"), value="auto", variable=self.lang_code,
                                        command=self.on_language)
         for code, name in i18n.LANGUAGES.items():
             self.lang_menu.add_radiobutton(label=name, value=code, variable=self.lang_code, command=self.on_language)
-        self.zoom_lbl = tk.Label(head, text=_("Fit"), font=self.f_small, fg=DIM, bg=BG, width=7)
-        self.button(head, "+", lambda: self.zsel.zoom(1.25), small=True).pack(side="right")
-        self.zoom_lbl.pack(side="right")
-        self.button(head, "−", lambda: self.zsel.zoom(0.8), small=True).pack(side="right")
-        self.button(head, _("Fit"), self.zsel_reset, small=True).pack(side="right", padx=(0, int(6 * k)))
-        self.orig_btn = self.button(head, "◐  " + _("Original"), None, small=True)
-        self.orig_btn.pack(side="right", padx=(0, int(14 * k)))
-        self.orig_btn.bind("<ButtonPress-1>", lambda e: self.set_original(True), add="+")
-        self.orig_btn.bind("<ButtonRelease-1>", lambda e: self.set_original(False), add="+")
+        self.head.bind("<Configure>", lambda e: self.fit_header())
         self.canvas_sel = tk.Canvas(left, bg=CANVAS, highlightthickness=0, cursor="crosshair")
         self.canvas_sel.pack(fill="both", expand=True, pady=(0, int(10 * k)))
         self.canvas_sel.create_text(10, 10, text=_("Preparing the photo…"), fill=DIM, font=self.f_txt, tags="msg")
@@ -1234,6 +1356,8 @@ class App:
         except queue.Empty:
             pass
         self.update_progress()
+        self.panel.fit()  # the side panel's content may have grown or shrunk (a description shown, a note...)
+        self.fit_status()
         self.root.after(120, self.poll)
 
     def update_progress(self):
@@ -1336,11 +1460,12 @@ class App:
         self.refresh_models()
 
     def on_found(self, _data):
-        self.title.configure(text=self.s.info['file_name'])
+        self.title_text = self.s.info["file_name"]
         if self.s.standalone:  # said once, where it stays: what this photo is shown with and where it is saved
-            self.mode_lbl.configure(text=_("on its own: LightCraft's default development · the DNG goes next to "
-                                           "the RAW") if self.s.out_format == "DNG" else
-                                    _("on its own · the edited copy goes next to the original"))
+            self.mode_text = (_("on its own: LightCraft's default development · the DNG goes next to the RAW")
+                              if self.s.out_format == "DNG" else
+                              _("on its own · the edited copy goes next to the original"))
+        self.fit_header()
         self.prompt_text["fill"] = self.s.prompt or ""  # "Remove: <text>" on a LightCraft mask: what to put there
         if self.prompt_mode == "fill":
             self.prompt.set_text(self.prompt_text["fill"])
@@ -2084,13 +2209,22 @@ class App:
             else:
                 self.zsel.pan(0, steps * 80 * self.k)
             return "break"
-        for sc in (self.rows, self.vars):  # the side lists scroll normally
-            p = w
-            while p is not None and p is not sc:
-                p = p.master
-            if p is sc:
-                sc.canvas.yview_scroll(int(-steps), "units")
+        # over the side panel: its lists scroll first, then (at their end, or with nothing to scroll) the panel itself
+        for sc in (self.rows, self.vars, self.panel):
+            if not self.inside(w, sc):
+                continue
+            top, bottom = sc.canvas.yview()
+            if (steps > 0 and top > 0) or (steps < 0 and bottom < 1):
+                sc.canvas.yview_scroll(int(-steps) or (-1 if steps > 0 else 1), "units")
                 return "break"
+        return "break" if self.inside(w, self.panel) else None
+
+    @staticmethod
+    def inside(w, parent):
+        """Whether widget w is parent or inside it."""
+        while w is not None and w is not parent:
+            w = w.master
+        return w is parent
 
     def on_zoom_key(self, e, factor, ctrl=False):
         if not ctrl and self.typing():
@@ -2133,7 +2267,8 @@ class App:
         snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear/5 qwen/6 rorem] · more:n · pick:i ·
         detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit ·
         menu (opens / closes the model list) · wheel:notches,mods (on the photo; mods 1 Ctrl/Cmd, 2 Alt/Option) ·
-        describe:text (Describe's field and "Select all") · right:x,y (a right-click)"""
+        describe:text (Describe's field and "Select all") · right:x,y (a right-click) ·
+        geometry:w,h (the window's size, pixels) · panelwheel:notches (over the side panel, negative: down)"""
         if not actions:
             return
         kind, __, arg = actions[0].partition(":")
@@ -2230,6 +2365,18 @@ class App:
         elif kind == "info":
             self.toggle_model_info()
             delay = 200
+        elif kind == "geometry":  # the window at that size (pixels), not maximized
+            self.root.state("normal")
+            self.root.geometry(f"{int(vals[0])}x{int(vals[1])}+0+0")
+            delay = 1200
+        elif kind == "panelwheel":  # notches of the wheel over the side panel (negative: down)
+            p = self.panel
+            e = type("E", (), {"x_root": p.winfo_rootx() + p.winfo_width() // 2,
+                               "y_root": p.winfo_rooty() + p.winfo_height() // 3,
+                               "delta": (4 if MAC else 120) * vals[0], "state": 0})()
+            self.on_wheel(e)
+            A.log(f"TEST panel wheel {vals[0]:+.0f}: view {tuple(round(v, 2) for v in p.canvas.yview())}")
+            delay = 300
         elif kind == "describe":
             self.describe_entry.set_text(arg)
             self.describe()
