@@ -195,7 +195,7 @@ MODELS = {
     "qwen": Model("Qwen-Image 2.1 Turbo", N_("Removes what you select by name: it recognises the object and redraws "
                                              "the scene behind it, at 1024 px. For large areas on complex "
                                              "backgrounds (a person in front of steps, a pole across columns). Needs "
-                                             "a GPU with 16 GB or more; ~45 s per variant."),
+                                             "a GPU with 16 GB or more; ~30 s per variant."),
                   "Qwen Research License (non-commercial); Qwen3-VL: Apache-2.0",
                   ["qwen-image-2.1-turbo", "qwen-image-2.1-turbo-gguf", "qwen3-vl-8b-fp8"]),
 }
