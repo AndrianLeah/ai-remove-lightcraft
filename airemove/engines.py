@@ -1,7 +1,7 @@
 """Engines for AI Remove: SAM 3 (selection), LaMa (ONNX, processor), SDXL Inpainting and FLUX.1 Fill (diffusers),
-two that remove an object together with its shadow and reflection: OSOR (a mode of the FLUX engine: the same
-transformer with OSOR's adapter) and ObjectClear (its own SDXL-based pipeline), and Qwen-Image 2.1, which removes the
-selection by name.
+RORem (SDXL Inpainting retrained to remove: its UNet in SDXL's pipeline), two that remove an object together with its
+shadow and reflection: OSOR (a mode of the FLUX engine: the same transformer with OSOR's adapter) and ObjectClear (its
+own SDXL-based pipeline), and Qwen-Image 2.1, which removes the selection by name.
 
 The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by torch as "cuda"), Intel Arc (xpu),
 Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and ObjectClear
@@ -26,6 +26,8 @@ SDXL_STEPS, SDXL_GUIDED_STEPS = 12, 5  # DPM++ steps; classifier-free guidance o
 SDXL_CFG_INPUTS = ["prompt_embeds", "add_text_embeds", "add_time_ids", "mask", "masked_image_latents"]
 SDXL_HOLD = 0.5  # share of the steps a held region (SDXL.fill hold=) follows its pre-fill
 SAM3_WEIGHTS = mf.SAM3_WEIGHTS
+# RORem's authors' prompt: with it and without classifier-free guidance it removes best (their README)
+ROREM_PROMPT = "4K, high quality, masterpiece, Highly detailed, Sharp focus, Professional, photorealistic, realistic"
 OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was trained with
 OSOR_T = 0.4  # its single denoising step starts from 40 % noise on the photo itself (object included)
 QWEN_SIZE = 1024  # on the area's short side: an oblong area keeps its shape (qwen_dims)
@@ -115,10 +117,10 @@ def sam3_dir():
 
 def installed(model):
     """The model's files are there (model_files: in models/ or in the user's own folder), the checks the installer
-    makes too. OSOR runs on FLUX: it needs FLUX as well."""
+    makes too. OSOR runs on FLUX and RORem on SDXL's files: they need FLUX and SDXL as well."""
     if model == "sam3":
         return mf.part_ok("sam3", sam3_dir())
-    return mf.has(model) and (model != "osor" or mf.has("flux"))
+    return mf.has(model) and {"osor": mf.has("flux"), "rorem": mf.has("sdxl")}.get(model, True)
 
 
 def available():
@@ -132,8 +134,8 @@ def model_folders():
 
 
 def usable(model, dev=None):
-    """Installed and sensible on this machine: FLUX (and OSOR, which runs on it) and Qwen-Image need a GPU; SDXL and
-    ObjectClear work on the processor but take minutes."""
+    """Installed and sensible on this machine: FLUX (and OSOR, which runs on it) and Qwen-Image need a GPU; SDXL,
+    RORem and ObjectClear work on the processor but take minutes."""
     dev = dev or device()
     if not installed(model):
         return False
@@ -254,16 +256,20 @@ def _step_callback(progress, total, guided=0):
 class SDXL:
     name = "SDXL"
     S = 1024  # its working size
+    PROMPT, NEGATIVE, GUIDANCE = DEFAULT_PROMPT, NEGATIVE, 7.0  # what every fill is told (a typed prompt goes first)
 
-    def __init__(self, log=print):
+    def __init__(self, log=print, unet=None):
+        """unet: another UNet for SDXL Inpainting's pipeline (RORem), given its folder and the dtype it gets."""
         dev = device()
         import torch
-        from diffusers import StableDiffusionXLInpaintPipeline, AutoencoderKL, DPMSolverMultistepScheduler
+        from diffusers import (StableDiffusionXLInpaintPipeline, AutoencoderKL, DPMSolverMultistepScheduler,
+                               UNet2DConditionModel)
         self.torch = torch
         dt = torch.float32 if dev == "cpu" else torch.float16  # the fp16-fix VAE makes half precision safe
         vae = AutoencoderKL.from_pretrained(mf.part_dir("sdxl-vae-fp16-fix"), torch_dtype=dt)
+        own = {} if unet is None else {"unet": UNet2DConditionModel.from_pretrained(unet, torch_dtype=dt)}
         self.pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-            mf.part_dir("sdxl-inpaint"), vae=vae, variant="fp16", torch_dtype=dt).to(dev)
+            mf.part_dir("sdxl-inpaint"), vae=vae, variant="fp16", torch_dtype=dt, **own).to(dev)
         if dev == "mps":
             self.pipe.enable_attention_slicing()  # lower peak memory on unified-memory Macs
         # DPM++ 2M with Karras sigmas: in 12 steps the same fills (same seed, same picture) the model's own Euler
@@ -274,7 +280,7 @@ class SDXL:
         self.pipe.set_progress_bar_config(disable=True)
         self.masked = (None, None)  # (key, latents) of the last removal's photo with the hole blanked out
         self.held = (None, None)  # (key, latents) of the last held pre-fill (fill hold=)
-        log(f"SDXL ready ({dev})")
+        log(f"{self.name} ready ({dev})")
 
     def masked_latents(self, image: Image.Image, mask: Image.Image):
         """The VAE latents of the photo with the hole blanked out, which the inpainting UNet sees next to the noise.
@@ -309,9 +315,9 @@ class SDXL:
         if hold is not None and strength >= 1.0:
             cb = self._hold(cb, hold[0].resize((S, S), Image.LANCZOS), hold[1], seed, steps)
             inputs = SDXL_CFG_INPUTS + ["latents"]
-        out = self.pipe(prompt=f"{prompt}, {DEFAULT_PROMPT}" if prompt else DEFAULT_PROMPT, negative_prompt=NEGATIVE,
+        out = self.pipe(prompt=f"{prompt}, {self.PROMPT}" if prompt else self.PROMPT, negative_prompt=self.NEGATIVE,
                         image=image, mask_image=mask_image, masked_image_latents=self.masked_latents(image, mask_image),
-                        height=S, width=S, strength=strength, guidance_scale=7.0, num_inference_steps=steps,
+                        height=S, width=S, strength=strength, guidance_scale=self.GUIDANCE, num_inference_steps=steps,
                         generator=self.torch.Generator("cpu").manual_seed(seed),
                         callback_on_step_end=cb, callback_on_step_end_tensor_inputs=inputs).images[0]
         return out.resize(src.size, Image.LANCZOS)
@@ -346,6 +352,24 @@ class SDXL:
     def unload(self):
         del self.pipe
         _free_gpu()
+
+
+class RORem(SDXL):
+    """RORem (CVPR 2025, PolyU and OPPO; its RORem-mixed release, 512 and 1024 px): SDXL Inpainting retrained only to
+    remove, on removals people checked by hand. Only its UNet differs: its text encoders and VAE are SDXL Inpainting's
+    (checked tensor by tensor), so it runs in SDXL's pipeline with SDXL's files, with everything SDXL does here
+    (upright, 12 DPM++ steps at 1024 px, the held sky). Its authors' settings: their prompt, no classifier-free
+    guidance — ~1 s less per variant than SDXL, the same fills as with SDXL's prompt and guidance, measured.
+    Where SDXL drew a person back (one of two people side by side, a woman's bag left outside the selection) or odd
+    things (an owl next to a backpack), in 11 variants of 12, RORem drew none in 12 (nor in 18 more, with SDXL's
+    settings or at 512 px). On a pole across a floor it left a seam and the pole's base as a smudge, and up a path it
+    drew a rock face: SDXL stays the default.
+    Licence: Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M (commercial use allowed)."""
+    name = "RORem"
+    PROMPT, NEGATIVE, GUIDANCE = ROREM_PROMPT, None, 1.0
+
+    def __init__(self, log=print):
+        super().__init__(log, unet=mf.part_dir("rorem") / "unet")
 
 
 # ------------------------------------------------------------------------------------------------ FLUX

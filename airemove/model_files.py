@@ -56,6 +56,13 @@ def _fp16_vae(d):
     return c.get("_class_name") == "AutoencoderKL" and c.get("latent_channels") == 4 and c.get("force_upcast") is False
 
 
+def _sdxl_inpaint_unet(d):
+    """An SDXL Inpainting UNet (RORem's: its folder's name, not this, tells it from SDXL's own)."""
+    c = _json(d / "unet" / "config.json")
+    return (c.get("_class_name") == "UNet2DConditionModel" and c.get("in_channels") == 9
+            and c.get("cross_attention_dim") == 2048)
+
+
 def _qwen_turbo(d):
     """Qwen-Image-2.1-Turbo's diffusers folder: its 8-step schedule is in model_index.json (the base model has none)."""
     i = _json(d / "model_index.json")
@@ -125,6 +132,10 @@ PARTS = {p.name: p for p in (
          check=_pipeline("StableDiffusionXLInpaintPipeline")),
     Part("sdxl-vae-fp16-fix", 0.31, ["config.json", "diffusion_pytorch_model.safetensors"],
          "madebyollin/sdxl-vae-fp16-fix", ["config.json", "diffusion_pytorch_model.safetensors"], check=_fp16_vae),
+    # RORem: only its UNet (its text encoders and VAE are SDXL Inpainting's, unchanged); its config looks like SDXL's,
+    # so only a folder named like it
+    Part("rorem", 4.78, ["unet/config.json", "unet/diffusion_pytorch_model.safetensors"], "LetsThink/RORem",
+         ["unet/config.json", "unet/diffusion_pytorch_model.safetensors"], check=_sdxl_inpaint_unet, anywhere=False),
     # only the text encoders, the VAE and the transformer's config: the transformer itself is the GGUF
     Part("FLUX.1-Fill-dev", 9.42, ["model_index.json", "transformer/config.json", "text_encoder/model.safetensors",
                                    "text_encoder_2/model-00001-of-00002.safetensors",
@@ -167,6 +178,10 @@ MODELS = {
     "sdxl": Model("SDXL Inpainting", N_("Generative fill on the GPU, ~8–15 s per variant, each one different: medium "
                                         "areas with detail."),
                   "CreativeML Open RAIL++-M", ["sdxl-inpaint", "sdxl-vae-fp16-fix"]),
+    "rorem": Model("RORem", N_("SDXL retrained only to remove: where SDXL draws a person or an odd object back into "
+                               "the hole, it draws the background. ~7 s per variant. It uses SDXL's files: needs "
+                               "SDXL."),
+                   "Apache-2.0; on SDXL Inpainting (CreativeML Open RAIL++-M)", ["rorem"]),
     "flux": Model("FLUX.1 Fill [dev] + Turbo", N_("The most realistic fill: it respects light, perspective and "
                                                   "architecture; for large or difficult areas. Needs a GPU with 12 GB "
                                                   "or more."),

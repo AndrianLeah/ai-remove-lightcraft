@@ -13,6 +13,7 @@ user's choice, after showing each licence. Using a model means accepting its lic
 | SAM 3 | [facebook/sam3](https://huggingface.co/facebook/sam3) (gated), or the copy LightCraft downloaded | [SAM License](https://github.com/facebookresearch/sam3/blob/main/LICENSE) (Meta): custom, not OSI; read it |
 | SDXL Inpainting 0.1 | [diffusers/stable-diffusion-xl-1.0-inpainting-0.1](https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1) | CreativeML Open RAIL++-M (use-based restrictions) |
 | SDXL VAE fp16 fix | [madebyollin/sdxl-vae-fp16-fix](https://huggingface.co/madebyollin/sdxl-vae-fp16-fix) | MIT |
+| RORem UNet — optional | [LetsThink/RORem](https://huggingface.co/LetsThink/RORem) (its `unet` folder only), from [leeruibin/RORem](https://github.com/leeruibin/RORem) (CVPR 2025) | Apache-2.0; it is a fine-tune of SDXL Inpainting 0.1, whose CreativeML Open RAIL++-M use-based restrictions apply to it too |
 | FLUX.1 Fill [dev] | [black-forest-labs/FLUX.1-Fill-dev](https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev) (gated) | FLUX.1 [dev] Non-Commercial License: read what it allows for the model and for the images it makes |
 | FLUX.1 Fill [dev] GGUF Q4_K_S | [YarvixPA/FLUX.1-Fill-dev-GGUF](https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF) | as FLUX.1 [dev] |
 | FLUX.1 Turbo-Alpha LoRA | [alimama-creative/FLUX.1-Turbo-Alpha](https://huggingface.co/alimama-creative/FLUX.1-Turbo-Alpha) | as FLUX.1 [dev] |
@@ -25,6 +26,9 @@ user's choice, after showing each licence. Using a model means accepting its lic
 Qwen-Image 2.1's text encoder is Qwen3-VL-8B-Instruct unchanged (checked tensor by tensor against Qwen's repository),
 so AI Remove downloads Qwen's own FP8 release of it (10 GB) instead of the 17.5 GB bfloat16 copy in Qwen-Image's
 repository.
+
+RORem's text encoders and VAE are SDXL Inpainting 0.1's unchanged (checked tensor by tensor), so AI Remove
+downloads only RORem's UNet (4.8 GB) and takes the rest from SDXL's files.
 
 ObjectClear's pipeline code is under the same S-Lab licence, so it is not part of AI Remove either: the installer
 downloads it from GitHub (a fixed commit) into `models/objectclear/code` together with its weights, only when the user

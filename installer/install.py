@@ -13,8 +13,8 @@ install folder. Standard library only. What it does, in order (each step can be 
      shortcut Ctrl+Shift+X (Cmd+Shift+X on a Mac) for Photo > Edit In > Open Original in Other Editor
   7. checks the result (airemove --check)
 
-  install.py [--dir DIR] [--models lama,sam3,sdxl,flux,osor,objectclear,qwen | recommended | none] [--yes]
-             [--model-dir MODEL=FOLDER ...] [--hf-token TOKEN] [--torch auto|cuda|rocm|rocm-win|xpu|mps|cpu]
+  install.py [--dir DIR] [--models lama,sam3,sdxl,rorem,flux,osor,objectclear,qwen | recommended | none]
+             [--yes] [--model-dir MODEL=FOLDER ...] [--hf-token TOKEN] [--torch auto|cuda|rocm|rocm-win|xpu|mps|cpu]
              [--models-from DIR] [--port 7980] [--no-lightcraft]
   install.py --configure-lightcraft [--dir DIR]      only step 6 (e.g. after closing LightCraft)
   install.py --status [--dir DIR]                    JSON: what is installed
@@ -475,6 +475,8 @@ def choose_models(flavour, gpu, installed, given, lc_sam):
             continue
         if m == "osor" and "flux" not in wanted + installed:
             continue  # it runs on FLUX
+        if m == "rorem" and "sdxl" not in wanted + installed:
+            continue  # SDXL with another UNet: SDXL's files
         lc = m == "sam3" and lc_sam
         out.write("")
         para(f"{mod.name} — {_(mod.what)}")
@@ -892,7 +894,8 @@ def uninstall(d, keep_models, yes):
 def parse():
     ap = argparse.ArgumentParser(description="Install AI Remove for LightCraft")
     ap.add_argument("--dir", help="install folder (default: ~/AIRemove)")
-    ap.add_argument("--models", default=None, help="lama,sam3,sdxl,flux,osor,objectclear,qwen | recommended | none")
+    ap.add_argument("--models", default=None, help="lama,sam3,sdxl,rorem,flux,osor,objectclear,qwen | recommended | "
+                                                             "none")
     ap.add_argument("--hf-token", default=None, help="Hugging Face token (only for SAM 3 / FLUX, models with a licence to accept)")
     ap.add_argument("--hf-token-file", default=None, help="file holding the token (read, then deleted: the MCP server uses it)")
     ap.add_argument("--torch", default="auto", choices=["auto"] + list(TORCH_FLAVOURS))

@@ -145,7 +145,15 @@ def mcp(d):
     server = ROOT / "mcp" / ("run_mcp.cmd" if WIN else "run_mcp.sh")
     mine = Path(tempfile.mkdtemp(prefix="ci-models-"))  # a folder holding LaMa's file (an empty one: enough to find)
     (mine / "lama_fp32.onnx").write_bytes(b"")
-    dirs = {"lama": str(mine), "sdxl": str(mine)}
+    # RORem's UNet in a Hugging Face cache, and SDXL Inpainting's UNet in a folder of another name next to it: the same
+    # config, so only the folder's name says which is RORem (no weights: empty files are enough to find)
+    unet = {"_class_name": "UNet2DConditionModel", "in_channels": 9, "cross_attention_dim": 2048}
+    rorem = mine / "hub" / "models--LetsThink--RORem" / "snapshots" / "0123abc"
+    for f in (rorem, mine / "a-sdxl-unet"):
+        (f / "unet").mkdir(parents=True)
+        (f / "unet" / "config.json").write_text(json.dumps(unet), encoding="utf-8")
+        (f / "unet" / "diffusion_pytorch_model.safetensors").write_bytes(b"")
+    dirs = {"lama": str(mine), "sdxl": str(mine), "rorem": str(mine)}
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
              "params": {"protocolVersion": PROTOCOL, "capabilities": {}, "clientInfo": {"name": "ci", "version": "1"}}},
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -181,7 +189,7 @@ def mcp(d):
     expect(rep.get("installed") is installed, f"check_system: installed {installed}")
     expect((rep.get("lightcraft") or {}).get("reachable") is False, "check_system: LightCraft not reachable")
     m = rep.get("models") or {}
-    expect(sorted(m) == ["flux", "lama", "objectclear", "osor", "qwen", "sam3", "sdxl"]
+    expect(sorted(m) == ["flux", "lama", "objectclear", "osor", "qwen", "rorem", "sam3", "sdxl"]
            and all(v.get("what") and v.get("licence") and v.get("gb") is not None for v in m.values()),
            "check_system: every model with what it is for, its size and licence")
     expect((m.get("lama") or {}).get("installed") is installed, f"check_system: LaMa installed {installed}")
@@ -194,6 +202,9 @@ def mcp(d):
            f"check_system model_dirs: LaMa found in {mine}")
     expect((res.get("sdxl") or {}).get("ok") is False and "sdxl-inpaint/model_index.json" in res["sdxl"].get("error", ""),
            f"check_system model_dirs: no SDXL there ({(res.get('sdxl') or {}).get('error')})")
+    found = (res.get("rorem") or {}).get("found") or {}
+    expect((res.get("rorem") or {}).get("ok") is True and Path(found.get("rorem", "")) == rorem,
+           f"check_system model_dirs: RORem found in the Hugging Face cache, not in the SDXL UNet's folder ({found})")
     sys.path.insert(0, str(ROOT / "mcp"))
     import airemove_mcp
     args = airemove_mcp.install_args({"models": ["lama"], "model_dirs": {"lama": str(mine)}}, d)
