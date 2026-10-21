@@ -83,6 +83,8 @@ def bring_to_front(root):
 BG, SIDE, CARD, CARD_HI, LINE, CANVAS = "#141414", "#1b1b1b", "#232323", "#2c2c2c", "#303030", "#0e0e0e"
 BTN, BTN_HI, FG, DIM = "#2f2f2f", "#3c3c3c", "#ececec", "#8e8e8e"
 ACCENT, ACCENT_HI, GREEN, GREEN_HI = "#e8c35a", "#f2d27a", "#3d8a55", "#4a9c63"
+WARN = "#e8955a"  # what a model is not for (model_caveat)
+WAITING_RGB = (235, 120, 90)  # the outline of a part still waiting for its model ("Split selection")
 PANEL = CARD
 RED = (235, 64, 52)
 SHADOW_RGB = (56, 198, 244)  # the selection's shadow part ("Include the shadow")
@@ -338,12 +340,15 @@ class ModelPicker(tk.Frame):
         self.time = tk.Label(self, font=app.f_small, fg=DIM, bg=BTN, anchor="e")
         self.arrow = tk.Label(self, text="▾", font=app.f_txt, fg=FG, bg=BTN)
         self.use = tk.Label(self, font=app.f_small, fg=DIM, bg=BTN, anchor="w")
+        # what the model is not for, always in sight (model_caveat): FLUX Fill draws people back into a crowd
+        self.caveat = tk.Label(self, font=app.f_small, fg=WARN, bg=BTN, anchor="w", justify="left")
         self.name.grid(row=0, column=0, sticky="w", padx=(pad, 0), pady=(int(5 * k), 0))
         self.time.grid(row=0, column=1, sticky="e", padx=(int(6 * k), 0), pady=(int(5 * k), 0))
-        self.arrow.grid(row=0, column=2, rowspan=2, padx=pad)
+        self.arrow.grid(row=0, column=2, rowspan=3, padx=pad)
         self.use.grid(row=1, column=0, columnspan=2, sticky="w", padx=(pad, 0), pady=(0, int(5 * k)))
+        self.caveat.grid(row=2, column=0, columnspan=2, sticky="w", padx=(pad, 0), pady=(0, int(5 * k)))
         self.columnconfigure(0, weight=1)
-        self.parts = (self, self.name, self.time, self.arrow, self.use)
+        self.parts = (self, self.name, self.time, self.arrow, self.use, self.caveat)
         for w in self.parts:
             w.bind("<Button-1>", lambda e: self.open())
             w.bind("<Enter>", lambda e: self._paint(BTN_HI))
@@ -359,10 +364,17 @@ class ModelPicker(tk.Frame):
         self.show()
 
     def show(self):
-        name, use, t = self.meta.get(self.app.model_key(), ("", "", ""))
+        m = self.app.model_key()
+        name, use, t = self.meta.get(m, ("", "", ""))
         self.name.configure(text=name)
         self.use.configure(text=use)
         self.time.configure(text=t)
+        caveat = self.app.model_caveat(m) if m in self.meta else ""
+        self.caveat.configure(text="⚠  " + caveat if caveat else "", wraplength=self.app.side_w - int(90 * self.k))
+        if caveat:
+            self.caveat.grid()
+        else:
+            self.caveat.grid_remove()
 
     def open(self):
         if self.pop is not None:
@@ -419,6 +431,11 @@ class ModelPicker(tk.Frame):
                      wraplength=wrap)
         c.pack(fill="x")
         ws = (f, txt, head, a, b, c)
+        if app.model_caveat(m):  # what it is not for, in the list too: chosen knowing it
+            d = tk.Label(txt, text="⚠  " + app.model_caveat(m), font=app.f_small, fg=WARN, bg=bg, anchor="w",
+                         justify="left", wraplength=wrap)
+            d.pack(fill="x", pady=(int(2 * k), 0))
+            ws += (d,)
         for w in ws + (bar,):
             w.bind("<ButtonRelease-1>", lambda e, m=m: self.pick(m))
             w.bind("<Enter>", lambda e, ws=ws: [x.configure(bg=CARD_HI) for x in ws])
@@ -665,11 +682,20 @@ class App:
         self.gen_btn = self.button(gen, _("Remove selection") + "  ⏎", self.remove_selection, kind="accent")
         self.gen_btn.configure(state="disabled", font=self.f_bold)
         self.gen_btn.pack(fill="x", pady=(int(12 * k), 0))
-        # the same settings, for the removal shown in the panel: variants of another model, another text, are added
-        # to the ones it has (its selection stays as it was)
+        # the selection as its parts (airemove.split_selection), each a removal that waits: a model for each, then
+        # "Generate" (more_btn); "Remove selection" does the same at once, with the model above for all of them
+        self.split_btn = self.button(gen, "✂  " + _("Split into parts: a model for each"), self.split_selection,
+                                     small=True)
+        self.split_btn.configure(state="disabled")
+        self.split_btn.pack(fill="x", pady=(int(6 * k), 0))
+        # the same settings, for the removal shown in the panel: its first variants ("Generate", a part that waits),
+        # or variants of another model, another text, added to the ones it has (its selection stays as it was)
         self.more_btn = self.button(gen, "", self.more, small=True)
         self.more_btn.configure(state="disabled")
         self.more_btn.pack(fill="x", pady=(int(6 * k), 0))
+        # every part still waiting, in their order, with the model above (shown when two or more wait)
+        self.all_btn = self.button(gen, "", self.generate_waiting, small=True)
+        self.pending_gen = set()  # ids of the removals whose first variants are queued: no longer "waiting"
         self.refresh_models()
 
         self.rows_hdr, rows = self.section(sp, _("Removals"))
@@ -823,9 +849,9 @@ class App:
         self.model_meta = {
             "lama": ("LaMa", _("Quick fill · plain backgrounds"), "~" + self.fmt_s(A.expected("lama"))),
             "sdxl": ("SDXL", _("Generative · varied results"), each("sdxl_variant")),
-            "rorem": ("RORem", _("Generative · draws no one back"), each("rorem_variant")),
-            "flux": ("FLUX Fill", _("Most realistic · large areas"), each("flux_variant")),
-            "qwen": ("Qwen-Image", _("By name · complex backgrounds"), each("qwen_variant")),
+            "rorem": ("RORem", _("People and objects · draws no one back"), each("rorem_variant")),
+            "flux": ("FLUX Fill", _("Architecture · large areas"), each("flux_variant")),
+            "qwen": ("Qwen-Image", _("People and objects · complex backgrounds"), each("qwen_variant")),
             "objectclear": ("ObjectClear", _("Object and its shadow"), each("objectclear_variant")),
             "osor": ("OSOR", _("Object and its shadow · softer"), each("osor_variant"))}
         # one line per model (tests and the saved setting go by it): its name first
@@ -850,6 +876,19 @@ class App:
                              "areas."),
             "osor": _("Object, shadow and reflection in one step, on FLUX. For the most detail: \"Include the "
                       "shadow\", then FLUX Fill.")}[m]
+
+    def model_caveat(self, m):
+        """What the model is not for, to choose knowing it (the menu and its list say it, in orange); "" if nothing
+        stands out. Seen on this PC's photos: FLUX Fill put tourists back where tourists were in a Pompeii street."""
+        return {
+            "lama": _("Blurs large areas and structures (doors, windows, people in front of buildings)."),
+            "sdxl": _("Not for a person among others: it may draw a person back. For people: RORem."),
+            "rorem": _("On a long thin hole (a pole) it can leave a seam: there SDXL or FLUX Fill."),
+            "flux": _("Not for people: in a street or a crowd it draws people back where they were. For people: "
+                      "RORem or Qwen-Image."),
+            "qwen": _("Slow: about a minute for the first variant of a removal. Non-commercial licence."),
+            "objectclear": _("Softer detail on large areas (it works at 512 px)."),
+            "osor": _("Softer detail than FLUX Fill on large areas.")}.get(m, "")
 
     def model_keys(self):
         """Models installed and sensible on this computer (LaMa always)."""
@@ -955,22 +994,72 @@ class App:
         return (self.prompt.get() if mode == self.prompt_mode else self.prompt_text.get(mode, "")).strip()
 
     def update_more(self):
-        """The button under "Remove selection": more variants for the removal shown in the panel, with the model,
-        text and number set above. They are added to the ones it has (any model: SDXL's next to FLUX's); its
-        selection stays as it was."""
+        """The button under "Remove selection": for the removal shown in the panel, with the model, text and number
+        set above, its first variants ("Generate", a part that waits: Split) or more of them, added to the ones it
+        has (any model: SDXL's next to FLUX's); its selection stays as it was. Then "Generate all" for the parts
+        still waiting, when two or more do."""
         if not hasattr(self, "more_btn"):
             return
         r, m = self.cur, self.model_key()
         on = r is not None and not r.deleted and not self.writing
+        n = 1 if m == "lama" else int(self.count.get())
+        first = on and self.waiting(r)  # a part that waits for its model: its first variants, the main action
         if not on:
             text = "＋  " + _("More variants for a removal (choose one below)")
+        elif first:
+            text = "▶  " + _n("Generate #{id} with {model} ({n} variant)",
+                              "Generate #{id} with {model} ({n} variants)", n, id=r.id, model=MODEL_NAMES[m])
         elif m == "lama" and any(c[0] == "LaMa" for c in r.candidates):
             text, on = _("#{id} has LaMa's result already: choose another model", id=r.id), False
         else:
-            n = 1 if m == "lama" else int(self.count.get())
             text = "＋  " + _n("{n} more for #{id} with {model}", "{n} more for #{id} with {model}", n, id=r.id,
                                model=MODEL_NAMES[m])
-        self.more_btn.configure(text=text, state="normal" if on else "disabled")
+        b = self.more_btn
+        b._bg, b._hi = (ACCENT, ACCENT_HI) if first else (BTN, BTN_HI)
+        b.configure(text=text, state="normal" if on else "disabled", bg=b._bg, activebackground=b._hi,
+                    fg="#1b1b1b" if first else FG, font=self.f_bold if first else self.f_small)
+        rest = [x for x in self.s.removals if self.waiting(x)]
+        if len(rest) >= 2 and not self.writing:
+            self.all_btn.configure(text="▶▶  " + _("Generate all {n} waiting with {model}", n=len(rest),
+                                                   model=MODEL_NAMES[m]))
+            self.all_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=self.more_btn)
+        else:
+            self.all_btn.pack_forget()
+
+    def waiting(self, r):
+        """Whether r is a part that waits for its model: split, never generated, not queued."""
+        return not r.deleted and not r.candidates and not r.counts and r.id not in self.pending_gen
+
+    def split_selection(self):
+        """"Split into parts": the selection as removals that wait, one per part (airemove.split_selection), each
+        with its own area; choose a model for each, then "Generate"."""
+        if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None:
+            return
+        self.jobs.put(("split", self.sel_mask.copy()))
+        self.ops, self.history, self.pending = [], [], {}
+        self.busy = True
+        self.render_main()
+        self.update_buttons()
+
+    def on_split_done(self, ids):
+        first = next((r for r in self.s.removals if r.id == ids[0]), None) if ids else None
+        if first is not None:
+            self.select_removal(first)
+        self.autosave()
+        self.next_status = _n("1 part: choose its model above, then \"Generate\"",
+                              "{n} parts, numbered on the photo: select each, choose its model, \"Generate\" (or "
+                              "\"Generate all\")", len(ids))
+
+    def generate_waiting(self):
+        """"Generate all": every part still waiting, in their order (each sees those before it filled), with the
+        model, text and number of variants above."""
+        m, n, p = self.model_key(), self.n_variants(), self.prompt_for(self.model_key())
+        for r in [x for x in self.s.removals if self.waiting(x)]:
+            self.jobs.put(("more", r, n, m, p))
+            self.pending_gen.add(r.id)
+            self.update_row(r)
+        self.busy = True
+        self.update_buttons()
 
     def refine_note(self, why):
         """What "Full detail" would do for the removal shown, or why it does not apply (Session.refine_check)."""
@@ -999,6 +1088,7 @@ class App:
         has = self.sel_mask is not None and bool(self.sel_mask.any())
         ready = self.s.raw is not None and not self.writing
         self.gen_btn.configure(state="normal" if (has and ready) else "disabled")
+        self.split_btn.configure(state="normal" if (has and ready) else "disabled")
         self.undo_btn.configure(state="normal" if self.history else "disabled")
         self.clear_btn.configure(state="normal" if self.ops else "disabled")
         live = [r for r in self.s.removals if not r.deleted]
@@ -1055,6 +1145,19 @@ class App:
                         A.log(f"selection in {len(parts)} parts, each a removal in its own area")
                     for i, part in enumerate(parts):
                         self.run_job(None, part, n, model, prompt, part=(i + 1, len(parts)))
+                elif job[0] == "split":  # the parts as removals that wait for their model (split_selection)
+                    __, mask = job
+                    self.post("job_start", (_("Splitting the selection"), 2.0))
+                    self.post("job_part", (_("Splitting the selection"), 0.0, 2.0))
+                    parts = A.split_selection(mask, s.base_scale)
+                    ids = []
+                    for part in parts:
+                        r = s.plan_removal(part)
+                        ids.append(r.id)
+                        self.post("removal_new", r)
+                    A.log(f"selection split into {len(parts)} parts, waiting for their models: "
+                          + ", ".join(f"#{i}" for i in ids))
+                    self.post("split_done", ids)
                 elif job[0] == "more":
                     __, r, n, model, prompt = job
                     if not r.deleted:
@@ -1103,6 +1206,8 @@ class App:
             parts.append(("fit", _("Preparing the area"), 2 * A.expected("area")))
         elif not s.area_ready(r):  # a reopened removal: its area is rendered from the RAW at its first change
             parts.append(("prep", _("Preparing the area"), A.expected("area")))
+        if (r is not None and not r.candidates and not r.counts and model != "lama" and s.thin(r)):
+            parts.append(("lama", "LaMa", variant_secs("lama")))  # a part's first variants: as a new removal's
         if model == "lama":  # only the model the user picked runs
             if r is None or not any(c[0] == "LaMa" for c in r.candidates):
                 parts.append(("lama", "LaMa", variant_secs("lama")))
@@ -1318,6 +1423,10 @@ class App:
     def on_job_end(self, _data):
         if self.jobs.qsize() == 0:
             self.busy = False
+            if self.pending_gen:  # a part whose generation failed or was stopped waits again
+                self.pending_gen.clear()
+                for r in self.s.removals:
+                    self.update_row(r)
             self.stop_btn.pack_forget()
             msg, self.next_status = getattr(self, "next_status", None), None
             self.set_idle_status(msg or (_("Click something else to remove, or \"{save}\"", save=self.save_label())
@@ -1567,7 +1676,7 @@ class App:
             for r in self.s.removals:
                 if not r.deleted and r.id in self.outlines:
                     ys, xs = self.outlines[r.id]
-                    a[ys, xs] = ACCENT_RGB if r is self.cur else WHITE
+                    a[ys, xs] = ACCENT_RGB if r is self.cur else WAITING_RGB if self.waiting(r) else WHITE
         sel = np.zeros(a.shape[:2], bool)
         shd = np.zeros(a.shape[:2], bool)  # the part "Include the shadow" added: tinted blue, not red
         for op in self.ops:
@@ -1601,7 +1710,7 @@ class App:
             if len(ys) == 0:
                 continue
             x, y = self.zsel.to_canvas(xs.mean() * 4, ys.min() * 4)
-            col = "#e8c35a" if r is self.cur else "#f0f0f0"
+            col = "#e8c35a" if r is self.cur else WARN if self.waiting(r) else "#f0f0f0"
             c.create_text(x + 1, y - 9, text=f"#{r.id}", fill="#000000", font=self.font(11, True), tags="labels")
             c.create_text(x, y - 10, text=f"#{r.id}", fill=col, font=self.font(11, True), tags="labels")
 
@@ -1643,6 +1752,7 @@ class App:
         n = len(r.candidates)
         t1.configure(text=f"#{r.id}" + (f"  ·  {A.label_text(r.chosen_label())}" if r.chosen is not None else ""))
         t2.configure(text=_n("{n} variant", "{n} variants", n) if n else
+                     _("waiting: choose a model, then Generate") if self.waiting(r) else
                      (_("generating…") if self.busy else _("no variants")))
         if r.chosen is not None:
             ph = ImageTk.PhotoImage(self.tile_image(r, r.chosen, self.ROWTHUMB, square=True))
@@ -1693,7 +1803,8 @@ class App:
         if r is None:
             return
         if not r.candidates:
-            text = (_("Generating the variants…") if self.busy else
+            text = (_("Not made yet: choose a model above, then \"Generate #{id}\"", id=r.id) if self.waiting(r) else
+                    _("Generating the variants…") if self.busy else
                     _("No variants: add some with \"＋ more for #{id}\" under \"Remove selection\"", id=r.id))
             tk.Label(self.vars.inner, text=text, font=self.f_small, fg=DIM, bg=CARD).pack(anchor="w")
             return
@@ -1816,6 +1927,9 @@ class App:
         if self.model_key() == "lama" and any(c[0] == "LaMa" for c in r.candidates):
             self.status.configure(text=_("LaMa always gives the same result: pick SDXL or FLUX for more variants"))
             return
+        if self.waiting(r):  # a part's first variants: "Generate"
+            self.pending_gen.add(r.id)
+            self.update_row(r)
         self.jobs.put(("more", r, self.n_variants(), self.model_key(), self.prompt_for(self.model_key())))
         self.busy = True
         self.update_buttons()
@@ -1835,6 +1949,9 @@ class App:
                 kept.append(job)
         for job in kept:
             self.jobs.put(job)
+        self.pending_gen.clear()  # parts queued and dropped wait again
+        for r in self.s.removals:
+            self.update_row(r)
         self.s.stop.set()
         if self.job:
             self.job["label"] = _("Stopping…")
@@ -2183,7 +2300,8 @@ class App:
         snap:n · shadow · remove:n[,model 0 sdxl/1 flux/2 lama/3 osor/4 objectclear/5 qwen/6 rorem] · more:n · pick:i ·
         detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit ·
         menu (opens / closes the model list) · wheel:notches,mods (on the photo; mods 1 Ctrl/Cmd, 2 Alt/Option) ·
-        describe:text (Describe's field and "Select all") · right:x,y (a right-click)"""
+        describe:text (Describe's field and "Select all") · right:x,y (a right-click) · split ("Split into parts") ·
+        genall ("Generate all … waiting")"""
         if not actions:
             return
         kind, __, arg = actions[0].partition(":")
@@ -2280,6 +2398,12 @@ class App:
         elif kind == "info":
             self.toggle_model_info()
             delay = 200
+        elif kind == "split":  # "Split into parts"
+            self.split_selection()
+            delay = 300
+        elif kind == "genall":  # "Generate all … waiting"
+            self.generate_waiting()
+            delay = 300
         elif kind == "describe":
             self.describe_entry.set_text(arg)
             self.describe()

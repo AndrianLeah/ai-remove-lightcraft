@@ -1314,6 +1314,19 @@ class Session:
         measured("area", time.time() - t0)
         return r
 
+    def plan_removal(self, mask_e):
+        """A removal for mask_e that waits for its model ("Split selection": one per part, split_selection): its area
+        is planned now and rendered at its first variant, from the photo with the removals before it applied, as a
+        reopened removal's is (_load_area)."""
+        r = Removal(self.next_id, mask_e)
+        self.next_id += 1
+        __, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t, square=False)
+        self._masks(r)
+        r._load = self._load_area
+        self._place(r)
+        self.removals.append(r)
+        return r
+
     def _init_area(self, r, upto=None):
         """The area image (photo with the earlier removals applied: those before `upto`, else all), its masks and
         preview placement. Its blend solver is made at the first blend (Removal.membrane)."""
@@ -1349,6 +1362,9 @@ class Session:
         size = (max(1, X1 - X0), max(1, Y1 - Y0))
         r.base_alpha = self._base_alpha(r, r.alpha)
         keep = r.base_alpha < 0.01
+        if r._src is None and not r.candidates:  # a part still waiting for its model (plan_removal): no preview yet,
+            r.lut = [np.arange(256, dtype=np.uint8)] * 3  # this runs again when its area is rendered (_init_area)
+            return
         if r._src is None and r.candidates:  # a reopened removal: outside its hole a variant IS the area
             label, im = r.candidates[r.chosen if r.chosen is not None else 0]  # (blend.seamless), no render needed
             area = np.asarray(im.convert("RGB"))
