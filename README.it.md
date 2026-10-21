@@ -6,8 +6,8 @@
 
 [English](README.md)
 
-Toglie oggetti e persone dalle foto RAW con l'intelligenza artificiale, direttamente dentro LightCraft. Fa quello che
-in Lightroom è "Rimozione generativa", ma tutto gira sul tuo computer.
+Toglie oggetti e persone dalle foto RAW con l'intelligenza artificiale, direttamente dentro LightCraft oppure da solo.
+Fa quello che in Lightroom è "Rimozione generativa", ma tutto gira sul tuo computer.
 
 1. In LightCraft scegli una foto RAW e premi **Ctrl+Shift+X** (**Cmd+Shift+X** su Mac).
 2. Nella finestra di AI Remove clicca su ciò che vuoi togliere: SAM 3 lo seleziona tutto.
@@ -22,6 +22,12 @@ in Lightroom è "Rimozione generativa", ma tutto gira sul tuo computer.
 
 Ogni rimozione resta modificabile: la puoi rigenerare, cambiare variante o eliminare in qualsiasi momento. Tutto è
 salvato in un unico file accanto al RAW (`<raw>.airemove`). Il RAW originale non viene mai modificato.
+
+**Da solo.** AI Remove funziona anche su un RAW che non è in LightCraft: aprilo dal menu Start, da Applicazioni o dal
+menu delle app con LightCraft chiuso (o senza una foto selezionata) e ti chiede un file; **Apri RAW…** nella finestra
+ne apre un altro. LightCraft deve essere installato, non aperto: AI Remove legge il RAW con la riga di comando di
+LightCraft, con il suo sviluppo predefinito. **Salva come DNG** scrive `<nome>-AIRemove.dng` accanto al RAW, senza
+importarlo da nessuna parte.
 
 > AI Remove è un plug-in **non ufficiale**: non è fatto, sponsorizzato né approvato dal team di ArtCraft, che sviluppa
 > LightCraft.
@@ -143,8 +149,9 @@ Qwen-Image dice cosa togliere, se lo ha riconosciuto male ("the lamp post").
 | Variante precedente / successiva | ← / → | ← / → |
 | Elimina una variante | clic destro sulla variante | clic destro (o Ctrl+clic) sulla variante |
 
-AI Remove si può aprire anche dal menu Start, da Applicazioni o dal menu delle app: lavora sempre sulla foto attiva in
-LightCraft.
+AI Remove si può aprire anche dal menu Start, da Applicazioni o dal menu delle app: lavora sulla foto attiva in
+LightCraft se LightCraft è aperto, altrimenti su un RAW che scegli tu (vedi "Da solo" in alto). Su Mac puoi anche
+trascinare un RAW sulla sua icona.
 
 ## Lingua
 
@@ -154,7 +161,8 @@ variabile `AIREMOVE_LANG=it` oppure `AIREMOVE_LANG=en`.
 
 ## Dove finiscono i file
 
-- `<nome>-AIRemove.dng`: la foto ritoccata, nella cartella dell'originale e impilata con lui in LightCraft.
+- `<nome>-AIRemove.dng`: la foto ritoccata, nella cartella dell'originale e impilata con lui in LightCraft (da solo:
+  solo nella cartella).
 - `<nome del raw>.airemove`: il progetto, con tutte le rimozioni e le varianti, accanto al RAW.
 - `~/AIRemove`: il programma, i modelli, i log (`install.log` e `work/last-run.log`).
 
