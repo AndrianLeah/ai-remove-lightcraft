@@ -4,16 +4,13 @@ the installer found it there and records it in airemove.json) stays where it is:
 Runs in the install's Python (needs huggingface_hub). Prints one line per model for the installer:
 MODEL_OK <name> | MODEL_FAIL <name> <why>.
 
-  fetch_models.py --dest DIR --models lama,sam3,sdxl,rorem,flux,osor,objectclear,qwen [--from OTHER_MODELS_DIR]
+  fetch_models.py --dest DIR --models lama,sam3,rorem,flux,osor,qwen [--from OTHER_MODELS_DIR]
                   [--paths '{"part": "folder", ...}']    (HF_TOKEN for gated ones)
 """
 import argparse
-import io
 import json
 import os
 import sys
-import urllib.request
-import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -22,8 +19,6 @@ import model_files as mf  # noqa: E402
 import system  # noqa: E402
 from i18n import _, N_  # noqa: E402
 
-# ObjectClear's pipeline code (S-Lab License 1.0, non-commercial: fetched here, not shipped with AI Remove), pinned
-OBJECTCLEAR_CODE = "https://codeload.github.com/zjx0101/ObjectClear/zip/c052d91ecd8772744a5ab97527441c813ab83009"
 GATED_HELP = {
     "sam3": N_("accept the SAM License at https://huggingface.co/facebook/sam3 (approval can take a while)"),
     "flux": N_("accept the licence at https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev"),
@@ -73,21 +68,6 @@ def sam3_to_lightcraft(sam3, token):
         print("  " + _("(SAM 3 not shared with LightCraft: {error})", error=type(e).__name__))
 
 
-def objectclear_code(code):
-    """ObjectClear's package (objectclear/: models, pipelines, utils — not its training dataset code) and its
-    licence, from the pinned commit, into code (models/objectclear/code)."""
-    with urllib.request.urlopen(OBJECTCLEAR_CODE, timeout=120) as resp:
-        z = zipfile.ZipFile(io.BytesIO(resp.read()))
-    for name in z.namelist():
-        rel = name.split("/", 1)[1] if "/" in name else ""
-        keep = rel == "LICENSE" or (rel.startswith("objectclear/") and not rel.startswith("objectclear/dataset/"))
-        if not keep or name.endswith("/") or ".." in rel:
-            continue
-        t = code / rel
-        t.parent.mkdir(parents=True, exist_ok=True)
-        t.write_bytes(z.read(name))
-
-
 def fetch(dest, model, token, other, paths):
     if complete(dest, model, paths):
         mine = [p for p in mf.MODELS[model].parts if mf.part_dir(p, dest, paths) != dest / p]
@@ -107,10 +87,6 @@ def fetch(dest, model, token, other, paths):
                            n=n))
             continue
         if part == "sam3" and sam3_from_lightcraft(dest):
-            continue
-        if part == "objectclear/code":  # from GitHub, pinned (S-Lab licence: not shipped with AI Remove)
-            print("  " + _("{model}: downloading its code from GitHub …", model=model), flush=True)
-            objectclear_code(dest / part)
             continue
         from huggingface_hub import snapshot_download
         print("  " + _("{model}: downloading {repo} …", model=model, repo=spec.repo), flush=True)

@@ -18,7 +18,6 @@ user's choice, after showing each licence. Using a model means accepting its lic
 | FLUX.1 Fill [dev] GGUF Q4_K_S | [YarvixPA/FLUX.1-Fill-dev-GGUF](https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF) | as FLUX.1 [dev] |
 | FLUX.1 Turbo-Alpha LoRA | [alimama-creative/FLUX.1-Turbo-Alpha](https://huggingface.co/alimama-creative/FLUX.1-Turbo-Alpha) | as FLUX.1 [dev] |
 | OSOR (FLUX Fill, phase II) — optional | [QinmingZhou/OSOR](https://huggingface.co/QinmingZhou/OSOR), from [Zhouqm-Git/osor](https://github.com/Zhouqm-Git/osor) (ECCV 2026) | as FLUX.1 [dev] (non-commercial); OSOR's code is MIT, but AI Remove uses none of it: it loads the weights itself |
-| ObjectClear — optional | [jixin0101/ObjectClear](https://huggingface.co/jixin0101/ObjectClear), from [zjx0101/ObjectClear](https://github.com/zjx0101/ObjectClear) (CVPR 2026) | [S-Lab License 1.0](https://github.com/zjx0101/ObjectClear/blob/main/LICENSE): non-commercial use only |
 | Qwen-Image 2.1 Turbo — optional | [Qwen/Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) (configs, processor, VAE), from [QwenLM/Qwen-Image-2.1](https://github.com/QwenLM/Qwen-Image-2.1) | [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/LICENSE): research and evaluation only; commercial use needs a separate licence from Qwen |
 | Qwen-Image 2.1 Turbo GGUF Q4_K_M — optional | [unsloth/Qwen-Image-2.1-Turbo-GGUF](https://huggingface.co/unsloth/Qwen-Image-2.1-Turbo-GGUF) | as Qwen-Image 2.1 |
 | Qwen3-VL-8B-Instruct FP8 — optional, Qwen-Image's text encoder | [Qwen/Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) | Apache-2.0 |
@@ -30,9 +29,8 @@ repository.
 RORem's text encoders and VAE are SDXL Inpainting 0.1's unchanged (checked tensor by tensor), so AI Remove
 downloads only RORem's UNet (4.8 GB) and takes the rest from SDXL's files.
 
-ObjectClear's pipeline code is under the same S-Lab licence, so it is not part of AI Remove either: the installer
-downloads it from GitHub (a fixed commit) into `models/objectclear/code` together with its weights, only when the user
-chooses ObjectClear.
+AI Remove no longer uses ObjectClear (S-Lab License 1.0, non-commercial): updating removes its weights and its pipeline
+code from AI Remove's own models folder.
 
 SAM 3 needs no configuration files from Meta: AI Remove uses Hugging Face Transformers' built-in defaults for the SAM 3
 tracker. These give the same masks as the checkpoint's own configuration.

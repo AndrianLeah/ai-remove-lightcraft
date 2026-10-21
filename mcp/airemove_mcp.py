@@ -20,7 +20,10 @@ sys.path.insert(0, str(PKG / "installer"))
 import model_files as mf  # noqa: E402
 import system  # noqa: E402
 
-FILL_MODELS = [m for m in mf.MODELS if m != "sam3"]  # what fills a removal (model_files: the one list; SAM 3 selects)
+# what fills a removal: the window's four first (lama, rorem, flux, qwen), then SDXL and OSOR, which it keeps out of
+# its menu (model_files: the one list; SAM 3 selects). A retired name still works: objectclear runs OSOR.
+FILL_MODELS = ["lama", "rorem", "flux", "qwen", "sdxl", "osor"]
+RETIRED = {"objectclear": "osor"}
 
 PROTOCOL = "2025-06-18"
 WIN = system.system() == "windows"
@@ -92,13 +95,14 @@ Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended 
 5. Usage: in LightCraft select a photo, press Ctrl+Shift+X (Cmd+Shift+X on Mac), or open "AI Remove" from the
    Start menu / Applications / app menu (it works on LightCraft's active photo, else asks for a photo file).""",
     "use": """In the AI Remove window: click an object (SAM 3 selects it whole); Alt/Option+click removes a part,
-Shift+click adds one; Brush (B) / Eraser (E) for manual touch-ups. Pick the model (LaMa = fast, small things on plain
-backgrounds; SDXL = generative variants; FLUX = most realistic, large or structured areas; OSOR / ObjectClear = the
-object together with its shadow and reflection), optionally an English prompt of what should be there ("old plaster
-wall"), the number of variants, then "Remove selection" (Enter). "Include the shadow" (when OSOR or ObjectClear is
-installed) adds the selected object's shadow and reflection to the selection first, so any model removes them too. Each
-removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" writes/updates the result
-(the DNG, or the picture's copy).
+Shift+click adds one; Brush (B) / Eraser (E) for manual touch-ups; or describe it ("person", then "bag"): SAM 3
+selects every instance. "Include the shadow" adds their shadows (SAM 3, and OSOR when installed) to the selection.
+"Split into parts" cuts the selection into parts sized for the models; for each, pick the model and "Generate" (or
+"Generate all"): LaMa = fast, small things on plain backgrounds and cables; RORem = people and objects, draws no one
+back (the default); FLUX Fill = architecture, large areas, NOT people (it draws people back into a crowd); Qwen-Image =
+people and objects on complex backgrounds, removes them by name. "Remove selection" (Enter) does it all with one model.
+Each removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" writes/updates the
+result (the DNG, or the picture's copy).
 Zoom: Ctrl/Cmd+wheel or + / -, 0 = fit; pan: wheel, middle button or Space+drag; hold "Originale" (or \\) to compare.
 Headless (no window): put a LightCraft mask named "Remove" (or "Remove: <English prompt>"; "Rimuovi" works too) on the photo — e.g. with
 LightCraft's own MCP tools (an Object mask on the thing, renamed) — then call remove_with_masks.""",
@@ -306,7 +310,8 @@ def open_ai_remove(a):
 
 def remove_with_masks(a):
     d = install_dir()
-    model = str(a.get("model") or "sdxl").lower()
+    model = str(a.get("model") or "rorem").lower()
+    model = RETIRED.get(model, model)
     if model not in FILL_MODELS:
         return {"ok": False, "error": "model: " + " | ".join(FILL_MODELS)}
     args = ["--auto", model + (str(int(a["variant"])) if a.get("variant") else "")]
@@ -415,13 +420,14 @@ TOOLS = [
                           "<name>-AIRemove.jpg..., its own format), stacked on the original (like the window's Save). "
                           "Can take minutes. Returns the result's path (dng / file), photo id and the removals made.",
      {"type": "object", "properties": {
-         "model": {"type": "string", "enum": FILL_MODELS,
-                   "description": "osor / objectclear also remove the object's shadow and reflection; qwen removes "
-                                  "it by name (a mask's English prompt names it, else Qwen3-VL does); rorem is SDXL "
-                                  "retrained to remove: it draws no person back where SDXL does, and reads no "
-                                  "prompt"},
+         "model": {"type": "string", "enum": FILL_MODELS + list(RETIRED),
+                   "description": "rorem (default): people and objects, draws no one back, reads no prompt; "
+                                  "lama: small things on plain backgrounds, cables; flux: architecture, large areas, "
+                                  "not people; qwen: removes it by name (a mask's English prompt names it, else "
+                                  "Qwen3-VL does); sdxl and osor are kept for scripts (osor also removes the object's "
+                                  "shadow); objectclear, retired, runs osor"},
          "shadow": {"type": "boolean", "description": "first add the object's shadow and reflection to the masks "
-                                                      "(needs osor or objectclear installed), then fill with model"},
+                                                      "(needs osor installed), then fill with model"},
          "variant": {"type": "integer", "description": "generate this many variants and use the last (default 1)"},
          "photo_id": {"type": "integer", "description": "default: LightCraft's active photo"}}},
      remove_with_masks, False),

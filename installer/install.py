@@ -6,14 +6,15 @@ install folder. Standard library only. What it does, in order (each step can be 
   1. looks at the computer: OS, graphics card -> which PyTorch build (NVIDIA CUDA, AMD ROCm, Intel XPU, Apple MPS, CPU)
   2. copies the app into the install folder (default: ~/AIRemove — outside AppData on Windows on purpose)
   3. makes a private Python environment there (venv) with PyTorch and the other libraries
-  4. downloads the AI models the user chose (LaMa, SAM 3 — or links LightCraft's copy —, SDXL, FLUX, OSOR, ObjectClear);
+  4. downloads the AI models the user chose (LaMa, SAM 3 — or links LightCraft's copy —, RORem, FLUX, OSOR,
+     Qwen-Image) and removes the ones AI Remove no longer uses from its own models folder (RETIRED);
      a model the user already has in a folder of their own is used from there (airemove.json "model_paths")
   5. creates the launcher (AI Remove.exe / app / command) with its icon, a Start menu / Applications / menu entry
   6. sets up LightCraft: its control channel (LIGHTCRAFT_CONTROL_PORT), AI Remove as its external editor and the
      shortcut Ctrl+Shift+X (Cmd+Shift+X on a Mac) for Photo > Edit In > Open Original in Other Editor
   7. checks the result (airemove --check)
 
-  install.py [--dir DIR] [--models lama,sam3,sdxl,rorem,flux,osor,objectclear,qwen | recommended | none]
+  install.py [--dir DIR] [--models lama,sam3,rorem,flux,osor,qwen | recommended | none]
              [--yes] [--model-dir MODEL=FOLDER ...] [--hf-token TOKEN] [--torch auto|cuda|rocm|rocm-win|xpu|mps|cpu]
              [--models-from DIR] [--port 7980] [--no-lightcraft]
   install.py --configure-lightcraft [--dir DIR]      only step 6 (e.g. after closing LightCraft)
@@ -59,7 +60,11 @@ TORCH_FLAVOURS = {
     "cuda": ("NVIDIA (CUDA)", 4.5), "rocm": ("AMD (ROCm, Linux)", 9.0), "rocm-win": (N_("AMD (ROCm for Windows)"), 6.0),
     "xpu": ("Intel Arc (XPU)", 3.5), "mps": ("Apple Silicon (Metal)", 1.0), "cpu": (N_("processor only"), 1.0)}
 MODELS = mf.MODELS  # what each model is for, its download and licence, its files (airemove/model_files.py)
-GPU_ONLY = ("flux", "osor", "objectclear", "qwen")  # not offered without a GPU (ObjectClear crawls, the rest fail)
+GPU_ONLY = ("flux", "osor", "qwen")  # not offered without a GPU (they fail on the processor)
+# models AI Remove had and no longer uses: their folders in the install's own models/ are removed at the next run (a
+# folder of the user's own is never touched). ObjectClear (7.3 GB): "Include the shadow" with SAM 3 and OSOR, then RORem
+# or FLUX, does its job sharper; it worked at 512 px.
+RETIRED = {"objectclear": ("objectclear",)}
 # Qwen-Image: its 8B text encoder (~10 GB in FP8) and then its transformer with the picture's attention cache (~10 GB)
 # take a 16 GB card, next to what the desktop and LightCraft keep on it (2-4 GB). Measured on an RX 7800 XT 16 GB; the
 # runtimes it needs (CUDA, ROCm) are NVIDIA's and AMD's.
@@ -261,11 +266,32 @@ def qwen_fits(flavour, gpu):
     return flavour in QWEN_TORCH and ((gpu[2] if gpu else None) or 0) >= QWEN_VRAM
 
 
+def retire_models(models_dir):
+    """The models AI Remove no longer uses (RETIRED), removed from its own models folder: a link to a folder of the
+    user's own (a junction, a symlink) is unlinked, never followed; hard-linked files lose only this link."""
+    for model, parts in RETIRED.items():
+        for part in parts:
+            p = models_dir / part
+            if not (p.exists() or p.is_symlink()):
+                continue
+            try:
+                if p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction()):
+                    p.unlink()
+                else:
+                    size = sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 2 ** 30  # as the sizes shown
+                    shutil.rmtree(p)
+                    out.write("  " + _("{model} is no longer used by AI Remove: its folder removed ({gb} GB freed)",
+                                       model=model, gb=num(size)))
+            except OSError as e:
+                out.write("  ! " + _("{model} is no longer used: remove {dir} by hand ({error})", model=model, dir=p,
+                                     error=e))
+
+
 def recommended_models(flavour, gpu):
     vram = (gpu[2] if gpu else None) or 0
     picks = ["lama", "sam3"]
     if flavour != "cpu" and (vram >= 6 or flavour == "mps" and vram >= 16 or flavour == "rocm-win"):
-        picks.append("sdxl")
+        picks.append("rorem")  # with SDXL's files
     return picks
 
 
@@ -476,14 +502,14 @@ def choose_models(flavour, gpu, installed, given, lc_sam):
          "  ", "  ")
     wanted = []
     for m, mod in MODELS.items():
+        if not mod.offered:  # SDXL: RORem brings its files
+            continue
         if m in GPU_ONLY and flavour == "cpu" and m not in given and m not in installed:
             continue
         if m == "qwen" and not qwen_fits(flavour, gpu) and m not in given and m not in installed:
             continue
         if m == "osor" and "flux" not in wanted + installed:
             continue  # it runs on FLUX
-        if m == "rorem" and "sdxl" not in wanted + installed:
-            continue  # SDXL with another UNet: SDXL's files
         lc = m == "sam3" and lc_sam
         out.write("")
         para(f"{mod.name} — {_(mod.what)}")
@@ -506,8 +532,8 @@ def choose_models(flavour, gpu, installed, given, lc_sam):
                 given.update({m: ans} if ans else {})
     if flavour == "cpu":
         out.write("")
-        para(_("FLUX, OSOR and ObjectClear need a graphics card: not offered on this computer (--models installs "
-               "them anyway)."))
+        para(_("FLUX and OSOR need a graphics card: not offered on this computer (--models installs them "
+               "anyway)."))
     elif not qwen_fits(flavour, gpu) and "qwen" not in wanted + installed:
         out.write("")
         para(_("Qwen-Image needs an NVIDIA or AMD graphics card with 16 GB or more: not offered on this computer "
@@ -1121,7 +1147,7 @@ def main():
     total = TORCH_FLAVOURS[flavour][1] + sum(mf.PARTS[p].gb for p in need)
     out.write("\n  " + _("folder: {dir}  ·  free space {free} GB  ·  needed ~{need} GB", dir=d,
                            free=f"{gb_free(d):.0f}", need=f"{total:.0f}"))
-    for m in wanted:
+    for m in [m for m in wanted if MODELS[m].offered]:
         mod = MODELS[m]
         src = {p: source(p) for p in mod.parts}
         get = sum(mf.PARTS[p].gb for p, s in src.items() if s == "get")
@@ -1160,6 +1186,8 @@ def main():
     cfg["model_paths"] = {p: f for p, f in cfg["model_paths"].items() if mf.part_ok(p, f)}
     for m, why in failed:
         out.write("  ! " + _("{model} not installed: {why}", model=m, why=why))
+    retire_models(models_dir)
+    cfg["models"] = [m for m in cfg["models"] if m not in RETIRED]
     write_cfg(d, cfg)
 
     out.title(5, _("Program, icon and menu"))

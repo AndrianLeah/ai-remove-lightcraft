@@ -14,8 +14,9 @@ How to use:
   3. "Rimuovi selezione" makes a removal (like a Lightroom Generative Remove spot) with its own area and variants
      (LaMa + SDXL or FLUX; optional prompt IN ENGLISH). Each removal can get more variants, a different choice or
      be deleted without touching the others; fills are blended seamlessly (blend.py).
-     The object's shadow and reflection: "Includi l'ombra" adds what OSOR removes with the object to the selection
-     (Session.find_shadow), or OSOR / ObjectClear variants remove it by themselves (their hole grows with it).
+     The objects' shadows and reflections: "Includi l'ombra" adds the shadows SAM 3 finds touching the selection
+     and what OSOR removes with each object to the selection (Session.find_shadow); headless, OSOR variants (--auto
+     osor) remove it by themselves (their hole grows with it).
      A long, thin object across a large area (a pole as tall as the photo, a cable) is filled in squares along it,
      near the engine's own size (tiles.py, Session.tile_plan); "Dettaglio pieno" redraws such a removal's chosen
      variant that way at the photo's resolution (Session.refine).
@@ -29,7 +30,7 @@ It talks to the running LightCraft through LightCraft's control channel (JSON li
 LightCraft must be started with it on — the installer sets LIGHTCRAFT_CONTROL_PORT for it on every OS.
 
 usage: airemove.py [PHOTO] [--id PHOTO_ID] [--variants N] a photo LightCraft does not have selected opens on its own
-       airemove.py --auto lama|sdxl|rorem|flux|osor|objectclear|qwen[N] [--shadow] [--id PHOTO_ID]
+       airemove.py --auto lama|rorem|flux|qwen|sdxl|osor[N] [--shadow] [--id PHOTO_ID]
                                                              no window: the "Rimuovi" masks removed with that
                                                              model (far-apart parts each in a removal of its own),
                                                              variant N used, written into the DNG;
@@ -100,15 +101,16 @@ ENGINES = {
     "rorem": ModelSpec("RORem", "RORem", (engines.SDXL.S,), 5000),
     "flux": ModelSpec("FLUX", "FLUX", engines.FLUX_SIZES, 1000),
     "osor": ModelSpec("OSOR", "FLUX", engines.FLUX_SIZES, 2000),
-    "objectclear": ModelSpec("ObjectClear", "ObjectClear", (engines.ObjectClear.S,), 3000),
     "qwen": ModelSpec("Qwen", "Qwen", (engines.QWEN_SIZE,), 4000),
 }
-# the Session attribute each engine lives in: sdxl, rorem, flux, objectclear, qwen (one loaded at a time)
+# the Session attribute each engine lives in: sdxl, rorem, flux, qwen (one loaded at a time)
 ENGINE_ATTRS = {}
 for _m, _s in ENGINES.items():
     if _s.engine:
         ENGINE_ATTRS.setdefault(_s.engine, _m)
 del _m, _s
+# models AI Remove had and no longer runs, and the one that does their job now (--auto, the MCP server)
+RETIRED = {"objectclear": "osor"}
 TILE_SIZES = {m: s.sizes for m, s in ENGINES.items()}
 # SDXL fills a long, thin hole with a long, thin thing (a plank where a cord was, a rod where a pole was), in one pass
 # and more so in squares, measured: its variants stay in one pass. It still redraws for "Full detail" without FLUX.
@@ -805,7 +807,7 @@ def unique_path(p):
 TIMINGS = ROOT / "work" / "timings.json"
 DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20, "flux_variant": 90,
                  "rorem_load": 20, "rorem_variant": 7,
-                 "osor_load": 25, "osor_variant": 8, "objectclear_load": 20, "objectclear_variant": 5, "shadow": 12,
+                 "osor_load": 25, "osor_variant": 8, "shadow": 12,
                  "qwen_load": 15, "qwen_variant": 35,
                  "area": 3, "save": 6,
                  # one square of a tiled fill (tiles.py), one redrawn by "Full detail", the blend of the area after
@@ -913,7 +915,8 @@ class Removal:
         self.preview = {}  # label -> (patch uint8 HxWx3, alpha float HxW) in base.png's look and frame
         self.png = {}  # encoded images for the project file (label / "selection" / "area" -> PNG bytes)
         self.gain = None  # render gain of this area (set once, stored in the project: variants depend on it)
-        # label -> bool hole of a variant that also removed the object's shadow/reflection (OSOR, ObjectClear):
+        # label -> bool hole of a variant that also removed the object's shadow/reflection (OSOR; ObjectClear's in
+        # projects made before 1.5):
         # the area's own hole grown by what the model changed. Other variants use reg_mask.
         self.holes = {}
         self.hole_cache = {}  # label -> (mask image, alpha, alpha in base.png's frame)
@@ -1492,7 +1495,7 @@ class Session:
         return getattr(self, model, None) is not None
 
     def get_engine(self, model):
-        """SDXL, RORem, FLUX, ObjectClear or Qwen-Image on the GPU — one at a time (16 GB): switching unloads the
+        """SDXL, RORem, FLUX or Qwen-Image on the GPU — one at a time (16 GB): switching unloads the
         others, and SAM 3 for FLUX and Qwen-Image. OSOR is FLUX's engine with OSOR's adapter (loaded the first time)."""
         with self._engine_lock:
             cls = ENGINES[model].engine
@@ -1512,9 +1515,6 @@ class Session:
             if time.time() - t0 > 1:
                 measured(f"{model}_load", time.time() - t0)
             return getattr(self, name)
-
-    def load_sdxl(self):  # the window preloads the default engine
-        return self.get_engine("sdxl")
 
     # -------------------------------------------------------------- generation
     def run_lama(self, r):
@@ -1568,7 +1568,7 @@ class Session:
         t0 = time.time()
         label = f"{MODELS[model]} {k}"
         plan = self.tile_plan(r, model)
-        if plan is not None and model in ("osor", "objectclear"):  # an oblong area: in squares, effects joined
+        if plan is not None and model == "osor":  # an oblong area: in squares, effects joined
             effect = np.zeros(r.reg_mask.shape, np.uint8)
             raw_fill = self._tiled(r, model, eng, plan, prompt, seed, progress, effect=effect)
             hole = self._effect_hole(r, Image.fromarray(effect))
@@ -1592,7 +1592,7 @@ class Session:
             raw_fill = eng.fill(r.src, r.mask_img, prompt, seed, progress=progress, log=log)
         elif model == "qwen":
             raw_fill = self._qwen(eng, r.src, r.mask_img, prompt, seed, progress)
-        else:  # OSOR / ObjectClear: no prompt; they also say how far the object's shadow and reflection go
+        else:  # OSOR: no prompt; it also says how far the object's shadow and reflection go
             raw_fill, effect = self._effect_fill(model, eng, r.src, r.reg_mask, seed, progress)
             hole = self._effect_hole(r, effect)
             if hole is not None:
@@ -1651,7 +1651,7 @@ class Session:
 
     def tile_plan(self, r, model, label=None, refine=False):
         """(engine size, tiles.Plan) to fill r's hole in squares, or None for one pass as before. label: the variant
-        whose hole it is (OSOR / ObjectClear variants have their own). For a variant: only a thin hole, only when one
+        whose hole it is (OSOR variants have their own). For a variant: only a thin hole, only when one
         pass would enlarge the fill more than TILE_FROM times, in squares as small as TILE_BUDGET allows. For a
         refinement ("Full detail"): any hole, as near the engine's size as REFINE_BUDGET allows. An area longer than
         a square (plan_region square=False) is always filled in squares, by every engine: at worst squares of its
@@ -1733,7 +1733,7 @@ class Session:
 
     def _tiled(self, r, model, eng, plan, prompt, seed, progress=None, src=None, strength=1.0, effect=None):
         """r's raw fill made square by square (tiles.Plan.fill); src (default: the area) and strength < 1 redraw a
-        fill already in the hole. SDXL sees each square upright, with the sky it continues held. OSOR / ObjectClear:
+        fill already in the hole. SDXL sees each square upright, with the sky it continues held. OSOR:
         `effect` (uint8, the area's shape) gets what each square changed (their shadow and reflection maps)."""
         size, P = plan
         up, down = (self._up, self._down) if model in SDXL_LIKE and SDXL_UPRIGHT else (lambda a: a, lambda a: a)
@@ -1758,7 +1758,7 @@ class Session:
                 out = engines.lama(img, mask)
             elif model == "qwen":
                 out = self._qwen(eng, img, mask, prompt, s, self.check_stop, seen.get(k), what)
-            elif model in ("osor", "objectclear"):
+            elif model == "osor":
                 out, eff = self._effect_fill(model, eng, img, np.asarray(mask) > 127, s, self.check_stop)
                 sl = P.steps[k][0]
                 effect[sl] = np.maximum(effect[sl], np.asarray(eff.convert("L")))
@@ -1871,16 +1871,15 @@ class Session:
         return new, im
 
     def _effect_fill(self, model, eng, src, hole, seed, progress=None):
-        """OSOR / ObjectClear on an area (sensor orientation), shown to them upright — as the photo is seen: they
-        recognise a shadow by where the light comes from and where the ground is — and turned back. Returns
-        (image, effect) in the area's orientation."""
-        fill = eng.fill_osor if model == "osor" else eng.fill
-        img, effect = fill(self._up(src), self._up(Image.fromarray((hole * 255).astype(np.uint8))), seed=seed,
+        """OSOR on an area (sensor orientation), shown to it upright — as the photo is seen: it recognises a shadow
+        by where the light comes from and where the ground is — and turned back. Returns (image, effect) in the
+        area's orientation."""
+        img, effect = eng.fill_osor(self._up(src), self._up(Image.fromarray((hole * 255).astype(np.uint8))), seed=seed,
                            progress=progress, log=log)
         return self._down(img), self._down(effect)
 
     def _effect_hole(self, r, effect):
-        """The hole of an OSOR / ObjectClear variant: the area's hole plus what the model changed beyond it (the
+        """The hole of an OSOR variant: the area's hole plus what the model changed beyond it (the
         object's shadow, its reflection), slightly grown like the object's own hole. None if that adds nothing
         worth it. The very edge of the area stays out: the blend needs photo all around the hole."""
         e = np.asarray(effect.convert("L")) > 127
@@ -1894,7 +1893,7 @@ class Session:
         return r.reg_mask | e
 
     def shadow_model(self):
-        """The model "Includi l'ombra" uses: OSOR (its effect map is the most precise), else ObjectClear."""
+        """The model "Includi l'ombra" uses besides SAM 3: OSOR, when it is installed and usable."""
         return next((m for m in engines.SHADOW_MODELS if engines.usable(m)), None)
 
     def _shadow_pass(self, model, eng, mask_e, margin, progress=None):
@@ -1914,13 +1913,13 @@ class Session:
         return e, box, (a & edge).sum() > 0.005 * edge.sum()
 
     def find_shadow(self, mask_e, progress=None, margin=SHADOW_MARGIN, parts=None):
-        """"Includi l'ombra": what OSOR (or ObjectClear) removes together with the selected objects — their shadows,
+        """"Includi l'ombra": what OSOR removes together with the selected objects — their shadows,
         their reflections — as a bool mask in base.png's frame, outside the selection; None if there is nothing.
         Looked for part by part (split_selection, as the removals will be made; parts: already split): in one area
         around people all over a photo, each would be a few pixels in the model's view, and so would its shadow."""
         model = self.shadow_model()
         if model is None:
-            raise Fail(_("Neither OSOR nor ObjectClear is installed: they find the shadow (see the installer)"))
+            raise Fail(_("OSOR is not installed: it finds the shadow (see the installer)"))
         parts = split_selection(mask_e, self.base_scale) if parts is None else parts
         found = [m for m in (self._shadow_of(model, p, progress, margin) for p in parts) if m is not None]
         if not found:
@@ -1943,11 +1942,11 @@ class Session:
                 log("shadow: it goes beyond the area, looked again in a larger one")
                 e, box = e2, box2
         y0, y1, __, __ = box
-        # the effect map is coarse (OSOR: 1/8 of its 512/768 px view, ObjectClear: 1/16 of 512 px): the band of one
+        # the effect map is coarse (OSOR: 1/8 of its 512/768 px view): the band of one
         # or two of its cells around the object is its blur, not a shadow
         side = y1 - y0
         view = engines.FLUX_SIZES[0] if side <= sum(engines.FLUX_SIZES) // 2 else engines.FLUX_SIZES[1]
-        cell = side / (view / 8 if model == "osor" else engines.ObjectClear.S / 16)
+        cell = side / (view / 8)
         band_px = max(2, int(round(1.5 * cell * self.base_scale)))
         eff = self._sensor_to_base(e) & ~mask_e
         band = grow(mask_e, band_px) & ~mask_e
@@ -2064,11 +2063,11 @@ def auto(args):
     far-apart parts each in a removal of its own (split_selection); variant N (default 1) of each is the one used; the
     result is written and stacked like "Salva in LightCraft". --shadow: the object's shadow and reflection are added to
     the selection first ("Includi l'ombra"). Prints a JSON line."""
-    m = re.fullmatch(rf"({'|'.join(ENGINES)})(\d*)", args.auto.strip().lower())
+    m = re.fullmatch(rf"({'|'.join(list(ENGINES) + list(RETIRED))})(\d*)", args.auto.strip().lower())
     if not m:
         raise Fail(_("--auto: {models}, optionally the number of the variant to use (e.g. sdxl2)",
                      models=" | ".join(ENGINES)))
-    model, pick = m.group(1), max(1, int(m.group(2) or 1))
+    model, pick = RETIRED.get(m.group(1), m.group(1)), max(1, int(m.group(2) or 1))
     if model != "lama" and not engines.usable(model, engines.device()):
         raise Fail(_("{model} is not installed or does not run on this computer (see --check)", model=MODELS[model]))
     s = Session(LC(), args)
