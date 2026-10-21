@@ -15,7 +15,9 @@
 | Linux x86-64 | `AIRemove-@VERSION@-linux.tar.gz` | unpack, `sh "Install on Linux.sh"` |
 | All three | `AIRemove-@VERSION@-all-platforms.zip` | |
 
-Then restart LightCraft once, select a raw photo and press **Ctrl+Shift+X** (Cmd+Shift+X on a Mac).
+Then restart LightCraft once, select a raw photo and press **Ctrl+Shift+X** (Cmd+Shift+X on a Mac). Or open
+**AI Remove** from the Start menu, Applications or the app menu and choose a RAW: it works on its own too, with
+LightCraft installed.
 
 **Already installed?** Run the @VERSION@ installer again on the same folder. It updates the app and keeps the models
 you have, without downloading them again.
