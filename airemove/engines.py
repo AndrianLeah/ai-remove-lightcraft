@@ -29,6 +29,11 @@ SAM3_WEIGHTS = mf.SAM3_WEIGHTS
 # Describe (SAM3.describe): an instance SAM 3 finds counts above this score, as in LightCraft's Describe; where it is
 # the strongest instance and its own logit is above DESCRIBE_NEAR, the semantic mask joins it (describe_masks)
 DESCRIBE_SCORE, DESCRIBE_NEAR = 0.5, -4.0
+# SAM 3 sees a photo at 1008 x 1008, where a person far away is a few pixels: Describe looks at it whole, then in
+# DESCRIBE_TILES overlapping tiles (DESCRIBE_OVERLAP times a grid cell), each near the detector's own size
+# (describe_tiles). Measured on a park photo (base.png 2400 x 1600, "person"): 39 found whole, 76 with 2 x 2 tiles,
+# 102 with 3 x 2 — the crowd far away at a fountain.
+DESCRIBE_TILES, DESCRIBE_OVERLAP = (3, 2), 1.25
 # RORem's authors' prompt: with it and without classifier-free guidance it removes best (their README)
 ROREM_PROMPT = "4K, high quality, masterpiece, Highly detailed, Sharp focus, Professional, photorealistic, realistic"
 OSOR_PROMPT = "Remove the instance of object"  # the fixed prompt OSOR was trained with
@@ -191,6 +196,49 @@ def describe_masks(inst, scores, semantic, size, min_score=DESCRIBE_SCORE, near=
     return masks, scores[keep]
 
 
+def describe_tiles(size, grid=DESCRIBE_TILES, overlap=DESCRIBE_OVERLAP):
+    """Where Describe looks in a (w, h) photo: the whole of it, then overlapping tiles, as boxes (x0, y0, x1, y1).
+    A portrait photo turns the grid."""
+    W, H = size
+    cols, rows = grid if W >= H else grid[::-1]
+    tw, th = min(W, int(W / cols * overlap)), min(H, int(H / rows * overlap))
+    boxes = [(0, 0, W, H)]
+    for r in range(rows):
+        for c in range(cols):
+            x0, y0 = round(c * (W - tw) / max(1, cols - 1)), round(r * (H - th) / max(1, rows - 1))
+            boxes.append((x0, y0, x0 + tw, y0 + th))
+    return boxes
+
+
+def merge_instances(found, size):
+    """The instances Describe found in a photo's overlapping views (describe_tiles), as one list. found: [(box, bool
+    mask at the box's size, score)]. Those of the whole photo come first, then the larger ones: an instance more than
+    half inside one kept before it is the same one again, or a piece of it a tile's edge cut, and is dropped. Returns
+    (bool masks at size (w, h), their scores)."""
+    W, H = size
+    kept = []  # (box in the photo (y0, y1, x0, x1), the mask within it, score)
+    for (x0, y0, __, __), m, s in sorted(found, key=lambda f: (f[0] != (0, 0, W, H), -int(f[1].sum()))):
+        ys, xs = np.nonzero(m)
+        if not len(ys):
+            continue
+        b = (y0 + ys.min(), y0 + ys.max() + 1, x0 + xs.min(), x0 + xs.max() + 1)
+        crop = m[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+        half = 0.5 * crop.sum()
+        for kb, km, __ in kept:
+            iy0, iy1, ix0, ix1 = max(b[0], kb[0]), min(b[1], kb[1]), max(b[2], kb[2]), min(b[3], kb[3])
+            if iy0 < iy1 and ix0 < ix1 and (crop[iy0 - b[0]:iy1 - b[0], ix0 - b[2]:ix1 - b[2]]
+                                            & km[iy0 - kb[0]:iy1 - kb[0], ix0 - kb[2]:ix1 - kb[2]]).sum() > half:
+                break
+        else:
+            kept.append((b, crop, s))
+    masks = []
+    for b, crop, __ in kept:
+        full = np.zeros((H, W), bool)
+        full[b[0]:b[1], b[2]:b[3]] = crop
+        masks.append(full)
+    return masks, np.array([s for __, __, s in kept], np.float32)
+
+
 class SAM3:
     """Click-to-select with SAM 3 (the tracker half: point prompts), using the same weights LightCraft downloaded.
     On a GPU ~0.25 s per photo and ~0.05 s per click — LightCraft's own Object tool runs a ~35 s detail pass after
@@ -258,13 +306,24 @@ class SAM3:
         out, masks = self._run(pts, labels, logit, multi=False)
         return masks[0].astype(bool), out.pred_masks[:, :, 0:1]
 
-    def describe(self, text, log=print):
+    def describe(self, text, log=print, tiles=True):
         """Every instance of `text` (in English: "person", "car", "sign") in the photo set_image was given, one bool
-        mask each, with their scores (describe_masks). ~0.3 s on a GPU; the first call loads the detector."""
-        torch = self.torch
+        mask each, with their scores (describe_masks). tiles: looked for in the whole photo and in overlapping tiles
+        near the detector's size (describe_tiles, merge_instances), so that people far away are found too. ~0.3 s
+        per look on a GPU; the first call loads the detector."""
         if self.detector is None:
             self._load_detector(log)
-        inputs = self.det_proc(images=self.img, text=text, return_tensors="pt").to(self.dev)
+        W, H = self.img.size
+        found = []
+        for box in describe_tiles(self.img.size) if tiles else [(0, 0, W, H)]:
+            masks, scores = self._describe_in(self.img if box == (0, 0, W, H) else self.img.crop(box), text)
+            found += [(box, m, s) for m, s in zip(masks, scores)]
+        return merge_instances(found, (W, H))
+
+    def _describe_in(self, img, text):
+        """describe() in one picture: (masks at its size, scores)."""
+        torch = self.torch
+        inputs = self.det_proc(images=img, text=text, return_tensors="pt").to(self.dev)
         with torch.no_grad():
             o = self.detector(pixel_values=inputs["pixel_values"].to(self.dtype), input_ids=inputs["input_ids"],
                               attention_mask=inputs["attention_mask"])
@@ -273,7 +332,7 @@ class SAM3:
             scores = scores * o.presence_logits.float().sigmoid()[0]
         keep = torch.nonzero(scores > DESCRIBE_SCORE).flatten()  # only those leave the GPU
         return describe_masks(o.pred_masks[0, keep].float().cpu().numpy(), scores[keep].cpu().numpy(),
-                              o.semantic_seg[0, 0].float().cpu().numpy(), self.img.size)
+                              o.semantic_seg[0, 0].float().cpu().numpy(), img.size)
 
     def _load_detector(self, log=print):
         """SAM 3's detector, next to the tracker. Their image encoders are the same weights but for the neck: each

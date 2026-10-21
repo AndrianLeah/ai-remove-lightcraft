@@ -132,6 +132,7 @@
   "needs a free Hugging Face token (its licence accepted)": "serve un token gratuito di Hugging Face (con la sua licenza accettata)",
   "Neither OSOR nor ObjectClear is installed: they find the shadow (see the installer)": "Né OSOR né ObjectClear sono installati: sono loro a trovare l'ombra (vedi l'installer)",
   "New removal": "Nuova rimozione",
+  "New removal {i} of {n}": "Nuova rimozione {i} di {n}",
   "No active photo in LightCraft: select a photo and press {shortcut} again.": "Nessuna foto attiva in LightCraft: seleziona una foto e premi di nuovo {shortcut}.",
   "No removal to save.": "Nessuna rimozione da salvare.",
   "No shadow or reflection found next to the selection": "Nessuna ombra o riflesso trovato accanto alla selezione",

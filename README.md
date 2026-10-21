@@ -20,8 +20,10 @@ JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
 2. Click what should go: SAM 3 selects the whole object. Alt/Option+click takes a part out, Shift+click adds one, and
    the brush and eraser handle the rest. Or **describe** it: type "people" (in English) and SAM 3 selects every
    person in the photo, each on its own, so a right-click drops one you want to keep.
-3. **Remove selection** generates a few variants with the model you chose. Pick the best one. To remove the
-   object's shadow or reflection too, press **Include the shadow** first: it adds them to the selection, in blue.
+3. **Remove selection** generates a few variants with the model you chose. Pick the best one. Select everything in
+   one go: parts far apart (a person on the left, a sign on the right) become removals of their own, each filled
+   in its own area near the model's size, one after another, so none is a small picture enlarged. To remove the
+   objects' shadows or reflections too, press **Include the shadow** first: it adds them to the selection, in blue.
    On a long removal (a pole, a cable, a railing), **Full detail** redraws the chosen variant at the photo's own
    resolution.
 4. **Save to LightCraft** writes `<name>-AIRemove.dng` (from a JPEG: `<name>-AIRemove.jpg`, and so on), stacked on
@@ -49,15 +51,17 @@ embedded preview, which would still show what was removed.
 ## Features
 
 - **One-click selection** with SAM 3, refined with more clicks, a brush and an eraser.
-- **Select by describing:** "people", "car", "sign" selects every instance at once, a crowd included (~0.3 s on a
-  GPU, after a few seconds' load the first time). Where two people touch, no strip between them is left out: like
+- **Select by describing:** "people", "car", "sign" selects every instance at once, a crowd included. SAM 3 looks at
+  the whole photo and at overlapping tiles of it, each near its own size, so people far away are found too (on a
+  park photo: 98 people instead of 39; ~1–2 s on a GPU). Where two people touch, no strip between them is left out: like
   LightCraft's own Describe since 0.11, each person's mask is joined by SAM 3's semantic mask where that person is
   the nearest.
 - **Three fill models.** LaMa is fast and runs on the processor. SDXL Inpainting makes generative variants. FLUX.1 Fill
   [dev] with Turbo-Alpha is the most realistic.
-- **Shadows and reflections (optional).** OSOR and ObjectClear remove an object together with its shadow and
-  reflection, though only the object is selected. "Include the shadow" uses OSOR to add the shadow to the selection,
-  so every model removes it.
+- **Shadows and reflections.** "Include the shadow" adds the selected objects' shadows to the selection, so every
+  model removes them: SAM 3 finds the shadows that touch them (a long shadow at a low sun), and OSOR, if installed,
+  what goes with each object (its shadow, its reflection), part by part. OSOR and ObjectClear (optional) also remove
+  an object together with its shadow and reflection, though only the object is selected.
 - **No person drawn back (optional).** RORem is SDXL Inpainting retrained only to remove: where SDXL draws a person
   or an odd object back into the hole (the other one of two people, the owner of a bag left outside the selection),
   it draws the background. Commercial use allowed, like SDXL.
@@ -70,6 +74,10 @@ embedded preview, which would still show what was removed.
   close to the model's own size, so the fill is not a small picture enlarged; thin ones also get a LaMa variant, which
   continues what is behind them best. **Full detail** redraws the chosen variant the same way, at the photo's
   resolution, keeping what it shows.
+- **One selection for the whole photo.** Far-apart parts of it are removed separately, each in an area of its own
+  near the model's size: a tourist on one side and a sign on the other are each filled as sharp as if selected
+  alone. Parts that would see each other (a person and their shadow, a crowd) stay one removal, and each part sees
+  the ones before it already filled.
 - **Editable removals,** each with its own variants, kept in a project file; reopening a photo brings them back.
 - **Windows, macOS (Apple Silicon) and Linux,** on NVIDIA, AMD (ROCm), Intel Arc or Apple GPUs. It falls back to
   the processor without one.

@@ -12,10 +12,16 @@ PNG, TIFF, WebP, HEIC e AVIF.
 
 1. In LightCraft scegli una foto e premi **Ctrl+Shift+X** (**Cmd+Shift+X** su Mac).
 2. Nella finestra di AI Remove clicca su ciò che vuoi togliere: SAM 3 lo seleziona tutto. Oppure **descrivilo**:
-   scrivi "people" (in inglese) e SAM 3 seleziona tutte le persone della foto, ognuna per conto suo, così con un clic
+   scrivi "people" (in inglese) e SAM 3 seleziona tutte le persone della foto, anche quelle lontane (guarda la foto
+   intera e a riquadri), ognuna per conto suo, così con un clic
    destro togli dalla selezione quella che vuoi tenere.
-3. Premi **Rimuovi selezione**: vengono generate alcune varianti e tu scegli la migliore. Per togliere anche l'ombra
-   o il riflesso dell'oggetto, premi prima **Includi l'ombra**: li aggiunge alla selezione, in blu.
+3. Premi **Rimuovi selezione**: vengono generate alcune varianti e tu scegli la migliore. Seleziona tutto in una
+   volta: le parti lontane tra loro (una persona a sinistra, un cartello a destra) diventano rimozioni separate, ognuna
+   riempita nella sua area vicino alla misura del modello, una dopo l'altra, così nessuna è un'immagine piccola
+   ingrandita. Le parti che si vedrebbero a vicenda (una persona e la sua ombra, una folla) restano una rimozione
+   sola, e ogni parte vede quelle prima già riempite. Per togliere anche l'ombra
+   o il riflesso degli oggetti, premi prima **Includi l'ombra**: li aggiunge alla selezione, in blu (le ombre che li
+   toccano le trova SAM 3, anche quelle lunghe del sole basso; OSOR, se c'è, anche i riflessi).
    Pali, cavi e cordoni lunghi vengono riempiti a tasselli lungo l'oggetto, ognuno vicino alla misura del modello:
    il riempimento resta nitido invece di essere un'immagine piccola ingrandita. Per quelli sottili si aggiunge una
    variante LaMa, che continua meglio ciò che c'è dietro. **Dettaglio pieno** ridisegna la variante scelta alla

@@ -619,7 +619,9 @@ class App:
         self.clear_btn = self.button(urow, _("Clear"), self.clear, small=True)
         self.clear_btn.pack(side="left", fill="x", expand=True, padx=(int(6 * k), 0))
         self.shadow_btn = None
-        if self.s.shadow_model():  # OSOR or ObjectClear installed: they find the object's shadow and reflection
+        self.shadow_wait, self.shadow_found, self.shadow_next = 0, [], None
+        # SAM 3 (Describe "shadow") or OSOR / ObjectClear installed: they find the objects' shadows (and reflections)
+        if self.s.shadow_model() or engines.installed("sam3"):
             self.shadow_btn = self.button(sel, "☀  " + _("Include the shadow"), self.include_shadow, small=True)
             self.shadow_btn.configure(state="disabled")
             self.shadow_btn.pack(fill="x", pady=(int(6 * k), 0))
@@ -1046,9 +1048,13 @@ class App:
             if job[0] != "save":
                 s.stop.clear()  # a Stop pressed before this job was for the one before
             try:
-                if job[0] == "new":
+                if job[0] == "new":  # a selection's far-apart parts: removals of their own, one after another
                     __, mask, n, model, prompt = job
-                    self.run_job(None, mask, n, model, prompt)
+                    parts = A.split_selection(mask, s.base_scale)
+                    if len(parts) > 1:
+                        A.log(f"selection in {len(parts)} parts, each a removal in its own area")
+                    for i, part in enumerate(parts):
+                        self.run_job(None, part, n, model, prompt, part=(i + 1, len(parts)))
                 elif job[0] == "more":
                     __, r, n, model, prompt = job
                     if not r.deleted:
@@ -1057,13 +1063,19 @@ class App:
                     __, r, prompt = job
                     if not r.deleted and s.can_refine(r):
                         self.run_refine(r, prompt)
-                elif job[0] == "shadow":
+                elif job[0] == "shadow":  # looked for part by part, as the removals will be made
                     __, mask = job
                     model = s.shadow_model()
-                    secs = (0 if s.engine_loaded(model) else A.expected(f"{model}_load")) + A.expected("shadow")
+                    parts = A.split_selection(mask, s.base_scale)
+                    secs = ((0 if s.engine_loaded(model) else A.expected(f"{model}_load"))
+                            + A.expected("shadow") * len(parts))
                     self.post("job_start", (_("Looking for the shadow"), secs))
                     self.post("job_part", (_("Looking for the shadow"), 0.0, secs))
-                    self.post("shadow", s.find_shadow(mask))
+                    m = None
+                    try:
+                        m = s.find_shadow(mask, parts=parts)
+                    finally:
+                        self.post("shadow", m)  # answered even when stopped: on_shadow waits for both finders
                 elif job[0] == "save":
                     self.post("job_start", (self.save_task(), A.expected("save")))
                     self.post("job_part", (_("Saving"), 0.0, A.expected("save")))
@@ -1076,8 +1088,9 @@ class App:
             finally:
                 self.post("job_end")
 
-    def run_job(self, r, mask, n, model, prompt):
-        """A new removal (r None: from mask) or more variants for r, with a progress plan in expected seconds."""
+    def run_job(self, r, mask, n, model, prompt, part=(1, 1)):
+        """A new removal (r None: from mask; part: which of a split selection's parts) or more variants for r, with a
+        progress plan in expected seconds."""
         s = self.s
 
         def variant_secs(kind):  # a long removal's variants are filled in squares: known once its area is
@@ -1098,7 +1111,8 @@ class App:
                 parts.append(("load", _("Loading {model}", model=A.MODELS[model]), A.expected(f"{model}_load")))
             parts += [("variant", f"{A.MODELS[model]} {i + 1}/{n}", variant_secs("variant")) for i in range(n)]
         total = sum(p[2] for p in parts)
-        self.post("job_start", (f"#{r.id}" if r else _("New removal"), total))
+        new = _("New removal") if part[1] == 1 else _("New removal {i} of {n}", i=part[0], n=part[1])
+        self.post("job_start", (f"#{r.id}" if r else new, total))
         done = 0.0
         i = -1
         while i + 1 < len(parts):  # parts may change once the area is known
@@ -1206,6 +1220,16 @@ class App:
                     best = ", ".join(f"{s:.2f}" for s in sorted(scores, reverse=True)[:8])
                     A.log(f"describe \"{text}\": {len(masks)} found (scores {best}) in {time.time() - t0:.2f}s")
                     self.post("desc", {"text": text, "masks": masks})
+                elif job[0] == "shadows":  # "Include the shadow": SAM 3's shadows that touch the selection
+                    __, sel = job
+                    m = None
+                    try:
+                        masks, __ = sam.describe("shadow", log=A.log)
+                        m = A.shadows_touching(masks, sel, self.s.base_scale)
+                        A.log(f"shadow (SAM 3): {len(masks)} in the photo, {0 if m is None else int(m.sum())} px "
+                              f"touching the selection, in {time.time() - t0:.2f}s")
+                    finally:
+                        self.post("shadow", m)  # answered even on an error: on_shadow waits for both finders
                 else:  # ("refine", op id, points, labels, previous logit)
                     __, oid, pts, labels, logit = job
                     m, logit = sam.refine(pts, labels, logit)
@@ -1313,15 +1337,31 @@ class App:
         A.log(f"update available: {version}")
 
     def on_shadow(self, m):
-        """The shadow/reflection found by "Include the shadow" joins the selection (one step: Undo takes it out)."""
-        if m is None:
-            self.next_status = _("No shadow or reflection found next to the selection")
-        elif not self.ops:  # the selection was cleared in the meantime
+        """A shadow finder's answer ("Include the shadow": SAM 3, OSOR / ObjectClear). Once each has answered, what
+        they found joins the selection (one step: Undo takes it out)."""
+        self.shadow_wait = max(0, self.shadow_wait - 1)
+        if m is not None:
+            self.shadow_found.append(m)
+        if self.shadow_next is not None:  # SAM 3 has answered: OSOR's turn
+            self.jobs.put(("shadow", self.shadow_next))
+            self.shadow_next = None
+            self.busy = True
+            self.update_buttons()
+        if self.shadow_wait:
             return
+        found, self.shadow_found = self.shadow_found, []
+        if found and not self.ops:  # the selection was cleared in the meantime
+            return
+        if found:
+            self.commit(self.ops + [self.new_op("add", np.logical_or.reduce(found), shadow=True)])
+            msg = _("Shadow added to the selection (blue): \"Remove selection\" removes both · {mod}+Z takes it out",
+                    mod=MOD)
         else:
-            self.commit(self.ops + [self.new_op("add", m, shadow=True)])
-            self.next_status = _("Shadow added to the selection (blue): \"Remove selection\" removes both · "
-                                 "{mod}+Z takes it out", mod=MOD)
+            msg = _("No shadow or reflection found next to the selection")
+        if self.busy:  # shown when the job ends
+            self.next_status = msg
+        else:
+            self.status.configure(text=msg)
 
     def on_no_sam(self, _data):
         """No SAM 3 model: selection with the brush (and LightCraft's "Rimuovi" masks) only."""
@@ -1851,12 +1891,22 @@ class App:
             self.update_more()
 
     def include_shadow(self):
-        """"Include the shadow": OSOR (or ObjectClear) finds what goes with the selected object — its shadow, its
-        reflection — and it is added to the selection, in blue, to check before "Remove selection"."""
-        if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None:
+        """"Include the shadow": SAM 3 finds the shadows that touch the selection (Describe "shadow":
+        airemove.shadows_touching), OSOR (or ObjectClear) what goes with each selected object — its shadow, its
+        reflection, part by part — and they join the selection, in blue, to check before "Remove selection"."""
+        if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None or self.shadow_wait:
             return
-        self.jobs.put(("shadow", self.sel_mask.copy()))
-        self.busy = True
+        sel = self.sel_mask.copy()
+        osor = self.s.shadow_model() is not None  # OSOR / ObjectClear: what goes with each object, its reflection too
+        self.shadow_wait = int(self.sam_ready) + int(osor)
+        if self.sam_ready:  # SAM 3's Describe "shadow" first (a few seconds): loading FLUX for OSOR unloads SAM 3
+            self.clicks.put(("shadows", sel))
+            self.shadow_next = sel if osor else None  # OSOR's turn comes in on_shadow
+        elif osor:
+            self.jobs.put(("shadow", sel))
+            self.busy = True
+        if self.shadow_wait:
+            self.status.configure(text=_("Looking for the shadow"))
         self.update_buttons()
 
     def remove_selection(self):
@@ -2263,7 +2313,7 @@ class App:
             self.delete_cur()
             delay = 300
         elif kind == "waitidle":
-            if self.busy or self.jobs.qsize() or self.describing:
+            if self.busy or self.jobs.qsize() or self.describing or self.shadow_wait:
                 self.root.after(500, lambda: self.run_test_actions(actions))
                 return
             delay = 200

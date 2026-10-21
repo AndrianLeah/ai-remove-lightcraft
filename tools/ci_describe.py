@@ -10,6 +10,10 @@ side whose own masks both fade where they touch, one with a hole SAM 3 was unsur
   - an instance's own pixels stay where the semantic mask says no;
   - an instance under the score threshold is dropped; with none above it, nothing is returned;
   - masks come at the photo's size (w, h), not square.
+Describe also looks in overlapping tiles (engines.describe_tiles, merge_instances), so that people far away are found:
+  - the tiles cover the photo, overlap, and turn with a portrait photo;
+  - an instance found again in a tile, or cut by a tile's edge, is dropped; one found only in a tile is kept, at its
+    place in the photo; two people side by side stay two.
 Exit status 1 at the first check that fails.
 
   ci_describe.py DIR
@@ -80,6 +84,33 @@ def run(d):
     expect(not union[int(240.5 * H / S), int(240.5 * W / S)], "the semantic mask alone, far from them, is left out")
     none, kept0 = engines.describe_masks(inst, np.array([0.2, 0.1, 0.3], np.float32), sem, (W, H))
     expect(none == [] and len(kept0) == 0, "nothing above the score: nothing returned")
+
+    # the tiles: a landscape and a portrait photo
+    for size, grid in (((2400, 1600), (3, 2)), ((1600, 2400), (2, 3))):
+        boxes = engines.describe_tiles(size)
+        cover = np.zeros(size[::-1], np.int32)
+        for x0, y0, x1, y1 in boxes[1:]:
+            cover[y0:y1, x0:x1] += 1
+        expect(boxes[0] == (0, 0) + size and len(boxes) == 1 + grid[0] * grid[1] and cover.min() >= 1
+               and cover.max() >= 2 and boxes[1][2] - boxes[1][0] < size[0],
+               f"{size[0]}x{size[1]}: the whole photo, then {grid[0]}x{grid[1]} overlapping tiles covering it")
+
+    # merging: in a 300 x 200 photo, whole = (0, 0, 300, 200), a tile = (100, 0, 300, 200)
+    def box_mask(w, h, y0, y1, x0, x1):
+        m = np.zeros((h, w), bool)
+        m[y0:y1, x0:x1] = True
+        return m
+    whole, tile = (0, 0, 300, 200), (100, 0, 300, 200)
+    found = [(whole, box_mask(300, 200, 50, 150, 40, 80), 0.9),       # a person, found whole
+             (tile, box_mask(200, 200, 52, 148, 0, 30), 0.8),         # ...the same, cut by the tile's left edge
+             (tile, box_mask(200, 200, 60, 90, 150, 160), 0.7),       # someone far away: only the tile sees them
+             (tile, box_mask(200, 200, 60, 90, 150, 160), 0.6),       # ...found twice
+             (whole, box_mask(300, 200, 50, 150, 82, 120), 0.9)]      # a second person, right next to the first
+    masks, scores = engines.merge_instances(found, (300, 200))
+    far = box_mask(300, 200, 60, 90, 250, 260)
+    expect(len(masks) == 3 and all(m.shape == (200, 300) for m in masks),
+           "merged: the two people and the one far away, each once (a duplicate and a cut piece dropped)")
+    expect(any((m == far).all() for m in masks), "the one found only in a tile is at its place in the photo")
 
 
 def main():

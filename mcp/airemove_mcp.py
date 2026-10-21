@@ -410,9 +410,10 @@ TOOLS = [
     ("open_ai_remove", "Open the AI Remove window on LightCraft's active photo (or photo_id).",
      {"type": "object", "properties": {"photo_id": {"type": "integer"}}}, open_ai_remove, False),
     ("remove_with_masks", "Headless removal: the photo's LightCraft masks named \"Remove\" (or \"Remove: <English "
-                          "prompt>\") are filled with the model and written into <name>-AIRemove.dng (a picture: "
+                          "prompt>\") are filled with the model (far-apart parts each as a removal of its own, in its "
+                          "own area) and written into <name>-AIRemove.dng (a picture: "
                           "<name>-AIRemove.jpg..., its own format), stacked on the original (like the window's Save). "
-                          "Can take minutes. Returns the result's path (dng / file) and photo id.",
+                          "Can take minutes. Returns the result's path (dng / file), photo id and the removals made.",
      {"type": "object", "properties": {
          "model": {"type": "string", "enum": FILL_MODELS,
                    "description": "osor / objectclear also remove the object's shadow and reflection; qwen removes "
