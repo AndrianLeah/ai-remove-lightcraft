@@ -794,6 +794,7 @@ class Qwen:
     px: its working size of 1024 px is 1.8x FLUX's 768.
     Licence: Qwen Research License, NON-commercial (like FLUX.1 Fill dev). Qwen3-VL: Apache 2.0."""
     name = "Qwen"
+    hint = ""  # the names Describe found in the removal's selection (QWEN_HINT), set before each one
 
     def __init__(self, log=print):
         dev = device()
@@ -832,7 +833,6 @@ class Qwen:
         self.names = {}  # key -> what Qwen3-VL saw in an oblong area's selection (named once, for all its squares)
         self.what = None  # what Qwen3-VL saw in the last removal's selection
         self.drawn = None  # (width, height) the last fill was drawn at
-        self.hint = ""  # the names Describe found in the removal's selection (QWEN_HINT), set before each one
         log(f"Qwen-Image ready ({dev}, {self.quant}, {len(QWEN_SIGMAS)} steps)")
 
     def _latents(self, img):
