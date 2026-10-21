@@ -109,6 +109,7 @@ Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/hug
 |---|---|---|---|
 | **LaMa** | Oggetti piccoli e medi su sfondi semplici (muro, cielo, prato, asfalto). Gira sul processore, un solo risultato in pochi secondi. | 0,2 GB | Apache-2.0 |
 | **SDXL** | Aree medie con dettagli: inventa contenuto coerente con la scena e ogni variante è diversa. Circa 8–15 s a variante con una GPU. | 6,8 GB | CreativeML Open RAIL++-M |
+| **RORem** (facoltativo, sui file di SDXL) | SDXL riaddestrato solo per togliere: dove SDXL ridisegna una persona o un oggetto strano nel buco (l'altra di due persone vicine, chi porta una borsa rimasta fuori dalla selezione), disegna lo sfondo. Circa 7 s a variante con una GPU. Sui buchi lunghi e sottili (un palo) SDXL è più pulito. | 4,8 GB | Apache-2.0, su CreativeML Open RAIL++-M di SDXL |
 | **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. | 16,4 GB | FLUX.1 [dev] Non-Commercial |
 | **SAM 3** | La selezione con un clic (senza, si usa il pennello). | 3,2 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
 | **OSOR** (facoltativo, su FLUX) | Toglie l'oggetto insieme alla sua ombra e al riflesso, in un solo passo (3–8 s). È lui che trova l'ombra per "Includi l'ombra". | 0,6 GB | FLUX.1 [dev] Non-Commercial |
@@ -117,8 +118,8 @@ Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir sdxl=~/.cache/hug
 
 **Uso commerciale.** FLUX, OSOR, ObjectClear e Qwen-Image sono solo per uso non commerciale. Vanno bene per le tue foto,
 ma non per lavori pagati o per clienti senza una licenza dei loro autori: Black Forest Labs per FLUX e OSOR, S-Lab per
-ObjectClear, il team Qwen di Alibaba per Qwen-Image. Per i lavori pagati usa LaMa o SDXL (SDXL con le sue limitazioni
-d'uso). La licenza di FLUX chiede anche di controllare i risultati prima di condividerli, e di dire che sono stati
+ObjectClear, il team Qwen di Alibaba per Qwen-Image. Per i lavori pagati usa LaMa, SDXL o RORem (SDXL e RORem con le
+limitazioni d'uso di SDXL). La licenza di FLUX chiede anche di controllare i risultati prima di condividerli, e di dire che sono stati
 modificati con l'AI dove la legge lo richiede. È un riassunto, non un parere legale: valgono le licenze.
 
 Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plaster wall" o "dark doorway". Con
