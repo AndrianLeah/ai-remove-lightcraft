@@ -246,7 +246,7 @@ def mcp(d):
     expect(rep.get("installed") is installed, f"check_system: installed {installed}")
     expect((rep.get("lightcraft") or {}).get("reachable") is False, "check_system: LightCraft not reachable")
     m = rep.get("models") or {}
-    expect(sorted(m) == ["flux", "lama", "osor", "qwen", "rorem", "sam3", "sdxl"]
+    expect(sorted(m) == ["dai", "flux", "lama", "osor", "qwen", "rorem", "sam3", "sdxl"]
            and all(v.get("what") and v.get("licence") and v.get("gb") is not None for v in m.values()),
            "check_system: every model with what it is for, its size and licence")
     expect((m.get("lama") or {}).get("installed") is installed, f"check_system: LaMa installed {installed}")
