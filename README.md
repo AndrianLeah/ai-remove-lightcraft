@@ -34,6 +34,12 @@ JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
 5. **Save to LightCraft** writes `<name>-AIRemove.dng` (from a JPEG: `<name>-AIRemove.jpg`, and so on), stacked on
    the original with the same development.
 
+**Reflections in glass.** For a photo through a shop window or a display case, choose **DAI** under *Remove
+reflections* in the model menu and press **Remove reflections**: with nothing selected it works on the whole photo,
+with a selection only there, fading out around it. Like Lightroom's Remove Reflections, it takes away the light the
+glass reflects (the street seen in the window, the veil over what is behind it), and it takes it off the raw values
+themselves: nothing is redrawn, every detail and the sensor's own noise stay.
+
 Every removal stays editable: regenerate it, pick another variant or delete it whenever you like. Everything lives in
 one project file next to the photo (`<photo>.airemove`). The original is never modified.
 
@@ -67,6 +73,11 @@ embedded preview, which would still show what was removed.
   not for people. Qwen-Image 2.1 (optional, 16 GB GPUs): people and objects on complex backgrounds; it first names
   everything selected ("the woman and her handbag"; what you described, such as "person", "bag", "umbrella", is
   named too), then removes it by name and redraws the scene behind it.
+- **Remove reflections,** like Lightroom's: DAI (Dereflection Any Image, AAAI 2026) finds the light a pane of glass
+  reflects over the photo, in a few seconds on a GPU, and AI Remove subtracts it from the RAW's own values, so the
+  photo keeps all of its detail. Its variants take away 75 %, 100 %, 50 % or 125 % of what DAI found; 75 % came
+  closest to Lightroom's own result on a shop window (measured against the reflection Lightroom took away, which it
+  stores in its `.acr` file).
 - **Shadows and reflections.** "Include the shadow" adds the selected objects' shadows to the selection, so every
   model removes them: SAM 3 finds the shadows that touch them (a long shadow at a low sun), and OSOR, if installed,
   what goes with each object (its shadow, its reflection), part by part.
@@ -190,6 +201,7 @@ Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cach
 | SAM 3 | One-click selection, and selecting by describing ("people"); without it: the brush | | 3.2 GB (0 if LightCraft has it) | SAM License (Meta) |
 | OSOR (optional, on FLUX) | Finds the shadows and reflections next to what you select, for "Include the shadow" (with SAM 3) | | 0.6 GB | FLUX.1 [dev] Non-Commercial |
 | Qwen-Image 2.1 Turbo (optional) | People and objects on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~30 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | When in a hurry: about a minute for a removal's first variant | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
+| DAI (optional) | Reflections in glass, "Remove reflections": the whole photo or a selection, a few seconds on a GPU; the reflection is taken off the raw values, nothing is redrawn | Filling anything; a sharp, bright reflection (trees mirrored in a window, the sky in a puddle) is only partly taken away | 5.7 GB | Apache-2.0, a fine-tune of Stable Diffusion 2 (CreativeML Open RAIL++-M) |
 
 The installer shows the same descriptions, sizes and licences (from `airemove/model_files.py`).
 
@@ -201,7 +213,8 @@ its folder from AI Remove's own models (7.3 GB). OSOR is no longer a fill model 
 
 **Commercial use.** FLUX, OSOR and Qwen-Image are for non-commercial use only. They are fine for your own photos, but
 not for paid work or clients without a licence from their makers: Black Forest Labs for FLUX and OSOR, Alibaba's Qwen
-team for Qwen-Image. For paid work, use LaMa or RORem (with SDXL's usage restrictions). FLUX's licence also asks you to check its results before sharing them, and to say they were edited with
+team for Qwen-Image. For paid work, use LaMa or RORem (with SDXL's usage restrictions), and DAI for reflections (with
+Stable Diffusion 2's). FLUX's licence also asks you to check its results before sharing them, and to say they were edited with
 AI where the law requires it. This is a summary, not legal advice: the licences themselves decide.
 
 An optional prompt **in English** guides FLUX, for example "old plaster wall" or "dark doorway". For Qwen-Image it
@@ -231,7 +244,8 @@ open, otherwise on a photo you choose ([on its own](#how-it-works)). On a Mac yo
 
 **Headless.** A LightCraft mask named `Remove` (or `Rimuovi`, or `Remove: <English prompt>`) on the photo is the
 starting selection. `airemove-cli --auto rorem` fills it without opening the window, writes the result, and prints it
-as JSON.
+as JSON. `airemove-cli --auto dai` removes the reflections from it, or from the whole photo when it has no such mask
+(`dai2` takes away 100 %, `dai3` 50 %, `dai4` 125 %).
 
 ### Files it writes
 

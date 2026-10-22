@@ -24,6 +24,10 @@ QWEN_GGUF = "qwen-image-2.1-turbo-{}.gguf"
 TURBO_WEIGHTS = "diffusion_pytorch_model.safetensors"  # alimama's FLUX.1-Turbo-Alpha LoRA
 OSOR_WEIGHTS = "osor-fluxfill/weights/fluxfill_phase2.pth"
 SAM3_WEIGHTS = "model.safetensors"
+# "Remove reflections": the share of the reflection's light DAI found that each variant takes away, in this order. DAI
+# takes away more than Lightroom: 1.4 times as much on a statue behind a shop window (Lightroom's own result, from its
+# .acr sidecar); at 75 % it came closest, there and over the whole photo
+REFLECTION_STRENGTHS = (0.75, 1.0, 0.5, 1.25)
 
 
 def _json(p):
@@ -75,6 +79,11 @@ def _qwen3_vl_fp8(d):
     return ("Qwen3VLForConditionalGeneration" in (c.get("architectures") or [])
             and (c.get("quantization_config") or {}).get("quant_method") == "fp8"
             and (c.get("text_config") or {}).get("hidden_size") == 4096)
+
+
+def _dai(d):
+    """DAI's folder (Dereflection Any Image): its pipeline, as its model_index.json says, with its second decoder."""
+    return _json(d / "model_index.json").get("_class_name") == "DAIPipeline"
 
 
 def _sam3(d):
@@ -159,6 +168,17 @@ PARTS = {p.name: p for p in (
     Part("qwen3-vl-8b-fp8", 9.88, ["config.json", "model.safetensors.index.json", "model-00001-of-00002.safetensors",
                                    "model-00002-of-00002.safetensors"],
          "Qwen/Qwen3-VL-8B-Instruct-FP8", ["*.json", "*.safetensors", "*.txt"], check=_qwen3_vl_fp8),
+    # DAI: its UNet and ControlNet as released (fp32, there is no fp16 copy), the VAE and the text encoder in fp16, and
+    # vae_2, its decoder with skip connections
+    Part("dai", 5.69, ["model_index.json", "unet/diffusion_pytorch_model.safetensors",
+                       "controlnet/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.fp16.safetensors",
+                       "vae_2/diffusion_pytorch_model.safetensors", "text_encoder/model.fp16.safetensors",
+                       "tokenizer/vocab.json"],
+         "sjtu-deepvision/dereflection-any-image-v0",
+         ["model_index.json", "unet/*", "controlnet/*", "vae/config.json",
+          "vae/diffusion_pytorch_model.fp16.safetensors", "vae_2/*", "text_encoder/config.json",
+          "text_encoder/model.fp16.safetensors", "tokenizer/*", "scheduler/*"],
+         check=_dai),
 )}
 # the same words as the README's model table and the window's texts (ui.py show_model_info)
 MODELS = {
@@ -189,6 +209,11 @@ MODELS = {
                                              "a GPU with 16 GB or more; ~30 s per variant."),
                   "Qwen Research License (non-commercial); Qwen3-VL: Apache-2.0",
                   ["qwen-image-2.1-turbo", "qwen-image-2.1-turbo-gguf", "qwen3-vl-8b-fp8"]),
+    "dai": Model("DAI (reflections)", N_("Removes reflections in glass — a shop window, a display case, a car "
+                                         "window: \"Remove reflections\" takes away the light the glass reflects, "
+                                         "over the whole photo or the selection, and keeps every detail. A few "
+                                         "seconds on a GPU."),
+                 "Apache-2.0, on Stable Diffusion 2's CreativeML Open RAIL++-M", ["dai"]),
 }
 
 

@@ -1,7 +1,8 @@
 """Engines for AI Remove: SAM 3 (selection), LaMa (ONNX, processor), SDXL Inpainting and FLUX.1 Fill (diffusers),
 RORem (SDXL Inpainting retrained to remove: its UNet in SDXL's pipeline), OSOR (a mode of the FLUX engine: the same
 transformer with OSOR's adapter), which removes an object together with its shadow and reflection and finds the
-shadow for "Include the shadow", and Qwen-Image 2.1, which removes the selection by name.
+shadow for "Include the shadow", Qwen-Image 2.1, which removes the selection by name, and DAI, which finds the light a
+pane of glass reflects ("Remove reflections").
 
 The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by torch as "cuda"), Intel Arc (xpu),
 Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and Qwen-Image
@@ -1025,4 +1026,165 @@ class Qwen:
     def unload(self):
         del self.pipe
         self.cond = {}
+        _free_gpu()
+
+
+# ------------------------------------------------------------------------------------------------ DAI (reflections)
+DAI_SIZE = 1024  # the long side DAI sees an area at
+DAI_PROMPT = "remove glass reflection"  # the prompt it was trained with (its pipeline's own)
+# The light DAI takes away is subtracted as DAI found it, not blurred: blurred by 0.6 % of the area's long side it was
+# a little closer to Lightroom's on a statue behind a shop window (error 0.20 of its size instead of 0.21), but a sharp,
+# bright reflection (trees in a museum's window, the sky in a puddle) became black blotches with dark halos.
+REFLECTION_STRENGTHS = mf.REFLECTION_STRENGTHS  # each variant's share of that light, in order
+
+
+def _resized(a, size, how):
+    """An HxWx3 float array resized channel by channel (PIL's float images): `size` is (width, height)."""
+    return np.stack([np.asarray(Image.fromarray(np.ascontiguousarray(a[..., c], np.float32)).resize(size, how))
+                     for c in range(3)], -1)
+
+
+def reflection_light(src, clean):
+    """The light a reflection adds to `src` (an area as floats HxWx3: sRGB-encoded linear light, 0..1, as rendered —
+    not rounded to 8 bits, whose steps the subtraction would put into the raw), at the size of `clean` (src without the
+    reflection as the model drew it, smaller, floats too): what src has and clean has not, in linear light, never
+    negative (a reflection only adds light). float16 HxWx3: what a project keeps of a reflection removal (its variants
+    are rebuilt from it). Enlarged to src's size (enlarged_light) and taken away from it, it leaves every detail of src:
+    the model's size only sets how sharp the reflection's own edges can be."""
+    from rawdng import RawDNG
+    a = RawDNG.inv_oetf(np.asarray(src, np.float32)).astype(np.float32)
+    light = np.clip(_resized(a, clean.shape[1::-1], Image.BOX) - RawDNG.inv_oetf(np.asarray(clean, np.float32)), 0,
+                    None)
+    return light.astype(np.float16)
+
+
+def enlarged_light(light, size):
+    """reflection_light at an area's size (width, height): float32 HxWx3."""
+    light = light.astype(np.float32)
+    return light if light.shape[1::-1] == tuple(size) else np.clip(_resized(light, size, Image.BICUBIC), 0, None)
+
+
+def without_reflection(src, light, strength, alpha=None):
+    """src (PIL, sRGB-encoded linear light) with `strength` of a reflection's light (enlarged_light) taken away, where
+    alpha (HxW 0..1, default everywhere) says."""
+    from rawdng import RawDNG
+    a = RawDNG.inv_oetf(np.asarray(src.convert("RGB"), np.float32) / 255)
+    take = light * strength if alpha is None else light * (strength * alpha[..., None])
+    return Image.fromarray((RawDNG.oetf(a - take) * 255).round().astype(np.uint8))
+
+
+class DAI:
+    """DAI, Dereflection Any Image (Hu et al., AAAI 2026): Stable Diffusion 2 retrained to see through glass, in one
+    step. Its ControlNet reads the photo's latents, the UNet draws the scene behind the glass from nothing (zero
+    latents, t = 0) with the fixed prompt, and a second VAE decoder (vae_2) gets the photo's own detail through skip
+    connections from its encoder. ~2 GB on the GPU in bf16, a few seconds for an area at 1024 px.
+
+    It sees the area at DAI_SIZE on its long side; what it took away is measured there and subtracted from the area at
+    its full resolution (reflection_light), so nothing of the photo is redrawn. Its pipeline (DAIPipeline, with its own
+    ControlNetVAEModel and CustomAutoencoderKL classes) is written here in a few lines on diffusers' own classes: the
+    same weights, the same computation. Licence: Apache 2.0 (weights, a fine-tune of Stable Diffusion 2: its CreativeML
+    Open RAIL++-M restrictions apply too), MIT (its code)."""
+    name = "DAI"
+
+    def __init__(self, log=print):
+        dev = device()
+        import torch
+        from diffusers import AutoencoderKL, ControlNetModel, UNet2DConditionModel
+        from diffusers.utils import logging as dl
+        from safetensors.torch import load_file
+        from transformers import AutoTokenizer, CLIPTextModel
+        from transformers.utils import logging as hf_logging
+        dl.set_verbosity_error()  # its configs name its own classes (ControlNetVAEModel, CustomAutoencoderKL)
+        hf_logging.set_verbosity_error()
+        self.torch, self.dev = torch, dev
+        self.dtype = torch.float32 if dev == "cpu" else torch.bfloat16
+        d = mf.part_dir("dai")
+        self.unet = UNet2DConditionModel.from_pretrained(d, subfolder="unet", torch_dtype=self.dtype).to(dev).eval()
+        self.cn = ControlNetModel.from_pretrained(d, subfolder="controlnet", torch_dtype=self.dtype).to(dev).eval()
+        self.vae = AutoencoderKL.from_pretrained(d, subfolder="vae", variant="fp16",
+                                                 torch_dtype=self.dtype).to(dev).eval()
+        # vae_2 in float32: its picture is what the reflection is measured against (reflection_light), and in bf16
+        # its last layers round it as coarsely as 8 bits would, noise the subtraction would put into the raw
+        self.vae2 = AutoencoderKL.from_pretrained(d, subfolder="vae_2", torch_dtype=torch.float32).to(dev).eval()
+        # vae_2's encoder also gives the decoder its skip connections, through one 1x1 convolution per block (zero
+        # convolutions while it was trained): its file has them, diffusers' AutoencoderKL does not
+        sd = load_file(str(d / "vae_2" / "diffusion_pytorch_model.safetensors"))
+        self.zero = []
+        for i in range(len(self.vae2.encoder.down_blocks)):
+            w, b = sd[f"encoder.zero_convs.{i}.conv.weight"], sd[f"encoder.zero_convs.{i}.conv.bias"]
+            c = torch.nn.Conv2d(w.shape[1], w.shape[0], 1)
+            c.weight.data, c.bias.data = w, b
+            self.zero.append(c.to(dev).eval())
+        tok = AutoTokenizer.from_pretrained(d, subfolder="tokenizer", use_fast=False)
+        te = CLIPTextModel.from_pretrained(d, subfolder="text_encoder", variant="fp16", torch_dtype=self.dtype).to(dev)
+        with torch.no_grad():  # the prompt never changes: encoded once, the encoder freed
+            ids = tok(DAI_PROMPT, padding="max_length", max_length=tok.model_max_length, truncation=True,
+                      return_tensors="pt").input_ids.to(dev)
+            self.prompt = te(ids)[0]
+        del te
+        _free_gpu()
+        log(f"DAI ready ({dev}, {str(self.dtype).split('.')[-1]})")
+
+    def _control(self, z, t):
+        """The ControlNet's features of the photo's latents z, as its ControlNetVAEModel gives them: the photo is the
+        sample itself (no conditioning picture), the blocks' outputs go to the UNet as they are (no zero convs)."""
+        cn = self.cn
+        emb = cn.time_embedding(cn.time_proj(t).to(z.dtype))
+        s = cn.conv_in(z)
+        res = [s]
+        for blk in cn.down_blocks:
+            if getattr(blk, "has_cross_attention", False):
+                s, r = blk(hidden_states=s, temb=emb, encoder_hidden_states=self.prompt)
+            else:
+                s, r = blk(hidden_states=s, temb=emb)
+            res += list(r)
+        return res, cn.mid_block(s, emb, encoder_hidden_states=self.prompt)
+
+    def _decode(self, z, x):
+        """vae_2's decoder on z, with the skip connections its encoder takes from picture x (CustomAutoencoderKL)."""
+        torch = self.torch
+        enc, dec = self.vae2.encoder, self.vae2.decoder
+        s, skips = enc.conv_in(x), []
+        for i, blk in enumerate(enc.down_blocks):
+            s = blk(s)
+            o = self.zero[i](s)
+            skips.append(o if i == len(enc.down_blocks) - 1 else
+                         torch.nn.functional.interpolate(o, scale_factor=2, mode="bilinear", align_corners=False))
+        if self.vae2.post_quant_conv is not None:
+            z = self.vae2.post_quant_conv(z)
+        s = dec.mid_block(dec.conv_in(z), None)
+        for i, blk in enumerate(dec.up_blocks):
+            s = blk(s + skips[-(i + 1)])
+        return dec.conv_out(dec.conv_act(dec.conv_norm_out(s)))
+
+    def remove(self, src, progress=None):
+        """src (an area: floats HxWx3, sRGB-encoded 0..1, or a PIL picture) without its reflection, drawn at DAI_SIZE
+        on its long side (at most src's own size): (picture as float32 HxWx3, sRGB-encoded 0..1 — not rounded to 8
+        bits —, its size / src's)."""
+        torch = self.torch
+        F = torch.nn.functional
+        a = (np.asarray(src.convert("RGB"), np.float32) / 255 if isinstance(src, Image.Image)
+             else np.asarray(src, np.float32))
+        h, w = a.shape[:2]
+        big = max(w, h) > DAI_SIZE
+        sw, sh = (w * DAI_SIZE // max(w, h), h * DAI_SIZE // max(w, h)) if big else (w, h)
+        x = torch.from_numpy(np.ascontiguousarray(a)).permute(2, 0, 1)[None].to(self.dev)
+        if big:  # as its pipeline (Marigold's image processor): antialiased bilinear, edges repeated to 8 px
+            x = F.interpolate(x, size=(sh, sw), mode="bilinear", antialias=True, align_corners=False)
+        x = F.pad(x, (0, -sw % 8, 0, -sh % 8), mode="replicate").mul(2).sub(1)
+        if progress:
+            progress(0, 1)
+        with torch.no_grad():
+            z = self.vae.encode(x.to(self.dtype)).latent_dist.mode() * self.vae.config.scaling_factor
+            t = torch.zeros((1,), device=self.dev, dtype=torch.long)
+            down, mid = self._control(z, t)
+            out = self.unet(torch.zeros_like(z), t, encoder_hidden_states=self.prompt,
+                            down_block_additional_residuals=down, mid_block_additional_residual=mid).sample
+            y = self._decode(out.float() / self.vae2.config.scaling_factor, x)[0, :, :sh, :sw]
+        y = ((y.clamp(-1, 1) + 1) / 2).permute(1, 2, 0).cpu().numpy()
+        _free_gpu()
+        return y, sw / w
+
+    def unload(self):
+        del self.unet, self.cn, self.vae, self.vae2, self.zero, self.prompt
         _free_gpu()

@@ -64,6 +64,9 @@ Setup of the server: `mcp/README.md`.
   2. Run `airemove-cli --auto rorem` (or `lama`, `flux`, `qwen`; `rorem3` to use the 3rd variant; `sdxl` and `osor`
      still work, `objectclear` runs OSOR), optionally with `--id PHOTO_ID`. Far-apart parts of the masks become
      removals of their own. Add `--shadow` to remove the object's shadow and reflection too (needs OSOR installed).
+     Reflections in glass: `airemove-cli --auto dai` (needs the `dai` model) takes them off the masks as one removal,
+     or off the whole photo when it has no such mask; `dai2` takes away 100 % of what DAI found, `dai3` 50 %, `dai4`
+     125 % (the default, `dai`, 75 %). The MCP tool for it is `remove_reflections`.
   3. It prints one JSON line with the result's path (`dng`, and `file`: the same, also for a picture) and its
      LightCraft photo id.
 - **Projects:** `<photo>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each

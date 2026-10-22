@@ -17,8 +17,10 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                then a long one in tiles: tools/ci_tiles.py (a cord across a synthetic area, LaMa),
                                then one on each kind of picture: tools/ci_pictures.py (JPEG, PNG, TIFF, WebP, HEIC,
                                AVIF opened on their own, LaMa, the copy in the same format, its metadata), and
-                               Describe's masks from synthetic SAM 3 output: tools/ci_describe.py, and how "Remove
-                               selection" splits a selection into removals: tools/ci_split.py
+                               Describe's masks from synthetic SAM 3 output: tools/ci_describe.py, how "Remove
+                               selection" splits a selection into removals: tools/ci_split.py, and "Remove
+                               reflections" with a stand-in for DAI: tools/ci_reflections.py (the reflection's light
+                               taken off the raw values)
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
                                app, its menu entry, its .airemove file type and, on Windows, its Settings > Apps entry
                                are gone; the user's own model folders are still there
@@ -42,7 +44,7 @@ OS = system.system()
 WIN = OS == "windows"
 PROTOCOL = "2025-06-18"
 TOOLS = ["ai_remove_guide", "check_system", "install", "install_status", "configure_lightcraft", "open_ai_remove",
-         "remove_with_masks", "project_info", "uninstall"]
+         "remove_with_masks", "remove_reflections", "project_info", "uninstall"]
 WIN_UNINSTALL_KEY = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\AIRemoveLightCraft"
 
 
@@ -280,6 +282,8 @@ def remove(d):
     expect(r.returncode == 0, f"Describe's masks: exit status 0 (it was {r.returncode})")
     r = run([py, ROOT / "tools" / "ci_split.py", d])
     expect(r.returncode == 0, f"a selection split into removals: exit status 0 (it was {r.returncode})")
+    r = run([py, ROOT / "tools" / "ci_reflections.py", d])
+    expect(r.returncode == 0, f"\"Remove reflections\" end to end: exit status 0 (it was {r.returncode})")
 
 
 def uninstall(d):

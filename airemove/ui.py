@@ -90,21 +90,23 @@ PANEL = CARD
 RED = (235, 64, 52)
 SHADOW_RGB = (56, 198, 244)  # the selection's shadow part ("Include the shadow")
 WHITE = (240, 240, 240)
-MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "qwen", "rorem"]  # tests: remove:n,i / model:i use these
+MODEL_KEYS = ["sdxl", "flux", "lama", "osor", "qwen", "rorem", "dai"]  # tests: remove:n,i / model:i use these
 # the models' own names, as the menu shows them (variant labels keep their short ones: airemove.MODELS)
 MODEL_NAMES = {"sdxl": "SDXL", "flux": "FLUX Fill", "lama": "LaMa", "osor": "OSOR",
-               "qwen": "Qwen-Image", "rorem": "RORem"}
+               "qwen": "Qwen-Image", "rorem": "RORem", "dai": "DAI"}
 # the menu: what fills the selection, quickest first, then what takes the object's shadow too
 # the menu: four models, each with a job of its own (model_caveat says what each is not for). SDXL stays an engine
 # (RORem runs on its files, "Full detail" without FLUX) and OSOR too ("Include the shadow"), out of the menu: SDXL drew
 # a person back where RORem drew none, OSOR's fills are softer than FLUX's after "Include the shadow".
-MENU_MODELS = ("lama", "rorem", "flux", "qwen")
-MODEL_GROUPS = ((N_("Fill the selection"), MENU_MODELS),)
+FILL_MENU = ("lama", "rorem", "flux", "qwen")
+# then what takes a reflection away instead: "Remove reflections" works on the whole photo with nothing selected
+MENU_MODELS = FILL_MENU + A.REFLECTION_MODELS
+MODEL_GROUPS = ((N_("Fill the selection"), FILL_MENU), (N_("Remove reflections"), A.REFLECTION_MODELS))
 # what the text field is for: what to put there (SDXL, FLUX Fill), the name of what to remove (Qwen-Image: it names
 # the selection itself, a name corrects it) or nothing (LaMa and OSOR read no text; RORem works with its
-# authors' fixed prompt and no guidance, which a text would hardly steer)
+# authors' fixed prompt and no guidance, which a text would hardly steer; DAI has its own fixed prompt)
 PROMPT_MODE = {"sdxl": "fill", "flux": "fill", "qwen": "name", "lama": None, "osor": None,
-               "rorem": None}
+               "rorem": None, "dai": None}
 # every model of airemove.ENGINES (the one list of models) has a name, a place in the menu and a text mode here: a model
 # added there and forgotten here stops the window at once, instead of a menu that cannot show it
 assert (set(MODEL_KEYS) == set(MODEL_NAMES) == set(PROMPT_MODE) == set(A.ENGINES)
@@ -980,7 +982,9 @@ class App:
             "lama": ("LaMa", _("Quick fill · plain backgrounds"), "~" + self.fmt_s(A.expected("lama"))),
             "rorem": ("RORem", _("People and objects · draws no one back"), each("rorem_variant")),
             "flux": ("FLUX Fill", _("Architecture · large areas"), each("flux_variant")),
-            "qwen": ("Qwen-Image", _("People and objects · complex backgrounds"), each("qwen_variant"))}
+            "qwen": ("Qwen-Image", _("People and objects · complex backgrounds"), each("qwen_variant")),
+            "dai": ("DAI", _("Reflections in glass · whole photo or selection"),
+                    "~" + self.fmt_s(A.expected("dai_variant")))}
         # one line per model (tests and the saved setting go by it): its name first
         self.model_labels = {m: f"{n} · {u} · {t}" for m, (n, u, t) in self.model_meta.items()}
         self.picker.set_models(self.model_meta, keys)
@@ -996,7 +1000,9 @@ class App:
                        "draws a person or an odd object back, it draws the background. Commercial use allowed."),
             "flux": _("Large or difficult areas: architecture, perspective, light."),
             "qwen": _("A person or an object in front of steps, columns, railings: it names what you selected and "
-                      "redraws what is behind it.")}[m]
+                      "redraws what is behind it."),
+            "dai": _("A photo through glass — a shop window, a display case: it takes away the light the glass "
+                     "reflects, over the whole photo (nothing selected) or over the selection.")}[m]
 
 
     def model_caveat(self, m):
@@ -1007,7 +1013,9 @@ class App:
             "rorem": _("On a long thin hole (a pole) it can leave a seam: there LaMa or FLUX Fill."),
             "flux": _("Not for people: in a street or a crowd it draws people back where they were. For people: "
                       "RORem or Qwen-Image."),
-            "qwen": _("Slow: about a minute for the first variant of a removal. Non-commercial licence.")}.get(m, "")
+            "qwen": _("Slow: about a minute for the first variant of a removal. Non-commercial licence."),
+            "dai": _("For reflections only: it fills nothing. A sharp, bright reflection (trees mirrored in a "
+                     "window, the sky in a puddle) is only partly taken away.")}.get(m, "")
 
     def model_keys(self):
         """The menu's models installed and sensible on this computer (LaMa always), in its order."""
@@ -1040,7 +1048,13 @@ class App:
                        "bag left outside the selection), RORem draws what is behind. On a long thin hole (a pole) or up a "
                        "path it can leave a seam or a rock face: there LaMa or FLUX Fill. It uses SDXL's files. "
                        "Licence Apache-2.0 (commercial use allowed).",
-                       time=self.fmt_s(A.expected("rorem_variant")))}
+                       time=self.fmt_s(A.expected("rorem_variant"))),
+            "dai": _("DAI (Dereflection Any Image) — it finds the light the glass reflects over the photo (the "
+                     "street in a shop window, a veil over what is behind it) and takes it away from the RAW itself: "
+                     "every detail stays, nothing is redrawn. With nothing selected, the whole photo; with a "
+                     "selection, there, fading out around it. ~{time}; its variants take away 75 % of it (closest to "
+                     "Lightroom's Remove Reflections), 100 %, 50 %, 125 %. Licence Apache-2.0.",
+                     time=self.fmt_s(A.expected("dai_variant")))}
         if hasattr(self, "model_info"):
             self.model_info.configure(text=info[self.model_key()])
 
@@ -1114,9 +1128,19 @@ class App:
         r, m = self.cur, self.model_key()
         on = r is not None and not r.deleted and not self.writing
         n = 1 if m == "lama" else int(self.count.get())
+        reflect = m in A.REFLECTION_MODELS
+        if on and reflect:  # its variants: one per strength, the ones it has not got yet
+            n = min(n, len(engines.REFLECTION_STRENGTHS) - r.counts.get(m, 0))
         first = on and self.waiting(r)  # a part that waits for its model: its first variants, the main action
         if not on:
             text = "＋  " + _("More variants for a removal (choose one below)")
+        elif r.reflects() and not reflect:  # a reflection taken away gets no fill, a fill no reflection
+            text, on = _("#{id} takes a reflection away: choose DAI above for more", id=r.id), False
+        elif reflect and not r.reflects():
+            text, on = _("#{id} fills a selection: reflections come off a new selection or the whole photo",
+                         id=r.id), False
+        elif reflect and n <= 0:
+            text, on = _("#{id} has a variant at every strength already", id=r.id), False
         elif first:
             text = "▶  " + _n("Generate #{id} with {model} ({n} variant)",
                               "Generate #{id} with {model} ({n} variants)", n, id=r.id, model=MODEL_NAMES[m])
@@ -1198,8 +1222,10 @@ class App:
     def update_buttons(self):
         has = self.sel_mask is not None and bool(self.sel_mask.any())
         ready = self.s.raw is not None and not self.writing
-        self.gen_btn.configure(state="normal" if (has and ready) else "disabled")
-        self.split_btn.configure(state="normal" if (has and ready) else "disabled")
+        reflect = self.model_key() in A.REFLECTION_MODELS  # the whole photo with nothing selected; never in parts
+        self.gen_btn.configure(state="normal" if ((has or reflect) and ready) else "disabled",
+                               text=(_("Remove reflections") if reflect else _("Remove selection")) + "  ⏎")
+        self.split_btn.configure(state="normal" if (has and ready and not reflect) else "disabled")
         self.undo_btn.configure(state="normal" if self.history else "disabled")
         self.clear_btn.configure(state="normal" if self.ops else "disabled")
         live = [r for r in self.s.removals if not r.deleted]
@@ -1251,7 +1277,9 @@ class App:
             try:
                 if job[0] == "new":  # a selection's parts: removals of their own, one after another
                     __, mask, units, described, n, model, prompt = job
-                    parts = A.split_selection(mask, s.base_scale, units=units)
+                    # a reflection is light over all of the selection: one removal
+                    parts = ([mask] if model in A.REFLECTION_MODELS else
+                             A.split_selection(mask, s.base_scale, units=units))
                     if len(parts) > 1:
                         A.log(f"selection in {len(parts)} parts, each a removal in its own area")
                     for i, part in enumerate(parts):
@@ -1332,7 +1360,8 @@ class App:
             parts.append(("fit", _("Preparing the area"), 2 * A.expected("area")))
         elif not s.area_ready(r):  # a reopened removal: its area is rendered from the RAW at its first change
             parts.append(("prep", _("Preparing the area"), A.expected("area")))
-        if (r is not None and not r.candidates and not r.counts and model != "lama" and s.thin(r)):
+        reflect = model in A.REFLECTION_MODELS  # no LaMa with it: nothing is filled
+        if (r is not None and not r.candidates and not r.counts and model != "lama" and not reflect and s.thin(r)):
             parts.append(("lama", "LaMa", variant_secs("lama")))  # a part's first variants: as a new removal's
         if model == "lama":  # only the model the user picked runs
             if r is None or not any(c[0] == "LaMa" for c in r.candidates):
@@ -1355,9 +1384,10 @@ class App:
             self.post("job_part", (tag, done, secs))
             if kind in ("area", "fit"):
                 if kind == "area":
-                    r = s.new_removal(mask, hints)
+                    r = s.new_removal(mask, hints, reflection=reflect)
                     self.post("removal_new", r)
-                    if model != "lama" and s.thin(r):  # a cord, a cable: LaMa in squares is the best fill, in seconds
+                    if model != "lama" and not reflect and s.thin(r):  # a cord, a cable: LaMa in squares is the best
+                        # fill, in seconds
                         A.log(f"#{r.id}: long and thin, LaMa too")
                         parts.insert(i + 1, ("lama", "LaMa", 0.0))
                 else:
@@ -2057,10 +2087,17 @@ class App:
             self.status.configure(text=_("LaMa always gives the same result: pick RORem or FLUX Fill for more "
                                          "variants"))
             return
+        m, n = self.model_key(), self.n_variants()
+        if (m in A.REFLECTION_MODELS) != r.reflects():  # update_more says why: the button is disabled
+            return
+        if m in A.REFLECTION_MODELS:  # the strengths it has not got yet
+            n = min(n, len(engines.REFLECTION_STRENGTHS) - r.counts.get(m, 0))
+            if n <= 0:
+                return
         if self.waiting(r):  # a part's first variants: "Generate"
             self.pending_gen.add(r.id)
             self.update_row(r)
-        self.jobs.put(("more", r, self.n_variants(), self.model_key(), self.prompt_for(self.model_key())))
+        self.jobs.put(("more", r, n, m, self.prompt_for(m)))
         self.busy = True
         self.update_buttons()
 
@@ -2135,7 +2172,10 @@ class App:
             A.remember("model", self.model_key())
             self.picker.show()
             self.apply_prompt_mode()
-            self.update_more()
+            if hasattr(self, "hd_btn"):  # "Remove selection" / "Remove reflections" (built after the menu)
+                self.update_buttons()
+            else:
+                self.update_more()
 
     def include_shadow(self):
         """"Include the shadow": SAM 3 finds the shadows that touch the selection (Describe "shadow":
@@ -2157,10 +2197,17 @@ class App:
         self.update_buttons()
 
     def remove_selection(self):
-        if self.sel_mask is None or not self.sel_mask.any() or self.writing or self.s.raw is None:
+        """"Remove selection" — or, with DAI, "Remove reflections": from the selection, or with nothing selected from
+        the whole photo."""
+        m = self.model_key()
+        has = self.sel_mask is not None and self.sel_mask.any()
+        if not (has or m in A.REFLECTION_MODELS) or self.writing or self.s.raw is None:
             return
-        self.jobs.put(("new", self.sel_mask.copy(), *self.selected(), self.n_variants(), self.model_key(),
-                       self.prompt_for(self.model_key())))
+        n = self.n_variants()
+        if m in A.REFLECTION_MODELS:  # one variant per strength
+            n = min(n, len(engines.REFLECTION_STRENGTHS))
+        mask = self.sel_mask.copy() if has else np.ones(self.s.base_arr.shape[:2], bool)
+        self.jobs.put(("new", mask, *self.selected(), n, m, self.prompt_for(m)))
         self.ops, self.history, self.pending = [], [], {}
         self.busy = True
         self.render_main()
@@ -2439,7 +2486,7 @@ class App:
     def run_test_actions(self, actions):
         """Tests: drive the window through the real handlers. Actions (coordinates normalized to the photo):
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
-        snap:n · shadow · remove:n[,model 1 flux/2 lama/4 qwen/5 rorem (MODEL_KEYS)] · more:n · pick:i ·
+        snap:n · shadow · remove:n[,model 1 flux/2 lama/4 qwen/5 rorem/6 dai (MODEL_KEYS)] · more:n · pick:i ·
         detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit ·
         menu (opens / closes the model list) · wheel:notches,mods (on the photo; mods 1 Ctrl/Cmd, 2 Alt/Option) ·
         describe:text (Describe's field and "Select all") · right:x,y (a right-click) · split ("Split into parts") ·

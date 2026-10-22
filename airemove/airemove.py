@@ -105,7 +105,13 @@ ENGINES = {
     "flux": ModelSpec("FLUX", "FLUX", engines.FLUX_SIZES, 1000),
     "osor": ModelSpec("OSOR", "FLUX", engines.FLUX_SIZES, 2000),
     "qwen": ModelSpec("Qwen", "Qwen", (engines.QWEN_SIZE,), 4000),
+    "dai": ModelSpec("DAI", "DAI", (), 6000),  # no squares: it sees the whole area at engines.DAI_SIZE
 }
+# "Remove reflections": what these take away is a reflection's light, subtracted from the photo where the selection is
+# (or everywhere), not a hole filled — no blend, no squares, the raw's own values kept (RawDNG.subtract_region). Their
+# variants differ by how much of it they take away (engines.REFLECTION_STRENGTHS); the model runs once per removal.
+REFLECTION_MODELS = ("dai",)
+REFLECTION_FEATHER = 0.01  # a selection's reflection fades out over this share of its area's long side, both ways
 # the Session attribute each engine lives in: sdxl, rorem, flux, qwen (one loaded at a time)
 ENGINE_ATTRS = {}
 for _m, _s in ENGINES.items():
@@ -881,7 +887,7 @@ TIMINGS = ROOT / "work" / "timings.json"
 DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20, "flux_variant": 90,
                  "rorem_load": 20, "rorem_variant": 7,
                  "osor_load": 25, "osor_variant": 8, "shadow": 12,
-                 "qwen_load": 15, "qwen_variant": 35,
+                 "qwen_load": 15, "qwen_variant": 35, "dai_load": 15, "dai_variant": 8,
                  "area": 3, "save": 6,
                  # one square of a tiled fill (tiles.py), one redrawn by "Full detail", the blend of the area after
                  "flux_tile512": 13, "flux_tile768": 22, "sdxl_tile1024": 7.5, "lama_tile512": 2,
@@ -998,6 +1004,10 @@ class Removal:
         self.plans = {}  # (model, refine?, variant whose hole it is or None) -> (engine size, tiles.Plan) or None
         self.shape = None  # (width, length) of its hole (tiles.shape), once
         self.scale = {}  # label -> how enlarged that variant's fill is (Session.enlarged), for those made here
+        self.reflection = False  # made by "Remove reflections" (REFLECTION_MODELS); reopened: its labels say it
+        # its reflection's light as the model found it (engines.reflection_light: float16, at the model's size,
+        # upright): its variants are made from it, and the project keeps it instead of their pictures
+        self.light = None
         # the area image (render space, earlier removals applied) and its blend solver are made when first needed:
         # a reopened project shows its removals at once, and an area is rendered from the RAW only to change it or
         # to write the DNG (_load: Session._load_area)
@@ -1027,11 +1037,32 @@ class Removal:
     def chosen_label(self):
         return None if self.chosen is None else self.candidates[self.chosen][0]
 
+    def reflects(self):
+        """Whether it takes a reflection away ("Remove reflections") rather than filling a hole."""
+        return self.reflection or any(reflection_variant(label) for label, __ in self.candidates)
+
 
 def label_text(label):
     """A variant's label as shown: model names stay, the old result's is translated (projects made before the
-    translation say "Precedente")."""
-    return _("Previous") if label in ("Previous", "Precedente") else label
+    translation say "Precedente"); a reflection's says how much of it it takes away ("DAI 75 %")."""
+    if label in ("Previous", "Precedente"):
+        return _("Previous")
+    k = reflection_variant(label)
+    return f"{label.split()[0]} {round(100 * reflection_strength(k))} %" if k else label
+
+
+def reflection_variant(label):
+    """The number of a reflection removal's variant ("DAI 2" -> 2), None for any other label."""
+    parts = (label or "").split()
+    if len(parts) == 2 and LABEL_MODELS.get(parts[0]) in REFLECTION_MODELS and parts[1].isdigit():
+        return int(parts[1])
+    return None
+
+
+def reflection_strength(k):
+    """How much of the reflection's light variant k takes away (engines.REFLECTION_STRENGTHS, in order)."""
+    s = engines.REFLECTION_STRENGTHS
+    return s[(k - 1) % len(s)]
 
 
 class Session:
@@ -1103,7 +1134,7 @@ class Session:
             return
         meta, items = res
         bw, bh = self.base.size
-        for e, sel, area, variants in items:
+        for e, sel, area, variants, light in items:
             if sel.shape != (bh, bw):  # base.png came out at another size: same frame, rescale the selection
                 sel = np.asarray(Image.fromarray(sel.astype(np.uint8) * 255).resize((bw, bh), Image.NEAREST)) > 127
             r = Removal(e["id"], sel)
@@ -1111,19 +1142,26 @@ class Session:
             r.counts, r.user_picked = dict(e.get("counts") or {}), bool(e.get("user_picked"))
             r.hints = [str(h) for h in e.get("hints") or []]
             r.gain = e.get("gain") or self.gain
+            r.light, r.reflection = light, light is not None
             for label, im, data, hole in variants:
                 r.candidates.append((label, im))
-                r.png[label] = data
+                if data is not None:
+                    r.png[label] = data
                 if hole is not None and hole.shape == area.shape:
                     r.holes[label] = hole
             r.chosen = e.get("chosen") if variants else None
             if r.chosen is not None and not 0 <= r.chosen < len(r.candidates):
                 r.chosen = len(r.candidates) - 1
             # shown from its variants; its area is rendered (with the earlier removals applied, as when it was made)
-            # only when it is needed: more variants, Full detail, the DNG (Removal.src)
+            # only when it is needed: more variants, Full detail, the DNG (Removal.src) — a reflection removal's at
+            # once (_place), its variants being rebuilt from it and its light
             self._masks(r)
             r._load = self._load_area
             self._place(r)
+            if light is not None:
+                light_full, alpha = self._reflection(r)
+                r.candidates = [(label, self._reflection_picture(r, label, light_full, alpha)[0])
+                                for label, __ in r.candidates]
             self.removals.append(r)
         self.next_id = max([meta.get("next_id", 1)] + [r.id + 1 for r in self.removals])
         d = meta.get("dng") or {}
@@ -1311,11 +1349,17 @@ class Session:
                 self._work_cfa, self._work_key = self.raw.cfa.copy(), ()
             for i in range(len(self._work_key), len(rs)):
                 r = rs[i]
-                fill = r.filled()  # may render r's own area first (Removal.src), from the data before it
                 y0, y1, x0, x1 = r.box
                 cfa = self._work_cfa
-                cfa[y0:y1, x0:x1] = self.raw.fill_region(r.box, fill, r.gain, self.hole(r)[1], cfa=cfa,
-                                                         rng_seed=r.id)
+                k = reflection_variant(r.chosen_label())
+                if k:  # its strength of the reflection's light, where its selection is, off the raw's own values
+                    light, alpha = self._reflection(r)
+                    take = light * (reflection_strength(k) * alpha[..., None])
+                    cfa[y0:y1, x0:x1] = self.raw.subtract_region(r.box, take, r.gain, cfa=cfa)
+                else:
+                    fill = r.filled()  # may render r's own area first (Removal.src), from the data before it
+                    cfa[y0:y1, x0:x1] = self.raw.fill_region(r.box, fill, r.gain, self.hole(r)[1], cfa=cfa,
+                                                             rng_seed=r.id)
                 self._work_key = key[:i + 1]
             return self._work_cfa
 
@@ -1379,13 +1423,15 @@ class Session:
             f" ({len(old_cands)} variants kept)")
         return True
 
-    def new_removal(self, mask_e, hints=None):
+    def new_removal(self, mask_e, hints=None, reflection=False):
         """A removal for mask_e (bool, base.png frame): its area, rendered from the photo as it is now (earlier
-        removals applied). hints: what Describe found in it (Removal.hints)."""
+        removals applied). hints: what Describe found in it (Removal.hints). reflection: one that takes a reflection
+        away ("Remove reflections"), the whole photo when mask_e is all of it."""
         self.working_cfa()  # a reopened project's areas are rendered once, first: not part of this one's time
         t0 = time.time()
         r = Removal(self.next_id, mask_e)
         r.hints = list(hints or [])
+        r.reflection = reflection
         self.next_id += 1
         _, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t, square=False)
         self._init_area(r)
@@ -1416,9 +1462,11 @@ class Session:
             self._masks(r)
             r.membrane = None
             self._place(r)
-        # for adopting results made before projects existed (_work_areas); quick PNG: they are only read back
-        r.src.save(self.work / f"r{r.id}_src.png", compress_level=1)
-        r.mask_img.save(self.work / f"r{r.id}_mask.png", compress_level=1)
+        # for adopting results made before projects existed (_work_areas); quick PNG: they are only read back. Not for
+        # a reflection removal: it came after projects, and its area is often the whole photo (tens of MB)
+        if not r.reflection:
+            r.src.save(self.work / f"r{r.id}_src.png", compress_level=1)
+            r.mask_img.save(self.work / f"r{r.id}_mask.png", compress_level=1)
 
     def _masks(self, r):
         """r's hole as an image and its feathered alpha (render space), and the chosen fill on its area."""
@@ -1442,6 +1490,14 @@ class Session:
         size = (max(1, X1 - X0), max(1, Y1 - Y0))
         r.base_alpha = self._base_alpha(r, r.alpha)
         keep = r.base_alpha < 0.01
+        if r.reflects():  # its variants differ from the photo a little all over (a whole-photo one has no "around"):
+            # the curve is fitted on the area itself, the photo as it was, everywhere — rendered now if reopened
+            # (_init_area places it again)
+            if r._src is None and r.candidates:
+                r.lut = [np.arange(256, dtype=np.uint8)] * 3
+                r.src
+                return
+            keep = np.ones_like(keep)
         if r._src is None and not r.candidates:  # a part still waiting for its model (plan_removal): no preview yet,
             r.lut = [np.arange(256, dtype=np.uint8)] * 3  # this runs again when its area is rendered (_init_area)
             return
@@ -1481,12 +1537,23 @@ class Session:
         label, im = r.candidates[idx]
         if label not in r.preview:
             mi, _al, base_al = self.hole(r, label)
+            Y0, Y1, X0, X1 = r.base_rect
+            size = (max(1, X1 - X0), max(1, Y1 - Y0))
+            if reflection_variant(label):  # base.png with only the change: a tone curve has none of the photo's local
+                # look (clarity, texture), and over a whole photo that would show more than the reflection's going
+                after, before = np.asarray(im.convert("RGB")), np.asarray(r.src)
+                d = (np.stack([r.lut[c][after[..., c]] for c in range(3)], -1).astype(np.float32)
+                     - np.stack([r.lut[c][before[..., c]] for c in range(3)], -1))
+                d = np.ascontiguousarray(apply_t(d, self.t))
+                d = np.stack([np.asarray(Image.fromarray(np.ascontiguousarray(d[..., c])).resize(size, Image.BILINEAR))
+                              for c in range(3)], -1)
+                patch = np.clip(self.base_arr[Y0:Y1, X0:X1].astype(np.float32) + d[:Y1 - Y0, :X1 - X0], 0, 255)
+                r.preview[label] = (patch.round().astype(np.uint8), base_al)
+                return r.preview[label]
             # outside its hole a variant is the area itself (blend.seamless): a reopened removal needs no render
             a = np.asarray(Image.composite(im, r.src, mi)) if r._src is not None else np.asarray(im.convert("RGB"))
             a = np.stack([r.lut[c][a[..., c]] for c in range(3)], -1)
-            Y0, Y1, X0, X1 = r.base_rect
-            patch = np.asarray(Image.fromarray(np.ascontiguousarray(apply_t(a, self.t))).resize(
-                (max(1, X1 - X0), max(1, Y1 - Y0)), Image.LANCZOS))
+            patch = np.asarray(Image.fromarray(np.ascontiguousarray(apply_t(a, self.t))).resize(size, Image.LANCZOS))
             r.preview[label] = (patch, base_al)
         return r.preview[label]
 
@@ -1506,7 +1573,8 @@ class Session:
     def add_candidate(self, r, label, im):
         r.candidates.append((label, im))
         try:
-            im.save(self.work / f"r{r.id}_{label.replace(' ', '')}.png")  # for comparing / debugging
+            if not reflection_variant(label):  # (a reflection's: its light is all there is to compare)
+                im.save(self.work / f"r{r.id}_{label.replace(' ', '')}.png")  # for comparing / debugging
         except OSError:
             pass
         if not r.user_picked:
@@ -1615,6 +1683,8 @@ class Session:
 
     def _run_model(self, r, model, prompt, progress):
         eng = self.get_engine(model)
+        if model in REFLECTION_MODELS:
+            return self._reflection_variant(r, model, eng, progress)
         if model == "qwen":
             eng.hint = ", ".join(r.hints)
         k = r.counts.get(model, 0) + 1
@@ -1676,6 +1746,55 @@ class Session:
             + (f" (removing: {eng.what})" if model == "qwen" and eng.what else "")
             + (f" | shadow/reflection: +{int((hole & ~r.reg_mask).sum())} px" if hole is not None else ""))
         return label, im
+
+    def _reflection_variant(self, r, model, eng, progress):
+        """A variant of a reflection removal ("Remove reflections"): the reflection's light, found once per removal
+        (the model sees the area upright, as the photo is seen), times this variant's strength, taken away where the
+        selection is and fading out around it (REFLECTION_FEATHER; a whole-photo selection: everywhere)."""
+        k = r.counts.get(model, 0) + 1
+        r.counts[model] = k
+        label = f"{MODELS[model]} {k}"
+        t0 = time.time()
+        if r.light is None:  # from the area rendered as floats (r.src is rounded to 8 bits, for the window)
+            srgb, __ = self.raw.render(r.box, r.gain, cfa=self.working_cfa(r))
+            up = self._up(srgb.astype(np.float32))
+            del srgb
+            clean, __ = eng.remove(up, progress)
+            r.light = engines.reflection_light(up, clean)
+            del up
+            measured(f"{model}_variant", time.time() - t0)
+        light, alpha = self._reflection(r)
+        im, strength = self._reflection_picture(r, label, light, alpha)
+        self.add_candidate(r, label, im)
+        first = [i for i, (lb, __) in enumerate(r.candidates) if reflection_variant(lb) == 1]
+        if first and not r.user_picked:  # the first strength (the closest to Lightroom's) stays the one chosen
+            r.chosen = first[0]
+        log(f"#{r.id} {label} in {time.time() - t0:.1f}s: {round(100 * strength)} % of the reflection taken away "
+            f"(its light: {float(light.mean()) / max(1e-6, float(RawDNG.inv_oetf(np.asarray(r.src) / 255).mean())):.1%}"
+            f" of the area's)")
+        return label, im
+
+    def _reflection(self, r):
+        """(light, alpha) of a reflection removal at its area's size, sensor orientation: its light (Removal.light)
+        enlarged, and where it is taken away — the selection, fading out around it (REFLECTION_FEATHER). Kept for the
+        last removal asked about."""
+        key = (r.id, id(r.light), r.reg_mask.shape)
+        if getattr(self, "_reflection_of", (None,))[0] != key:
+            up_size = self._up(np.zeros(r.reg_mask.shape, bool)).shape[::-1]  # (width, height) upright
+            light = self._down(engines.enlarged_light(r.light, up_size))
+            feather = REFLECTION_FEATHER * max(r.reg_mask.shape)
+            alpha = np.clip(ndi.gaussian_filter(r.reg_mask.astype(np.float32), feather, mode="nearest"), 0, 1)
+            self._reflection_of = (key, light, alpha)
+        return self._reflection_of[1:]
+
+    def _reflection_picture(self, r, label, light, alpha):
+        """A reflection variant's picture, its strength (reflection_strength) of the light taken away from the area
+        (for the window: the raw gets the light itself, working_cfa); its hole and scale. The same every time: a
+        reopened project's variants are rebuilt with it."""
+        strength = reflection_strength(reflection_variant(label))
+        r.holes[label] = alpha > 0.004  # what it changes: the selection and its fading edge
+        r.scale[label] = 1.0  # nothing is redrawn: the photo's own detail
+        return engines.without_reflection(r.src, light, strength, alpha), strength
 
     def _qwen(self, eng, src, mask, prompt, seed, progress=None, seen=None, what=None):
         """Qwen-Image sees the area upright, as the photo is seen: it names the selection first, and on its side a
@@ -1867,10 +1986,12 @@ class Session:
         the photo (more than 1.6 times), not redrawn already — and why not, for the window: (ok, why) with why one of
         "ok", "none" (no variant chosen), "done" (redrawn already), "model" (no FLUX nor SDXL), "shape" (not a long
         removal: in squares a person's or a car's hole gets pieces of things drawn in it) or "sharp" (drawn near the
-        photo's resolution already)."""
+        photo's resolution already: a reflection removal redraws nothing)."""
         label = r.chosen_label()
         if label is None:
             return False, "none"
+        if reflection_variant(label):
+            return False, "sharp"
         if label.endswith(REFINED):
             return False, "done"
         if self.refine_model() is None:
@@ -2121,7 +2242,9 @@ def auto(args):
     """--auto MODEL[N]: no window. The photo's "Rimuovi" masks removed with MODEL, as the window's "Remove selection":
     far-apart parts each in a removal of its own (split_selection); variant N (default 1) of each is the one used; the
     result is written and stacked like "Salva in LightCraft". --shadow: the object's shadow and reflection are added to
-    the selection first ("Includi l'ombra"). Prints a JSON line."""
+    the selection first ("Includi l'ombra"). A reflection model (dai) takes the reflection away from the masks as one
+    removal, or from the whole photo when it has none; its variant N is that strength (REFLECTION_STRENGTHS). Prints
+    a JSON line."""
     m = re.fullmatch(rf"({'|'.join(list(ENGINES) + list(RETIRED))})(\d*)", args.auto.strip().lower())
     if not m:
         raise Fail(_("--auto: {models}, optionally the number of the variant to use (e.g. sdxl2)",
@@ -2132,17 +2255,19 @@ def auto(args):
     s = Session(LC(), args)
     try:
         s.prepare()
-        if s.init_mask is None:
+        reflection = model in REFLECTION_MODELS
+        if s.init_mask is None and not reflection:
             raise Fail(_("--auto needs a \"Remove\" mask on the photo in LightCraft (e.g. an Object mask renamed "
                          "\"Remove\", or \"Remove: old wooden door\" to guide the fill)"))
-        sel = s.init_mask
-        if getattr(args, "shadow", False):
+        sel = s.init_mask if s.init_mask is not None else np.ones(s.base_arr.shape[:2], bool)
+        if getattr(args, "shadow", False) and not reflection:
             shadow = s.find_shadow(sel)
             if shadow is not None:
                 sel = sel | shadow
         made = []
-        for part in split_selection(sel, s.base_scale):  # far-apart parts: removals of their own, one after another
-            r = s.new_removal(part)
+        # far-apart parts: removals of their own, one after another (a reflection's: one, it is light over all of it)
+        for part in [sel] if reflection else split_selection(sel, s.base_scale):
+            r = s.new_removal(part, reflection=reflection)
             if model == "lama":
                 s.run_lama(r)
                 pick = 1

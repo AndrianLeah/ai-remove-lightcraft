@@ -230,6 +230,15 @@ class ImageFile:
         new = a * np.clip(filled_srgb, 0, 1) * self.maxv + (1 - a) * old
         return np.clip(new.round(), 0, self.maxv).astype(self.cfa.dtype)
 
+    def subtract_region(self, box, light, gain, cfa=None):
+        """The area's pixels with a reflection's light (HxWx3, linear; gain: always 1) taken away (RawDNG's), in
+        linear light and back to the picture's own encoding: what it does not change stays exactly as it was."""
+        from rawdng import RawDNG
+        y0, y1, x0, x1 = box
+        old = (self.cfa if cfa is None else cfa)[y0:y1, x0:x1].astype(np.float64)
+        new = RawDNG.oetf(np.clip(RawDNG.inv_oetf(old / self.maxv) - light / gain, 0, None)) * self.maxv
+        return np.clip(np.where(light > 0, new, old).round(), 0, self.maxv).astype(self.cfa.dtype)
+
     def write_cfa(self, out_path, cfa, boxes):
         """The whole picture with `cfa` as its pixels, in its own format, with its metadata (boxes: unused, the
         format is written whole)."""
