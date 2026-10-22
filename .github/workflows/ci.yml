@@ -7,7 +7,8 @@
 # the processor, the blend, the DNG and the .airemove project, checked pixel by pixel), a long removal in tiles
 # (tools/ci_tiles.py), one on each kind of picture (tools/ci_pictures.py: JPEG, PNG, TIFF, WebP, HEIC, AVIF),
 # Describe's masks from synthetic SAM 3 output (tools/ci_describe.py), a selection split into removals
-# (tools/ci_split.py), the MCP server over stdio, and the uninstaller
+# (tools/ci_split.py), "Remove reflections" with a stand-in for DAI (tools/ci_reflections.py: a synthetic reflection
+# taken off the raw values), the MCP server over stdio, and the uninstaller
 # (tools/ci_smoke.py). Before the install: a program
 # reading install-status.json cannot stop the installer's writes of it (tools/ci_status.py).
 # No secrets, no photos.

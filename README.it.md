@@ -34,6 +34,12 @@ PNG, TIFF, WebP, HEIC e AVIF.
    l'originale e con lo stesso sviluppo. Puoi continuare a svilupparlo come un RAW qualsiasi. Da un JPEG è
    `<nome>-AIRemove.jpg`, e così per gli altri formati.
 
+**Riflessi nel vetro.** Per una foto attraverso una vetrina o una teca, scegli **DAI** sotto *Rimuovi riflessi* nel
+menu dei modelli e premi **Rimuovi riflessi**: senza selezione lavora su tutta la foto, con una selezione solo lì,
+sfumando intorno. Come "Rimuovi riflessi" di Lightroom, toglie la luce che il vetro riflette (la strada vista nella
+vetrina, il velo su ciò che sta dietro), e la toglie dai valori del RAW stesso: niente viene ridisegnato, restano ogni
+dettaglio e il rumore del sensore.
+
 Ogni rimozione resta modificabile: la puoi rigenerare, cambiare variante o eliminare in qualsiasi momento. Tutto è
 salvato in un unico file accanto alla foto (`<foto>.airemove`). L'originale non viene mai modificato.
 
@@ -143,6 +149,7 @@ Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cache/hu
 | **SAM 3** | La selezione con un clic, o descrivendo cosa selezionare ("people"). Senza, si usa il pennello. | | 3,2 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
 | **OSOR** (facoltativo, su FLUX) | Trova le ombre e i riflessi accanto a ciò che selezioni, per "Includi l'ombra" (insieme a SAM 3). | | 0,6 GB | FLUX.1 [dev] Non-Commercial |
 | **Qwen-Image 2.1 Turbo** (facoltativo) | Persone e oggetti su sfondi complessi (una persona davanti a una scalinata, un palo davanti alle colonne): riconosce cosa hai selezionato e lo toglie chiamandolo per nome. Circa 30 s a variante a 1024 px. Serve una GPU NVIDIA o AMD da 16 GB. | Quando hai fretta: circa un minuto per la prima variante di una rimozione | 14,4 GB | Qwen Research License (non commerciale); il suo encoder del testo Qwen3-VL: Apache-2.0 |
+| **DAI** (facoltativo) | I riflessi nel vetro, "Rimuovi riflessi": su tutta la foto o su una selezione, in pochi secondi con una GPU; il riflesso si toglie dai valori del RAW, niente viene ridisegnato. Le varianti ne tolgono il 75 % (il più vicino al risultato di Lightroom, misurato su una vetrina), il 100 %, il 50 %, il 125 %. | Riempire qualcosa; un riflesso nitido e luminoso (alberi specchiati in una vetrina, il cielo in una pozzanghera) si toglie solo in parte | 5,7 GB | Apache-2.0, ritocco di Stable Diffusion 2 (CreativeML Open RAIL++-M) |
 
 **Modelli tolti.** SDXL Inpainting non è più nel menu: ridisegnava una persona o un oggetto strano dove RORem non ne
 ridisegnava nessuno (11 rimozioni di prova su 12, contro 0), e RORem, che usa i suoi file, fa il suo lavoro. ObjectClear
@@ -153,7 +160,8 @@ trova le ombre per "Includi l'ombra". I progetti tengono le varianti fatte con q
 
 **Uso commerciale.** FLUX, OSOR e Qwen-Image sono solo per uso non commerciale. Vanno bene per le tue foto, ma non per
 lavori pagati o per clienti senza una licenza dei loro autori: Black Forest Labs per FLUX e OSOR, il team Qwen di
-Alibaba per Qwen-Image. Per i lavori pagati usa LaMa o RORem (con le limitazioni d'uso di SDXL). La licenza di FLUX chiede anche di controllare i risultati prima di condividerli, e di dire che sono stati
+Alibaba per Qwen-Image. Per i lavori pagati usa LaMa o RORem (con le limitazioni d'uso di SDXL), e DAI per i riflessi
+(con quelle di Stable Diffusion 2). La licenza di FLUX chiede anche di controllare i risultati prima di condividerli, e di dire che sono stati
 modificati con l'AI dove la legge lo richiede. È un riassunto, non un parere legale: valgono le licenze.
 
 Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plaster wall" o "dark doorway". Con

@@ -21,6 +21,7 @@ user's choice, after showing each licence. Using a model means accepting its lic
 | Qwen-Image 2.1 Turbo — optional | [Qwen/Qwen-Image-2.1-Turbo](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo) (configs, processor, VAE), from [QwenLM/Qwen-Image-2.1](https://github.com/QwenLM/Qwen-Image-2.1) | [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/LICENSE): research and evaluation only; commercial use needs a separate licence from Qwen |
 | Qwen-Image 2.1 Turbo GGUF Q4_K_M — optional | [unsloth/Qwen-Image-2.1-Turbo-GGUF](https://huggingface.co/unsloth/Qwen-Image-2.1-Turbo-GGUF) | as Qwen-Image 2.1 |
 | Qwen3-VL-8B-Instruct FP8 — optional, Qwen-Image's text encoder | [Qwen/Qwen3-VL-8B-Instruct-FP8](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-FP8) | Apache-2.0 |
+| DAI, Dereflection Any Image — optional, "Remove reflections" | [sjtu-deepvision/dereflection-any-image-v0](https://huggingface.co/sjtu-deepvision/dereflection-any-image-v0), from [Abuuu122/Dereflection-Any-Image](https://github.com/Abuuu122/Dereflection-Any-Image) (AAAI 2026) | Apache-2.0; its UNet and ControlNet are a fine-tune of Stable Diffusion 2, whose CreativeML Open RAIL++-M use-based restrictions apply to them too |
 
 Qwen-Image 2.1's text encoder is Qwen3-VL-8B-Instruct unchanged (checked tensor by tensor against Qwen's repository),
 so AI Remove downloads Qwen's own FP8 release of it (10 GB) instead of the 17.5 GB bfloat16 copy in Qwen-Image's
@@ -28,6 +29,10 @@ repository.
 
 RORem's text encoders and VAE are SDXL Inpainting 0.1's unchanged (checked tensor by tensor), so AI Remove
 downloads only RORem's UNet (4.8 GB) and takes the rest from SDXL's files.
+
+DAI's code (its DAIPipeline, ControlNetVAEModel and CustomAutoencoderKL; MIT) is not shipped: AI Remove's own
+`engines.DAI` does the same computation in a few lines on Hugging Face Diffusers' classes, with the weights as
+published.
 
 AI Remove no longer uses ObjectClear (S-Lab License 1.0, non-commercial): updating removes its weights and its pipeline
 code from AI Remove's own models folder.

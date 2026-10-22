@@ -277,6 +277,20 @@ class RawDNG:
             new_raw = np.minimum(new_raw, self.saturation()[py, px])
         return np.clip((alpha * new_raw + (1 - alpha) * old).round(), 0, 65535).astype(np.uint16)
 
+    def subtract_region(self, box, light, gain, cfa=None):
+        """Raw values for a region with a reflection taken away ("Remove reflections"): `light` (HxWx3, linear light
+        in render space at `gain`: what to take away) subtracted from the raw values themselves — no fill and no added
+        noise, so every detail and the sensor's own noise stay. Clipped highlights stay as they are: how much of them
+        was reflection is not known."""
+        y0, y1, x0, x1 = box
+        py, px, ch = self._layout(y0, y1, x0, x1)
+        blk = self.black[py, px]
+        cam = np.clip(np.einsum("ij,hwj->hwi", np.linalg.inv(self.cam_to_srgb()), light / gain), 0, None)
+        take = np.take_along_axis(cam, ch[..., None], axis=2)[..., 0] * (self.white - blk)
+        old = (self.cfa if cfa is None else cfa)[y0:y1, x0:x1].astype(np.float64)
+        take = np.where(self._clipped(old, ch, blk), 0.0, take)
+        return np.clip((old - take).round(), 0, 65535).astype(np.uint16)
+
     def _into_white(self, filled_srgb, gain):
         """How far each fill pixel is into the white render gives clipped highlights (0..1), or None when that white
         is beyond what render shows (a glint in a dark area: render's white is not theirs there).

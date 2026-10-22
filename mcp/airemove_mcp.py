@@ -101,11 +101,15 @@ selects every instance. "Include the shadow" adds their shadows (SAM 3, and OSOR
 "Generate all"): LaMa = fast, small things on plain backgrounds and cables; RORem = people and objects, draws no one
 back (the default); FLUX Fill = architecture, large areas, NOT people (it draws people back into a crowd); Qwen-Image =
 people and objects on complex backgrounds, removes them by name. "Remove selection" (Enter) does it all with one model.
+Reflections in glass (a shop window, a display case): choose "DAI" under "Remove reflections" in the model menu and
+press "Remove reflections": with nothing selected the whole photo, else the selection. It takes away the light the
+glass reflects and keeps every detail; its variants take away 75 %, 100 %, 50 %, 125 % of it.
 Each removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" writes/updates the
 result (the DNG, or the picture's copy).
 Zoom: Ctrl/Cmd+wheel or + / -, 0 = fit; pan: wheel, middle button or Space+drag; hold "Originale" (or \\) to compare.
 Headless (no window): put a LightCraft mask named "Remove" (or "Remove: <English prompt>"; "Rimuovi" works too) on the photo — e.g. with
-LightCraft's own MCP tools (an Object mask on the thing, renamed) — then call remove_with_masks.""",
+LightCraft's own MCP tools (an Object mask on the thing, renamed) — then call remove_with_masks; for reflections in
+glass, remove_reflections (the "Remove" masks, else the whole photo).""",
     "troubleshoot": """- "LightCraft non risponde": LightCraft is closed, or was started before the install: restart it. On Linux
   with Wayland its window must be visible. The control port is 7980 (LIGHTCRAFT_CONTROL_PORT).
 - First FLUX/SDXL variant slow on AMD: the GPU compiles its kernels once (minutes), then it is fast.
@@ -327,6 +331,25 @@ def remove_with_masks(a):
     return json.loads(line) if line else {"ok": False, "error": (r.stdout + r.stderr)[-1500:]}
 
 
+REFLECTION_STRENGTHS = [round(100 * s) for s in mf.REFLECTION_STRENGTHS]  # % each DAI variant takes away, in order
+
+
+def remove_reflections(a):
+    d = install_dir()
+    strength = int(a.get("strength") or 75)
+    if strength not in REFLECTION_STRENGTHS:
+        return {"ok": False, "error": "strength: " + " | ".join(map(str, REFLECTION_STRENGTHS))}
+    args = ["--auto", f"dai{REFLECTION_STRENGTHS.index(strength) + 1}"]
+    if a.get("photo_id"):
+        args += ["--id", str(int(a["photo_id"]))]
+    try:
+        r = _app(d, args, timeout=900)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "took more than 15 minutes (see work/last-run.log)"}
+    line = next((ln for ln in reversed(r.stdout.splitlines()) if ln.startswith("{")), None)
+    return json.loads(line) if line else {"ok": False, "error": (r.stdout + r.stderr)[-1500:]}
+
+
 def project_info(a):
     raw = a.get("raw_path")
     if not raw and a.get("photo_id"):
@@ -431,6 +454,16 @@ TOOLS = [
          "variant": {"type": "integer", "description": "generate this many variants and use the last (default 1)"},
          "photo_id": {"type": "integer", "description": "default: LightCraft's active photo"}}},
      remove_with_masks, False),
+    ("remove_reflections", "Headless \"Remove reflections\": the light a glass reflects (a shop window, a display "
+                           "case) is taken away from the photo with DAI (installed as the \"dai\" model), from its "
+                           "masks named \"Remove\" or, without one, from the whole photo; every detail of it stays. "
+                           "Written and stacked like remove_with_masks. Seconds on a GPU.",
+     {"type": "object", "properties": {
+         "strength": {"type": "integer", "enum": REFLECTION_STRENGTHS,
+                      "description": "% of the reflection DAI found that is taken away (default 75: closest to "
+                                     "Lightroom's Reflection Removal where measured; DAI alone takes more)"},
+         "photo_id": {"type": "integer", "description": "default: LightCraft's active photo"}}},
+     remove_reflections, False),
     ("project_info", "The AI Remove project of a photo: its removals, the chosen variants and the result it writes.",
      {"type": "object", "properties": {"photo_id": {"type": "integer"},
                                        "raw_path": {"type": "string", "description": "the photo's file (a RAW or "

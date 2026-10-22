@@ -6,6 +6,9 @@ be regenerated, changed or deleted later without creating a new photo each time.
 Layout of the zip: project.json, r<id>/selection.png (1-bit, base.png frame), r<id>/area.png (1-bit, area frame),
 r<id>/NN.png (each variant, render space of the area), r<id>/NN_hole.png (1-bit, area frame: only for a variant
 that also removed the object's shadow — OSOR, ObjectClear — whose hole is larger than area.png).
+A reflection removal ("Remove reflections", often the whole photo) has r<id>/light.npz instead of its variants'
+pictures: the reflection's light as the model found it (Removal.light), from which the session rebuilds every variant
+exactly as it was made — a few MB instead of tens per variant.
 """
 import io
 import json
@@ -67,6 +70,16 @@ def save(s):
             r.png["area"] = mask_png(r.reg_mask)
         files[f"r{r.id}/selection.png"] = r.png["selection"]
         files[f"r{r.id}/area.png"] = r.png["area"]
+        if r.light is not None:  # a reflection removal: its light, its variants rebuilt from it
+            if "light" not in r.png:
+                buf = io.BytesIO()
+                np.savez_compressed(buf, light=r.light)
+                r.png["light"] = buf.getvalue()
+            e["reflection"] = f"r{r.id}/light.npz"
+            files[e["reflection"]] = r.png["light"]
+            e["variants"] = [{"label": label} for label, __ in cands]
+            meta["removals"].append(e)
+            continue
         for i, (label, im) in enumerate(cands):
             name = f"r{r.id}/{i:02d}.png"
             files[name] = _variant_bytes(r, label, im)
@@ -87,8 +100,9 @@ def save(s):
 
 
 def load(raw_path, log=print):
-    """(meta, [(entry, selection, area, [(label, PIL image, png bytes, hole or None)])]) or None if there is no
-    usable project."""
+    """(meta, [(entry, selection, area, [(label, PIL image, png bytes, hole or None)], light)]) or None if there is no
+    usable project. light: a reflection removal's (its variants' picture and bytes are None: the session rebuilds
+    them), else None."""
     p = path_for(raw_path)
     if not p.exists():
         return None
@@ -102,13 +116,20 @@ def load(raw_path, log=print):
             for e in meta["removals"]:
                 sel = np.asarray(Image.open(io.BytesIO(z.read(f"r{e['id']}/selection.png"))).convert("L")) > 127
                 area = np.asarray(Image.open(io.BytesIO(z.read(f"r{e['id']}/area.png"))).convert("L")) > 127
+                light = None
+                if e.get("reflection"):
+                    with np.load(io.BytesIO(z.read(e["reflection"]))) as f:
+                        light = f["light"]
                 vs = []
                 for v in e["variants"]:
+                    if light is not None:
+                        vs.append((v["label"], None, None, None))
+                        continue
                     b = z.read(v["file"])
                     hole = (np.asarray(Image.open(io.BytesIO(z.read(v["hole"]))).convert("L")) > 127
                             if v.get("hole") else None)
                     vs.append((v["label"], Image.open(io.BytesIO(b)).convert("RGB"), b, hole))
-                out.append((e, sel, area, vs))
+                out.append((e, sel, area, vs, light))
         return meta, out
     except (OSError, KeyError, ValueError, zipfile.BadZipFile) as err:
         log(f"project {p.name} unreadable ({type(err).__name__}): ignored")
