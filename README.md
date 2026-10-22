@@ -38,7 +38,8 @@ JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
 reflections* in the model menu and press **Remove reflections**: with nothing selected it works on the whole photo,
 with a selection only there, fading out around it. Like Lightroom's Remove Reflections, it takes away the light the
 glass reflects (the street seen in the window, the veil over what is behind it), and it takes it off the raw values
-themselves: nothing is redrawn, every detail and the sensor's own noise stay.
+themselves: nothing is redrawn, every detail and the sensor's own noise stay. **Strength**, under the result, sets
+how much of it goes (0 to 150 %, 75 % at first), and the photo follows as you drag it.
 
 Every removal stays editable: regenerate it, pick another variant or delete it whenever you like. Everything lives in
 one project file next to the photo (`<photo>.airemove`). The original is never modified.
@@ -75,9 +76,9 @@ embedded preview, which would still show what was removed.
   named too), then removes it by name and redraws the scene behind it.
 - **Remove reflections,** like Lightroom's: DAI (Dereflection Any Image, AAAI 2026) finds the light a pane of glass
   reflects over the photo, in a few seconds on a GPU, and AI Remove subtracts it from the RAW's own values, so the
-  photo keeps all of its detail. Its variants take away 75 %, 100 %, 50 % or 125 % of what DAI found; 75 % came
-  closest to Lightroom's own result on a shop window (measured against the reflection Lightroom took away, which it
-  stores in its `.acr` file).
+  photo keeps all of its detail. **Strength**, a slider under the result, says how much of what DAI found goes,
+  from 0 to 150 %, and the photo follows as you drag it. It starts at 75 %, which came closest to Lightroom's own
+  result on a shop window (measured against the reflection Lightroom took away, which it stores in its `.acr` file).
 - **Shadows and reflections.** "Include the shadow" adds the selected objects' shadows to the selection, so every
   model removes them: SAM 3 finds the shadows that touch them (a long shadow at a low sun), and OSOR, if installed,
   what goes with each object (its shadow, its reflection), part by part.
@@ -244,8 +245,8 @@ open, otherwise on a photo you choose ([on its own](#how-it-works)). On a Mac yo
 
 **Headless.** A LightCraft mask named `Remove` (or `Rimuovi`, or `Remove: <English prompt>`) on the photo is the
 starting selection. `airemove-cli --auto rorem` fills it without opening the window, writes the result, and prints it
-as JSON. `airemove-cli --auto dai` removes the reflections from it, or from the whole photo when it has no such mask
-(`dai2` takes away 100 %, `dai3` 50 %, `dai4` 125 %).
+as JSON. `airemove-cli --auto dai` removes the reflections from it, or from the whole photo when it has no such mask,
+at 75 %; `dai100` takes away all of what DAI found, `dai40` 40 % (0 to 150).
 
 ### Files it writes
 

@@ -7,8 +7,8 @@ Layout of the zip: project.json, r<id>/selection.png (1-bit, base.png frame), r<
 r<id>/NN.png (each variant, render space of the area), r<id>/NN_hole.png (1-bit, area frame: only for a variant
 that also removed the object's shadow — OSOR, ObjectClear — whose hole is larger than area.png).
 A reflection removal ("Remove reflections", often the whole photo) has r<id>/light.npz instead of its variants'
-pictures: the reflection's light as the model found it (Removal.light), from which the session rebuilds every variant
-exactly as it was made — a few MB instead of tens per variant.
+pictures: the reflection's light as the model found it (Removal.light) — a few MB instead of tens per picture — and
+in project.json its strength, how much of that light is taken away.
 """
 import io
 import json
@@ -76,6 +76,7 @@ def save(s):
                 np.savez_compressed(buf, light=r.light)
                 r.png["light"] = buf.getvalue()
             e["reflection"] = f"r{r.id}/light.npz"
+            e["strength"] = r.strength  # how much of it is taken away (the window's slider)
             files[e["reflection"]] = r.png["light"]
             e["variants"] = [{"label": label} for label, __ in cands]
             meta["removals"].append(e)

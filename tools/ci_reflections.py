@@ -5,19 +5,22 @@ The photo is ci_removal.py's synthetic raw DNG with a reflection over it: a broa
 light over its left part (a street reflected in a shop window, out of focus), so the same photo without it is known.
 A stand-in for DAI is put where the session keeps the engine — engines.DAI's remove(): the area seen at 1024 px
 without the glow, what a perfect model would draw — and the rest is the app's own code: a removal of the whole photo
-("Remove reflections" with nothing selected), its variants at each strength, the reflection's light taken off the raw
-values themselves (RawDNG.subtract_region) by "Save in LightCraft", the window's preview, the project reopened.
+("Remove reflections" with nothing selected), its one result, its strength (the window's slider: Session.set_strength),
+the reflection's light taken off the raw values themselves (RawDNG.subtract_region) by "Save in LightCraft", the
+window's preview, the project reopened.
 
-Checks: the variants are labelled by their strength (DAI 75 %, DAI 100 %); saved at 100 %, the raw values are the
-photo's without the glow within a few DN where the glow added up to hundreds, with the sensor's own noise (none is
-added); where there is no glow they are untouched, and the blown sky keeps its clipped values; saved at 75 %, a
-quarter of the glow is left; the first strength stays the one chosen; the preview darkens where the glow was and
-nowhere else; the project keeps the reflection's light instead of the variants' pictures; reopened, the removal is a
-reflection removal again and rebuilds the same sensor data. Exit status 1 at the first check that fails.
+Checks: one result, shown with its strength (DAI 75 %), the model run once even if asked again; at 100 % the raw values
+are the photo's without the glow within a few DN where the glow added up to hundreds, with the sensor's own noise (none
+is added); where there is no glow they are untouched, and the blown sky keeps its clipped values; the preview darkens
+where the glow was and nowhere else; at 75 % a quarter of the glow is left, at 40 % three fifths; the project keeps the
+reflection's light and its strength, no picture; reopened, the removal is a reflection removal again at its strength
+and rebuilds the same sensor data; a project saved with one variant per strength (before the slider) opens at the
+chosen one's strength. Exit status 1 at the first check that fails.
 
   ci_reflections.py DIR [--keep FOLDER]    FOLDER: where the photos, base.png, the DNG and the project are left
 """
 import argparse
+import json
 import shutil
 import sys
 import tempfile
@@ -113,62 +116,84 @@ def run(d, out):
     s.run_model(r, "dai", "")
     s.run_model(r, "dai", "")
     labels = [label for label, __ in r.candidates]
-    shown = [ar.label_text(label) for label in labels]
-    expect(labels == ["DAI 1", "DAI 2"] and shown == ["DAI 75 %", "DAI 100 %"] and s.dai.calls == 1,
-           f"two variants, by strength: {shown}, the model run once")
-    expect(r.chosen == 0, f"the first strength stays the one chosen ({r.chosen_label()})")
+    shown = [ar.variant_text(r, label) for label in labels]
+    expect(labels == ["DAI 1"] and shown == ["DAI 75 %"] and r.chosen == 0 and s.dai.calls == 1,
+           f"one result, shown at its strength: {shown}, the model run once though asked twice")
     expect(s.refine_check(r) == (False, "sharp"), "\"Full detail\" has nothing to redraw")
 
-    # saved at 100 %: the photo without the glow, its own noise
-    r.chosen, r.user_picked = 1, True
-    dng, __, __ = s.write_all()
-    cfa1 = read_cfa(ar, dng)
-    left = (cfa1.astype(np.float64) - cfa_clean)[frame]
-    expect(np.abs(left[strong].mean()) < 0.03 * added[strong].mean(),
-           f"at 100 % the glow is gone: {left[strong].mean():+.1f} DN left of {added[strong].mean():.0f}")
+    def saved(strength):
+        s.set_strength(r, strength)
+        dng, __, __ = s.write_all()
+        cfa = read_cfa(ar, dng)
+        return cfa, (cfa.astype(np.float64) - cfa_clean)[frame][strong].mean() / added[strong].mean()
+
+    # at 100 %: the photo without the glow, its own noise
+    cfa1, rest = saved(1.0)
+    expect(abs(rest) < 0.03, f"at 100 % the glow is gone: {rest:+.1%} of it left")
     rows = slice(y0 + 300, y0 + 600)
     cols = slice(x0 + 300, x0 + 560)
     n0, n1 = neighbour_noise(cfa0, (rows, cols)), neighbour_noise(cfa1, (rows, cols))
     expect(abs(n1 / n0 - 1) < 0.03, f"with the sensor's own noise: {n1:.2f} DN, it was {n0:.2f} (none added)")
-    moved = np.abs(cfa1.astype(np.float64) - cfa0)[frame][none]
-    print(f"  info where there was no glow: mean change {moved.mean():.3f} DN, max {moved.max():.0f} DN, "
-          f"{(moved > 0).mean():.2%} of the values changed", flush=True)
     same = (cfa1 == cfa0)[frame]
     expect(same[none].mean() > 0.99, f"where there was no glow, {same[none].mean():.1%} of the values untouched")
     sky = (cfa0 == cr.SAT)
     expect(np.array_equal(cfa1[sky], cfa0[sky]), f"the blown sky keeps its clipped values ({int(sky.sum())})")
 
-    # the window's preview: base.png, darker only where the glow was
-    shown_now = s.composite().astype(np.float64).mean(axis=2) - s.base_arr.astype(np.float64).mean(axis=2)
+    # the window's preview: base.png, darker only where the glow was, more so at a higher strength
+    def darker():
+        d = s.composite().astype(np.float64).mean(axis=2) - s.base_arr.astype(np.float64).mean(axis=2)
+        return d[gb > 0.5].mean(), d[gb < 0.01].mean()
     gb = np.asarray(cr.upright_half(Image.fromarray((g / g.max() * 255).astype(np.uint8)))) / 255.0
-    expect(shown_now[gb > 0.5].mean() < -3 and abs(shown_now[gb < 0.01].mean()) < 0.5,
-           f"the preview darkens where the glow was ({shown_now[gb > 0.5].mean():.1f} levels) and not elsewhere "
-           f"({shown_now[gb < 0.01].mean():+.2f})")
+    at100, elsewhere = darker()
+    s.set_strength(r, 0.5)
+    at50, __ = darker()
+    expect(at100 < -3 and abs(elsewhere) < 0.5 and at100 < at50 < 0,
+           f"the preview darkens where the glow was ({at100:.1f} levels at 100 %, {at50:.1f} at 50 %) and not "
+           f"elsewhere ({elsewhere:+.2f})")
 
-    # saved at 75 %: a quarter of it left
-    r.chosen = 0
-    dng, __, __ = s.write_all()
-    cfa75 = read_cfa(ar, dng)
-    rest = (cfa75.astype(np.float64) - cfa_clean)[frame][strong].mean() / added[strong].mean()
-    expect(0.22 < rest < 0.28, f"at 75 % a quarter of the glow is left ({rest:.1%})")
+    # 75 % and a strength in between
+    __, rest = saved(0.75)
+    expect(0.23 < rest < 0.27, f"at 75 % a quarter of the glow is left ({rest:.1%})")
+    cfa40, rest = saved(0.4)
+    expect(0.57 < rest < 0.63, f"at 40 % three fifths of it are left ({rest:.1%})")
     s.close()
 
-    # the project keeps the reflection's light, not the variants' pictures
-    with zipfile.ZipFile(project.path_for(photo)) as z:
+    # the project keeps the reflection's light and its strength, no picture
+    path = project.path_for(photo)
+    with zipfile.ZipFile(path) as z:
         names = z.namelist()
-    size = project.path_for(photo).stat().st_size / 2 ** 20
-    expect(f"r{r.id}/light.npz" in names and not any(n.endswith(("/00.png", "/01.png")) for n in names),
-           f"the project keeps the reflection's light, not its variants' pictures ({size:.1f} MB)")
+        meta = json.loads(z.read("project.json"))
+    e = meta["removals"][0]
+    expect(f"r{r.id}/light.npz" in names and not any(n.endswith(".png") and "/0" in n for n in names)
+           and e.get("strength") == 0.4,
+           f"the project keeps the reflection's light and its strength {e.get('strength')}, no picture "
+           f"({path.stat().st_size / 2 ** 20:.1f} MB)")
 
-    # reopened: a reflection removal again, the same sensor data
+    # reopened: a reflection removal again, at its strength, the same sensor data
     s2 = cr.session(ar, lc.lc, photo, export, base_png, work / "s2")
     r2 = s2.removals[0] if s2.removals else None
-    expect(r2 is not None and r2.reflects() and r2.chosen_label() == "DAI 1",
-           f"reopened: the reflection removal, {r2.chosen_label() if r2 else None} chosen")
-    expect(np.array_equal(s2.working_cfa(), cfa75), "it rebuilds exactly the DNG's sensor data")
-    s2.composite()  # its preview, from the area rendered again (a reflection variant differs all over its area)
+    expect(r2 is not None and r2.reflects() and r2.chosen_label() == "DAI 1" and r2.strength == 0.4,
+           f"reopened: the reflection removal at {round(100 * r2.strength) if r2 else None} %")
+    expect(np.array_equal(s2.working_cfa(), cfa40), "it rebuilds exactly the DNG's sensor data")
+    s2.composite()  # its preview, from the area rendered again (its result differs all over its area)
     expect(r2._src is not None, "its area rendered for the preview")
     s2.close()
+
+    # a project saved before the slider: a variant per strength (75, 100, 50, 125 %), the second one chosen
+    e.pop("strength")
+    e["variants"], e["chosen"], e["counts"] = [{"label": f"DAI {k}"} for k in (1, 2, 3)], 1, {"dai": 3}
+    with zipfile.ZipFile(path) as z:
+        files = {n: z.read(n) for n in z.namelist() if n != "project.json"}
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("project.json", json.dumps(meta))
+        for n, b in files.items():
+            z.writestr(n, b)
+    s3 = cr.session(ar, lc.lc, photo, export, base_png, work / "s3")
+    r3 = s3.removals[0] if s3.removals else None
+    expect(r3 is not None and [lb for lb, __ in r3.candidates] == ["DAI 1"] and r3.strength == 1.0,
+           f"a project saved before the slider opens with one result at the chosen variant's strength "
+           f"({round(100 * r3.strength) if r3 else None} %)")
+    s3.close()
 
 
 def main():
