@@ -302,10 +302,7 @@
   "Remove reflections": "Rimuovi riflessi",
   "Reflections in glass · whole photo or selection": "Riflessi nel vetro · tutta la foto o la selezione",
   "A photo through glass — a shop window, a display case: it takes away the light the glass reflects, over the whole photo (nothing selected) or over the selection.": "Una foto attraverso un vetro — una vetrina, una teca: toglie la luce che il vetro riflette, su tutta la foto (niente selezionato) o sulla selezione.",
-  "#{id} takes a reflection away: choose DAI above for more": "#{id} toglie un riflesso: per altre varianti scegli DAI sopra",
-  "#{id} fills a selection: reflections come off a new selection or the whole photo": "#{id} riempie una selezione: i riflessi si tolgono da una nuova selezione o da tutta la foto",
   "For reflections only: it fills nothing. A sharp, bright reflection (trees mirrored in a window, the sky in a puddle) is only partly taken away.": "Solo per i riflessi: non riempie niente. Un riflesso nitido e luminoso (alberi specchiati in una vetrina, il cielo in una pozzanghera) si toglie solo in parte.",
   "DAI (Dereflection Any Image) — it finds the light the glass reflects over the photo (the street in a shop window, a veil over what is behind it) and takes it away from the RAW itself: every detail stays, nothing is redrawn. With nothing selected, the whole photo; with a selection, there, fading out around it. ~{time}; then Strength, under the result, says how much of it goes, 0 to 150 % (75 % at first: the closest to Lightroom's Remove Reflections). Licence Apache-2.0.": "DAI (Dereflection Any Image) — trova la luce che il vetro riflette sulla foto (la strada in una vetrina, un velo su ciò che sta dietro) e la toglie dal RAW stesso: ogni dettaglio resta, niente viene ridisegnato. Senza selezione, tutta la foto; con una selezione, lì, sfumando intorno. ~{time}; poi Intensità, sotto il risultato, dice quanto toglierne, da 0 a 150 % (75 % all'inizio: il più vicino a Rimuovi riflessi di Lightroom). Licenza Apache-2.0.",
-  "Strength": "Intensità",
-  "#{id}: set how much of the reflection goes with Strength, below": "#{id}: quanto riflesso togliere si sceglie con Intensità, qui sotto"
+  "Strength": "Intensità"
 }

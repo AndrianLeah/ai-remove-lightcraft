@@ -1063,15 +1063,6 @@ def enlarged_light(light, size):
     return light if light.shape[1::-1] == tuple(size) else np.clip(_resized(light, size, Image.BICUBIC), 0, None)
 
 
-def without_reflection(src, light, strength, alpha=None):
-    """src (PIL, sRGB-encoded linear light) with `strength` of a reflection's light (enlarged_light) taken away, where
-    alpha (HxW 0..1, default everywhere) says."""
-    from rawdng import RawDNG
-    a = RawDNG.inv_oetf(np.asarray(src.convert("RGB"), np.float32) / 255)
-    take = light * strength if alpha is None else light * (strength * alpha[..., None])
-    return Image.fromarray((RawDNG.oetf(a - take) * 255).round().astype(np.uint8))
-
-
 class DAI:
     """DAI, Dereflection Any Image (Hu et al., AAAI 2026): Stable Diffusion 2 retrained to see through glass, in one
     step. Its ControlNet reads the photo's latents, the UNet draws the scene behind the glass from nothing (zero

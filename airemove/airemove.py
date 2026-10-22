@@ -893,7 +893,7 @@ DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20
                  "rorem_load": 20, "rorem_variant": 7,
                  "osor_load": 25, "osor_variant": 8, "shadow": 12,
                  "qwen_load": 15, "qwen_variant": 35, "dai_load": 15, "dai_variant": 8,
-                 "area": 3, "save": 6,
+                 "area": 3, "reflection_area": 1, "save": 6,
                  # one square of a tiled fill (tiles.py), one redrawn by "Full detail", the blend of the area after
                  "flux_tile512": 13, "flux_tile768": 22, "sdxl_tile1024": 7.5, "lama_tile512": 2,
                  "rorem_tile1024": 6.5,
@@ -1014,6 +1014,7 @@ class Removal:
         # upright): the project keeps it instead of a picture, and how much of it is taken away is its strength
         self.light = None
         self.strength = engines.mf.REFLECTION_STRENGTH
+        self.small = None  # its area as the window needs it (Session._reflection_area): no full-size render
         # the area image (render space, earlier removals applied) and its blend solver are made when first needed:
         # a reopened project shows its removals at once, and an area is rendered from the RAW only to change it or
         # to write the DNG (_load: Session._load_area)
@@ -1046,6 +1047,19 @@ class Removal:
     def reflects(self):
         """Whether it takes a reflection away ("Remove reflections") rather than filling a hole."""
         return self.reflection or any(reflection_variant(label) for label, __ in self.candidates)
+
+
+def feathered(mask, sigma):
+    """A selection (bool) fading out around it over a gaussian of sigma pixels, 0..1 float32: blurred on the mask made
+    smaller when sigma is large (a whole photo's in ~0.1 s, not 4), all of it 1 for a mask that is all True."""
+    if mask.all():
+        return np.ones(mask.shape, np.float32)
+    f = max(1, int(sigma // 6))  # blurred 6 pixels or more at the smaller size: within 1 % of the exact one
+    h, w = mask.shape
+    H, W = -(-h // f) * f, -(-w // f) * f  # a multiple of f: the smaller mask lies exactly on the pixels
+    a = np.pad(mask.astype(np.float32), ((0, H - h), (0, W - w)), mode="edge")
+    small = ndi.gaussian_filter(a.reshape(H // f, f, W // f, f).mean(axis=(1, 3)), sigma / f, mode="nearest")
+    return np.clip(np.asarray(Image.fromarray(small).resize((W, H), Image.BILINEAR))[:h, :w], 0, 1)
 
 
 def label_text(label):
@@ -1164,8 +1178,8 @@ class Session:
                 r.candidates = [(label, im) for label, im in r.candidates if reflection_variant(label)][:1]
                 r.chosen = 0 if r.candidates else None
             # shown from its variants; its area is rendered (with the earlier removals applied, as when it was made)
-            # only when it is needed: more variants, Full detail, the DNG (Removal.src) — a reflection removal's at
-            # once (_place): it is shown from it and its light
+            # only when it is needed: more variants, Full detail, the DNG (Removal.src) — a reflection removal's never
+            # at full size: it is shown from a half-size one (_reflection_area) and its light, the DNG gets its light
             self._masks(r)
             r._load = self._load_area
             self._place(r)
@@ -1373,11 +1387,12 @@ class Session:
             return self._work_cfa
 
     def area_ready(self, r):
-        """Whether r's area is rendered already (a reopened removal's is, at its first change)."""
-        return r._src is not None
+        """Whether r's area is rendered already (a reopened removal's is, at its first change; a reflection removal's
+        is the half-size one the window shows, _reflection_area)."""
+        return r.small is not None if r.reflects() else r._src is not None
 
     def ensure_area(self, r):
-        return r.src
+        return self._reflection_area(r) if r.reflects() else r.src
 
     def _load_area(self, r):
         """Removal.src of a reopened removal: its area rendered from the photo with the earlier removals applied."""
@@ -1445,7 +1460,7 @@ class Session:
         _, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t, square=False)
         self._init_area(r)
         self.removals.append(r)
-        measured("area", time.time() - t0)
+        measured("reflection_area" if reflection else "area", time.time() - t0)  # a reflection's: half size
         return r
 
     def plan_removal(self, mask_e, hints=None):
@@ -1466,16 +1481,18 @@ class Session:
         """The area image (photo with the earlier removals applied: those before `upto`, else all), its masks and
         preview placement. Its blend solver is made at the first blend (Removal.membrane)."""
         with self._area_lock:
+            if r.reflection:  # shown from a half-size area (_place: _reflection_area), the model gets its own render
+                self._masks(r)
+                self._place(r)
+                return
             srgb, r.gain = self.raw.render(r.box, r.gain, cfa=self.working_cfa(upto))  # gain None: from this area
             r.src = Image.fromarray((srgb * 255).round().astype(np.uint8))
             self._masks(r)
             r.membrane = None
             self._place(r)
-        # for adopting results made before projects existed (_work_areas); quick PNG: they are only read back. Not for
-        # a reflection removal: it came after projects, and its area is often the whole photo (tens of MB)
-        if not r.reflection:
-            r.src.save(self.work / f"r{r.id}_src.png", compress_level=1)
-            r.mask_img.save(self.work / f"r{r.id}_mask.png", compress_level=1)
+        # for adopting results made before projects existed (_work_areas); quick PNG: they are only read back
+        r.src.save(self.work / f"r{r.id}_src.png", compress_level=1)
+        r.mask_img.save(self.work / f"r{r.id}_mask.png", compress_level=1)
 
     def _masks(self, r):
         """r's hole as an image and its feathered alpha (render space), and the chosen fill on its area."""
@@ -1499,14 +1516,11 @@ class Session:
         size = (max(1, X1 - X0), max(1, Y1 - Y0))
         r.base_alpha = self._base_alpha(r, r.alpha)
         keep = r.base_alpha < 0.01
-        if r.reflects():  # its variants differ from the photo a little all over (a whole-photo one has no "around"):
-            # the curve is fitted on the area itself, the photo as it was, everywhere — rendered now if reopened
-            # (_init_area places it again)
-            if r._src is None and r.candidates:
-                r.lut = [np.arange(256, dtype=np.uint8)] * 3
-                r.src
-                return
-            keep = np.ones_like(keep)
+        if r.reflects():  # its area and curve, fitted on all of it (_reflection_area); placed again: rendered again,
+            # from the data before it
+            r.small = None
+            self._reflection_area(r)
+            return
         if r._src is None and not r.candidates:  # a part still waiting for its model (plan_removal): no preview yet,
             r.lut = [np.arange(256, dtype=np.uint8)] * 3  # this runs again when its area is rendered (_init_area)
             return
@@ -1769,32 +1783,49 @@ class Session:
             measured(f"{model}_variant", time.time() - t0)
         im = self._reflection_result(r, label)
         self.add_candidate(r, label, im)
-        light = self._reflection(r)[0]
         log(f"#{r.id} {label} in {time.time() - t0:.1f}s: the reflection's light is "
-            f"{float(light.mean()) / max(1e-6, float(RawDNG.inv_oetf(np.asarray(r.src) / 255).mean())):.1%} of the "
-            f"area's; {round(100 * r.strength)} % of it taken away")
+            f"{float(r.light.mean()) / max(1e-6, float(self._reflection_area(r).mean())):.1%} of the area's; "
+            f"{round(100 * r.strength)} % of it taken away")
         return label, im
 
     def _reflection(self, r):
         """(light, alpha) of a reflection removal at its area's size, sensor orientation: its light (Removal.light)
-        enlarged, and where it is taken away — the selection, fading out around it (REFLECTION_FEATHER). Kept for the
-        last removal asked about."""
+        enlarged, and where it is taken away — the selection, fading out around it (feathered). For the DNG; kept for
+        the last removal asked about."""
         key = (r.id, id(r.light), r.reg_mask.shape)
         if getattr(self, "_reflection_of", (None,))[0] != key:
             up_size = self._up(np.zeros(r.reg_mask.shape, bool)).shape[::-1]  # (width, height) upright
             light = self._down(engines.enlarged_light(r.light, up_size))
-            feather = REFLECTION_FEATHER * max(r.reg_mask.shape)
-            alpha = np.clip(ndi.gaussian_filter(r.reg_mask.astype(np.float32), feather, mode="nearest"), 0, 1)
-            self._reflection_of = (key, light, alpha)
+            self._reflection_of = (key, light, feathered(r.reg_mask, REFLECTION_FEATHER * max(r.reg_mask.shape)))
         return self._reflection_of[1:]
 
+    def _reflection_area(self, r):
+        """A reflection removal's area for the window (Removal.small): linear light (render space, float32), as the
+        photo is seen, at base.png's size, from the data before it — through RawDNG.render_small, a whole photo in
+        ~0.5 s where demosaicing it at full size takes 4. Its gain, the first time, from it (as render's). And its
+        curve to base.png's look (Removal.lut): its result differs from the photo a little all over (a whole-photo
+        one has no "around"), so it is fitted on all of the area, the photo as it was."""
+        if r.small is None:
+            with self._area_lock:
+                lin, r.gain = self.raw.render_small(r.box, r.gain, cfa=self.working_cfa(r))
+            lin = self._up(lin)
+            Y0, Y1, X0, X1 = r.base_rect
+            size = (max(1, X1 - X0), max(1, Y1 - Y0))
+            r.small = np.clip(engines._resized(lin, size, Image.BOX), 0, None)
+            # bilinear, as a fill's curve: from values with their noise, which base.png's own development sees (box
+            # averaged: 0.3 levels further from LightCraft's render of the DNG)
+            src_o = np.asarray(Image.fromarray(SRGB16[(np.clip(lin, 0, 1) * 65535 + 0.5).astype(np.uint16)])
+                               .resize(size, Image.BILINEAR))
+            base_c = self.base_arr[Y0:Y0 + size[1], X0:X0 + size[0]]
+            r.lut = [tone_curve(src_o[..., c].ravel(), base_c[..., c].ravel()) for c in range(3)]
+        return r.small
+
     def _reflection_result(self, r, label):
-        """A reflection removal's result as a variant: its hole (the selection and its fading edge) and scale (1:
-        nothing is redrawn). Its picture is the area itself: the window shows it from its light at its strength
-        (_reflection_preview), the raw gets that light (working_cfa)."""
-        r.holes[label] = self._reflection(r)[1] > 0.004
+        """A reflection removal's result as a variant: its scale (1: nothing is redrawn) and no picture — the window
+        shows it from its area and light at its strength (_reflection_preview), the raw gets that light
+        (working_cfa)."""
         r.scale[label] = 1.0
-        return r.src
+        return None
 
     def set_strength(self, r, strength):
         """How much of a reflection removal's light is taken away (0 to model_files.REFLECTION_MAX): its preview
@@ -1808,13 +1839,14 @@ class Session:
         that the window's slider redraws it at once. What does not change with the strength is kept for the last
         removal asked about."""
         Y0, Y1, X0, X1 = r.base_rect
-        size = (max(1, X1 - X0), max(1, Y1 - Y0))
-        key = (r.id, id(r.light), id(r.src), size)
+        key = (r.id, id(r.light), id(r.small))
         if getattr(self, "_reflection_base", (None,))[0] != key:
-            light, alpha = self._reflection(r)
-            src = RawDNG.inv_oetf(np.asarray(r.src, np.float32) / 255).astype(np.float32)
-            lin = engines._resized(np.ascontiguousarray(apply_t(src, self.t)), size, Image.BOX)
-            take = engines._resized(np.ascontiguousarray(apply_t(light * alpha[..., None], self.t)), size, Image.BOX)
+            lin = self._reflection_area(r)
+            size = lin.shape[1::-1]
+            light = r.light.astype(np.float32)  # upright, as base.png
+            light = np.clip(engines._resized(light, size, Image.BICUBIC if size[0] > light.shape[1] else Image.BOX),
+                            0, None)
+            take = light * feathered(r.base_alpha > 0.5, REFLECTION_FEATHER * max(size))[..., None]
             tabs = [r.lut[c][SRGB16] for c in range(3)]  # linear light, 16 bits -> base.png's look, per channel
             before = self._look(tabs, lin)
             self._reflection_base = (key, lin, take, tabs, before)

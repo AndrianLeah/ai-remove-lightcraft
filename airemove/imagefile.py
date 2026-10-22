@@ -222,6 +222,13 @@ class ImageFile:
         y0, y1, x0, x1 = box
         return (self.cfa if cfa is None else cfa)[y0:y1, x0:x1].astype(np.float64) / self.maxv, 1.0
 
+    def render_small(self, box, gain=None, cfa=None):
+        """An area as render's, in linear light (float32): RawDNG.render_small's, at its own size (a picture's is
+        quick)."""
+        from rawdng import RawDNG
+        srgb, gain = self.render(box, gain, cfa)
+        return RawDNG.inv_oetf(srgb).astype(np.float32), gain
+
     def fill_region(self, box, filled_srgb, gain, alpha, cfa=None, rng_seed=11):
         """The area's pixels with the fill (0..1, as render gives) blended in where alpha says."""
         y0, y1, x0, x1 = box

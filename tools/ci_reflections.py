@@ -15,7 +15,9 @@ is added); where there is no glow they are untouched, and the blown sky keeps it
 where the glow was and nowhere else; at 75 % a quarter of the glow is left, at 40 % three fifths; the project keeps the
 reflection's light and its strength, no picture; reopened, the removal is a reflection removal again at its strength
 and rebuilds the same sensor data; a project saved with one variant per strength (before the slider) opens at the
-chosen one's strength. Exit status 1 at the first check that fails.
+chosen one's strength; reopened, it is shown without rendering its area at full size (a half-size render of the
+sensor's quads, close to the full one), and a selection's fading edge, blurred on a smaller mask, is the exact one
+within a hundredth. Exit status 1 at the first check that fails.
 
   ci_reflections.py DIR [--keep FOLDER]    FOLDER: where the photos, base.png, the DNG and the project are left
 """
@@ -91,6 +93,7 @@ def run(d, out):
     import project
     from rawdng import XYZD50_TO_SRGB
 
+    ar.measured = lambda key, seconds: None  # the stand-in's times are not DAI's: the install's estimates stay
     photos, work = out / "photos", out / "work"
     photos.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
@@ -175,9 +178,23 @@ def run(d, out):
     expect(r2 is not None and r2.reflects() and r2.chosen_label() == "DAI 1" and r2.strength == 0.4,
            f"reopened: the reflection removal at {round(100 * r2.strength) if r2 else None} %")
     expect(np.array_equal(s2.working_cfa(), cfa40), "it rebuilds exactly the DNG's sensor data")
-    s2.composite()  # its preview, from the area rendered again (its result differs all over its area)
-    expect(r2._src is not None, "its area rendered for the preview")
+    s2.composite()  # its preview: from its area at half size and its light
+    expect(r2.small is not None and r2._src is None, "shown again without rendering its area at full size")
+    full, __ = s2.raw.render(r2.box, r2.gain)
+    half, __ = s2.raw.render_small(r2.box, r2.gain)
+    a, b = ar.RawDNG.inv_oetf(full).mean(axis=(0, 1)), np.clip(half, 0, 1).mean(axis=(0, 1))
+    expect(np.abs(b / a - 1).max() < 0.01 and half.shape[:2] == (H // 2, W // 2),
+           f"the half-size render is the full one's light: {np.round(b, 4)}, full {np.round(a, 4)}")
     s2.close()
+
+    # a selection's fading edge, blurred on a smaller mask: the exact one within a hundredth
+    m = np.zeros((900, 1300), bool)
+    m[200:600, 300:900] = True
+    m[650:700, 100:1200] = True
+    exact = np.clip(ar.ndi.gaussian_filter(m.astype(np.float32), 13, mode="nearest"), 0, 1)
+    err = float(np.abs(ar.feathered(m, 13) - exact).max())
+    expect(err < 0.01 and ar.feathered(np.ones((40, 60), bool), 13).min() == 1,
+           f"a selection's fading edge within {err:.4f} of the exact one, a whole photo's 1 everywhere")
 
     # a project saved before the slider: a variant per strength (75, 100, 50, 125 %), the second one chosen
     e.pop("strength")
