@@ -38,5 +38,6 @@ The models have their own licences:
 - **RORem:** Apache-2.0, on SDXL Inpainting (CreativeML Open RAIL++-M)
 - **FLUX.1 [dev] and OSOR:** FLUX.1 [dev] Non-Commercial
 - **Qwen-Image 2.1 Turbo:** Qwen Research License, non-commercial; its text encoder Qwen3-VL: Apache-2.0
+- **DAI:** Apache-2.0, a fine-tune of Stable Diffusion 2 (CreativeML Open RAIL++-M)
 
-For paid work, use LaMa or RORem. See `THIRD-PARTY-NOTICES.md` for details.
+For paid work, use LaMa or RORem, and DAI for reflections. See `THIRD-PARTY-NOTICES.md` for details.

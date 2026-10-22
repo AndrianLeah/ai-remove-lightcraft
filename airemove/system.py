@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent  # the install folder: airemove/, 
 CONFIG_FILE = ROOT / "airemove.json"  # written by the installer
 DEFAULT_PORT = 7980
 LIGHTCRAFT_ID = "ai.storyteller.lightcraft"  # Flatpak / desktop entry id
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 REPO = "AndrianLeah/ai-remove-lightcraft"  # on GitHub: its releases are the updates
 RELEASES = f"https://github.com/{REPO}/releases/latest"
 
