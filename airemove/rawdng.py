@@ -159,18 +159,54 @@ class RawDNG:
             v = rgb[hot]
             rgb[hot] = np.minimum(v, cap * np.minimum(1.0, v[:, [int(np.argmax(cap))]]))
         lin = np.einsum("ij,hwj->hwi", self.cam_to_srgb(), rgb)
-        if gain is None:  # mid-tones near 0.45, but the brightest 0.5 % must not clip (detail lost in the raw)
-            lum, top = np.clip(lin.mean(axis=2), 0, None), lin.max(axis=2)
-            if hot.any() and (~hot).sum() > 0.05 * hot.size:
-                # a clipped sky is no mid-tone, and its brightest pixels are its white, not the fringes demosaicing
-                # leaves along its edges
-                lum, top = lum[~hot], top[~hot]
-                if hot.mean() > 0.005:
-                    top = np.append(top, np.full(int(hot.sum()), self.white_cap()[1]))
-            gain = min(0.45 / max(1e-6, float(np.percentile(lum, 50))),
-                       0.97 / max(1e-6, float(np.percentile(top, 99.5))))
-            gain = float(np.clip(gain, 0.5, 64))
+        if gain is None:
+            gain = self._gain(lin, hot)
         return self.oetf(lin * gain), gain
+
+    def _gain(self, lin, hot):
+        """A region's render gain (render, gain None) from its linear light and clipped pixels: mid-tones near 0.45,
+        but the brightest 0.5 % must not clip (detail lost in the raw)."""
+        lum, top = np.clip(lin.mean(axis=2), 0, None), lin.max(axis=2)
+        if hot.any() and (~hot).sum() > 0.05 * hot.size:
+            # a clipped sky is no mid-tone, and its brightest pixels are its white, not the fringes demosaicing
+            # leaves along its edges
+            lum, top = lum[~hot], top[~hot]
+            if hot.mean() > 0.005:
+                top = np.append(top, np.full(int(hot.sum()), self.white_cap()[1]))
+        gain = min(0.45 / max(1e-6, float(np.percentile(lum, 50))),
+                   0.97 / max(1e-6, float(np.percentile(top, 99.5))))
+        return float(np.clip(gain, 0.5, 64))
+
+    def render_small(self, box, gain=None, cfa=None):
+        """A region as render's, in linear light (before its sRGB curve; float32) and at half its size: each 2x2
+        quad of the sensor one pixel, no demosaicing — a whole photo in ~0.5 s, not 4. For a preview smaller still
+        (the window's). Clipped highlights neutral as render's; gain as render's (None: from the region)."""
+        y0, y1, x0, x1 = box
+        py, px = self._phase(y0, x0)
+        y0, x0 = y0 + py, x0 + px  # quads from the pattern's origin
+        h, w = (y1 - y0) // 2 * 2, (x1 - x0) // 2 * 2
+        a = (self.cfa if cfa is None else cfa)[y0:y0 + h, x0:x0 + w]
+        first = int(np.argmax(self.white_cap()[0]))
+        rgb = np.zeros((h // 2, w // 2, 3), np.float32)
+        hot = np.zeros(rgb.shape[:2], bool)
+        n = np.zeros(3, np.float32)
+        for i in (0, 1):
+            for j in (0, 1):
+                c, blk = self.pattern[i, j], self.black[i, j]
+                v = a[i::2, j::2].astype(np.float32)
+                rgb[..., c] += np.clip((v - blk) / (self.white - blk), 0, None)
+                n[c] += 1
+                if c == first:
+                    hot |= v >= blk + CLIP_AT * (self.white - blk)
+        rgb /= np.maximum(n, 1)
+        if hot.any():
+            cap = self.white_cap()[0].astype(np.float32)
+            v = rgb[hot]
+            rgb[hot] = np.minimum(v, cap * np.minimum(1.0, v[:, [first]]))
+        lin = rgb @ self.cam_to_srgb().T.astype(np.float32)
+        if gain is None:
+            gain = self._gain(lin, hot)
+        return lin * np.float32(gain), gain
 
     def global_gain(self):
         """One render gain for the whole photo (median of a sparse sample of 2x2 CFA quads -> sRGB luminance)."""

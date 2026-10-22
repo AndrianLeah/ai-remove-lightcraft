@@ -1035,7 +1035,6 @@ DAI_PROMPT = "remove glass reflection"  # the prompt it was trained with (its pi
 # The light DAI takes away is subtracted as DAI found it, not blurred: blurred by 0.6 % of the area's long side it was
 # a little closer to Lightroom's on a statue behind a shop window (error 0.20 of its size instead of 0.21), but a sharp,
 # bright reflection (trees in a museum's window, the sky in a puddle) became black blotches with dark halos.
-REFLECTION_STRENGTHS = mf.REFLECTION_STRENGTHS  # each variant's share of that light, in order
 
 
 def _resized(a, size, how):
@@ -1062,15 +1061,6 @@ def enlarged_light(light, size):
     """reflection_light at an area's size (width, height): float32 HxWx3."""
     light = light.astype(np.float32)
     return light if light.shape[1::-1] == tuple(size) else np.clip(_resized(light, size, Image.BICUBIC), 0, None)
-
-
-def without_reflection(src, light, strength, alpha=None):
-    """src (PIL, sRGB-encoded linear light) with `strength` of a reflection's light (enlarged_light) taken away, where
-    alpha (HxW 0..1, default everywhere) says."""
-    from rawdng import RawDNG
-    a = RawDNG.inv_oetf(np.asarray(src.convert("RGB"), np.float32) / 255)
-    take = light * strength if alpha is None else light * (strength * alpha[..., None])
-    return Image.fromarray((RawDNG.oetf(a - take) * 255).round().astype(np.uint8))
 
 
 class DAI:

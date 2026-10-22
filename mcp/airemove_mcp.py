@@ -103,7 +103,7 @@ back (the default); FLUX Fill = architecture, large areas, NOT people (it draws 
 people and objects on complex backgrounds, removes them by name. "Remove selection" (Enter) does it all with one model.
 Reflections in glass (a shop window, a display case): choose "DAI" under "Remove reflections" in the model menu and
 press "Remove reflections": with nothing selected the whole photo, else the selection. It takes away the light the
-glass reflects and keeps every detail; its variants take away 75 %, 100 %, 50 %, 125 % of it.
+glass reflects and keeps every detail; its slider says how much of it (75 % at first, 0 to 150 %).
 Each removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" writes/updates the
 result (the DNG, or the picture's copy).
 Zoom: Ctrl/Cmd+wheel or + / -, 0 = fit; pan: wheel, middle button or Space+drag; hold "Originale" (or \\) to compare.
@@ -331,15 +331,15 @@ def remove_with_masks(a):
     return json.loads(line) if line else {"ok": False, "error": (r.stdout + r.stderr)[-1500:]}
 
 
-REFLECTION_STRENGTHS = [round(100 * s) for s in mf.REFLECTION_STRENGTHS]  # % each DAI variant takes away, in order
+REFLECTION_STRENGTH, REFLECTION_MAX = round(100 * mf.REFLECTION_STRENGTH), round(100 * mf.REFLECTION_MAX)  # in %
 
 
 def remove_reflections(a):
     d = install_dir()
-    strength = int(a.get("strength") or 75)
-    if strength not in REFLECTION_STRENGTHS:
-        return {"ok": False, "error": "strength: " + " | ".join(map(str, REFLECTION_STRENGTHS))}
-    args = ["--auto", f"dai{REFLECTION_STRENGTHS.index(strength) + 1}"]
+    strength = int(a["strength"]) if a.get("strength") is not None else REFLECTION_STRENGTH
+    if not 0 <= strength <= REFLECTION_MAX:
+        return {"ok": False, "error": f"strength: 0 to {REFLECTION_MAX} (%)"}
+    args = ["--auto", f"dai{strength}"]
     if a.get("photo_id"):
         args += ["--id", str(int(a["photo_id"]))]
     try:
@@ -459,9 +459,10 @@ TOOLS = [
                            "masks named \"Remove\" or, without one, from the whole photo; every detail of it stays. "
                            "Written and stacked like remove_with_masks. Seconds on a GPU.",
      {"type": "object", "properties": {
-         "strength": {"type": "integer", "enum": REFLECTION_STRENGTHS,
-                      "description": "% of the reflection DAI found that is taken away (default 75: closest to "
-                                     "Lightroom's Reflection Removal where measured; DAI alone takes more)"},
+         "strength": {"type": "integer", "minimum": 0, "maximum": REFLECTION_MAX,
+                      "description": f"% of the reflection DAI found that is taken away (default "
+                                     f"{REFLECTION_STRENGTH}: closest to Lightroom's Reflection Removal where "
+                                     f"measured; DAI alone takes more)"},
          "photo_id": {"type": "integer", "description": "default: LightCraft's active photo"}}},
      remove_reflections, False),
     ("project_info", "The AI Remove project of a photo: its removals, the chosen variants and the result it writes.",

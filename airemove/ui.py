@@ -85,6 +85,7 @@ BG, SIDE, CARD, CARD_HI, LINE, CANVAS = "#141414", "#1b1b1b", "#232323", "#2c2c2
 BTN, BTN_HI, FG, DIM = "#2f2f2f", "#3c3c3c", "#ececec", "#8e8e8e"
 ACCENT, ACCENT_HI, GREEN, GREEN_HI = "#e8c35a", "#f2d27a", "#3d8a55", "#4a9c63"
 WARN = "#e8955a"  # what a model is not for (model_caveat)
+OFF = "#8a8a8a"  # a disabled button's or field's text: dimmer than FG, still readable on BTN (3.8:1)
 WAITING_RGB = (235, 120, 90)  # the outline of a part still waiting for its model ("Split selection")
 PANEL = CARD
 RED = (235, 64, 52)
@@ -322,6 +323,22 @@ class Stepper(tk.Frame):
 
     def insert(self, i, v):
         self.set(v)
+
+
+class FlatButton(tk.Button):
+    """App.button's: its colour follows its state. Disabled, a coloured one (accent, green) turns grey (_off), its
+    text dimmed on it: dimmed on the colour itself it could not be read."""
+
+    def configure(self, cnf=None, **kw):
+        out = super().configure(cnf, **kw)
+        if hasattr(self, "_off"):
+            if str(self["state"]) == "disabled":
+                super().configure(bg=self._off)
+            elif "state" in kw:  # enabled again (the hover colour, bg alone, stays)
+                super().configure(bg=kw.get("bg", self._bg))
+        return out
+
+    config = configure
 
 
 class HintEntry(tk.Entry):
@@ -581,11 +598,12 @@ class App:
         """Flat button with a hover colour. kind: grey | accent | green | ghost."""
         bg, fg, hi = {"grey": (BTN, FG, BTN_HI), "accent": (ACCENT, "#1b1b1b", ACCENT_HI),
                       "green": (GREEN, "#ffffff", GREEN_HI), "ghost": (SIDE, DIM, CARD)}[kind]
-        b = tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg, activebackground=hi, activeforeground=fg,
-                      relief="flat", bd=0, cursor="hand2", font=self.f_small if small else self.f_txt,
-                      padx=int(12 * self.k), pady=int((4 if small else 7) * self.k), disabledforeground="#666666",
-                      **kw)
+        b = FlatButton(parent, text=text, command=cmd, bg=bg, fg=fg, activebackground=hi, activeforeground=fg,
+                       relief="flat", bd=0, cursor="hand2", font=self.f_small if small else self.f_txt,
+                       padx=int(12 * self.k), pady=int((4 if small else 7) * self.k), disabledforeground=OFF,
+                       **kw)
         b._bg, b._hi = bg, hi
+        b._off = BTN if kind in ("accent", "green") else bg  # its colour when disabled (FlatButton)
         b.bind("<Enter>", lambda e: b.configure(bg=b._hi) if str(b["state"]) == "normal" else None)
         b.bind("<Leave>", lambda e: b.configure(bg=b._bg))
         return b
@@ -735,7 +753,7 @@ class App:
         self.describe_entry = HintEntry(drow, _("Describe, in English: people, car, sign…"), font=self.f_txt, bg=BTN,
                                         fg=FG, insertbackground=FG, relief="flat", highlightthickness=1,
                                         highlightbackground=LINE, highlightcolor=ACCENT, disabledbackground=CARD,
-                                        disabledforeground="#666666")
+                                        disabledforeground=OFF)
         self.describe_entry.pack(side="left", fill="x", expand=True, ipady=int(4 * k))
         self.describe_entry.bind("<Return>", lambda e: (self.describe(), "break")[1])  # not "Remove selection"
         self.describe_btn = self.button(drow, _("Select all"), self.describe, small=True)
@@ -787,7 +805,7 @@ class App:
         self.prompt_lbl.pack(fill="x")
         self.prompt = HintEntry(gen, "", font=self.f_txt, bg=BTN, fg=FG, insertbackground=FG, relief="flat",
                                 highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
-                                disabledbackground=CARD, disabledforeground="#666666")
+                                disabledbackground=CARD, disabledforeground=OFF)
         self.prompt.pack(fill="x", pady=(int(3 * k), int(10 * k)), ipady=int(5 * k))
         # Qwen-Image: what it recognised in the removal shown, which a name in the field corrects
         self.prompt_note = tk.Label(gen, text="", font=self.f_small, fg=DIM, bg=CARD, anchor="w", justify="left",
@@ -815,6 +833,7 @@ class App:
         # every part still waiting, in their order, with the model above (shown when two or more wait)
         self.all_btn = self.button(gen, "", self.generate_waiting, small=True)
         self.pending_gen = set()  # ids of the removals whose first variants are queued: no longer "waiting"
+        self.making = None  # id of the new removal the worker is making (run_job): not "waiting" either
         self.refresh_models()
 
         self.rows_hdr, rows = self.section(sp, _("Removals"))
@@ -828,8 +847,19 @@ class App:
         self.var_title, vars_ = self.section(sp, _("Variants"), expand=True)
         self.vars = Scroll(vars_, height=int(200 * k), width=self.side_w - int(60 * k))
         self.vars.pack(fill="both", expand=True)
+        # a reflection removal: how much of the reflection goes (Session.set_strength), shown while it is dragged
+        self.str_row = tk.Frame(vars_, bg=CARD)
+        tk.Label(self.str_row, text=_("Strength"), font=self.f_small, fg=DIM, bg=CARD).pack(side="left")
+        self.str_lbl = tk.Label(self.str_row, text="", font=self.f_small, fg=FG, bg=CARD, width=6, anchor="e")
+        self.str_lbl.pack(side="right")
+        self.str_scale = ttk.Scale(self.str_row, from_=0, to=round(100 * engines.mf.REFLECTION_MAX),
+                                   orient="horizontal", style="AI.Horizontal.TScale", command=self.on_strength)
+        self.str_scale.pack(side="left", fill="x", expand=True, padx=int(8 * k))
+        self.str_scale.bind("<ButtonRelease-1>", lambda e: self.strength_done())
+        self.str_job = None
         vb = tk.Frame(vars_, bg=CARD)
         vb.pack(fill="x", pady=(int(8 * k), 0))
+        self.vb = vb
         # a long removal's variants are drawn smaller than the photo: the chosen one redrawn at its resolution
         self.hd_btn = self.button(vb, "✦  " + _("Full detail"), self.full_detail, small=True)
         self.hd_btn.configure(state="disabled")
@@ -1052,8 +1082,9 @@ class App:
             "dai": _("DAI (Dereflection Any Image) — it finds the light the glass reflects over the photo (the "
                      "street in a shop window, a veil over what is behind it) and takes it away from the RAW itself: "
                      "every detail stays, nothing is redrawn. With nothing selected, the whole photo; with a "
-                     "selection, there, fading out around it. ~{time}; its variants take away 75 % of it (closest to "
-                     "Lightroom's Remove Reflections), 100 %, 50 %, 125 %. Licence Apache-2.0.",
+                     "selection, there, fading out around it. ~{time}; then Strength, under the result, says how much "
+                     "of it goes, 0 to 150 % (75 % at first: the closest to Lightroom's Remove Reflections). Licence "
+                     "Apache-2.0.",
                      time=self.fmt_s(A.expected("dai_variant")))}
         if hasattr(self, "model_info"):
             self.model_info.configure(text=info[self.model_key()])
@@ -1127,43 +1158,48 @@ class App:
             return
         r, m = self.cur, self.model_key()
         on = r is not None and not r.deleted and not self.writing
-        n = 1 if m == "lama" else int(self.count.get())
         reflect = m in A.REFLECTION_MODELS
-        if on and reflect:  # its variants: one per strength, the ones it has not got yet
-            n = min(n, len(engines.REFLECTION_STRENGTHS) - r.counts.get(m, 0))
-        first = on and self.waiting(r)  # a part that waits for its model: its first variants, the main action
-        if not on:
-            text = "＋  " + _("More variants for a removal (choose one below)")
-        elif r.reflects() and not reflect:  # a reflection taken away gets no fill, a fill no reflection
-            text, on = _("#{id} takes a reflection away: choose DAI above for more", id=r.id), False
-        elif reflect and not r.reflects():
-            text, on = _("#{id} fills a selection: reflections come off a new selection or the whole photo",
-                         id=r.id), False
-        elif reflect and n <= 0:
-            text, on = _("#{id} has a variant at every strength already", id=r.id), False
-        elif first:
-            text = "▶  " + _n("Generate #{id} with {model} ({n} variant)",
-                              "Generate #{id} with {model} ({n} variants)", n, id=r.id, model=MODEL_NAMES[m])
-        elif m == "lama" and any(c[0] == "LaMa" for c in r.candidates):
-            text, on = _("#{id} has LaMa's result already: choose another model", id=r.id), False
-        else:
-            text = "＋  " + _n("{n} more for #{id} with {model}", "{n} more for #{id} with {model}", n, id=r.id,
-                               model=MODEL_NAMES[m])
+        n = 1 if m == "lama" or reflect else int(self.count.get())
+        first = on and self.waiting(r) and r.reflects() == reflect  # a part that waits: its first variants, the main
+        # action. DAI makes one result per removal (its strength is the slider under it) and takes nothing off a fill,
+        # nor does a fill go on a reflection removal: no button, but for a reflection removal not made yet (stopped)
         b = self.more_btn
-        b._bg, b._hi = (ACCENT, ACCENT_HI) if first else (BTN, BTN_HI)
-        b.configure(text=text, state="normal" if on else "disabled", bg=b._bg, activebackground=b._hi,
-                    fg="#1b1b1b" if first else FG, font=self.f_bold if first else self.f_small)
-        rest = [x for x in self.s.removals if self.waiting(x)]
+        if (reflect or (on and r.reflects())) and not first:
+            b.pack_forget()
+        else:
+            if not on:
+                text = "＋  " + _("More variants for a removal (choose one below)")
+            elif first:
+                text = "▶  " + _n("Generate #{id} with {model} ({n} variant)",
+                                  "Generate #{id} with {model} ({n} variants)", n, id=r.id, model=MODEL_NAMES[m])
+            elif m == "lama" and any(c[0] == "LaMa" for c in r.candidates):
+                text, on = _("#{id} has LaMa's result already: choose another model", id=r.id), False
+            else:
+                text = "＋  " + _n("{n} more for #{id} with {model}", "{n} more for #{id} with {model}", n, id=r.id,
+                                   model=MODEL_NAMES[m])
+            accent = first and on  # dark text on the accent colour: never greyed out on it
+            b._bg, b._hi = (ACCENT, ACCENT_HI) if accent else (BTN, BTN_HI)
+            b.configure(text=text, state="normal" if on else "disabled", bg=b._bg, activebackground=b._hi,
+                        fg="#1b1b1b" if accent else FG, font=self.f_bold if accent else self.f_small)
+            if not b.winfo_manager():
+                b.pack(fill="x", pady=(int(6 * self.k), 0), after=self.split_btn)
+        rest = self.waiting_for(m)
         if len(rest) >= 2 and not self.writing:
             self.all_btn.configure(text="▶▶  " + _("Generate all {n} waiting with {model}", n=len(rest),
                                                    model=MODEL_NAMES[m]))
-            self.all_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=self.more_btn)
+            self.all_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=b if b.winfo_manager() else self.split_btn)
         else:
             self.all_btn.pack_forget()
 
     def waiting(self, r):
-        """Whether r is a part that waits for its model: split, never generated, not queued."""
-        return not r.deleted and not r.candidates and not r.counts and r.id not in self.pending_gen
+        """Whether r is a part that waits for its model: split (or its making stopped), never generated, not queued
+        nor being made."""
+        return (not r.deleted and not r.candidates and not r.counts and r.id not in self.pending_gen
+                and r.id != self.making)
+
+    def waiting_for(self, m):
+        """The removals waiting that model m can make: a reflection removal DAI, the others the fill models."""
+        return [x for x in self.s.removals if self.waiting(x) and x.reflects() == (m in A.REFLECTION_MODELS)]
 
     def split_selection(self):
         """"Split into parts": the selection as removals that wait, one per part (airemove.split_selection), each
@@ -1188,8 +1224,9 @@ class App:
     def generate_waiting(self):
         """"Generate all": every part still waiting, in their order (each sees those before it filled), with the
         model, text and number of variants above."""
-        m, n, p = self.model_key(), self.n_variants(), self.prompt_for(self.model_key())
-        for r in [x for x in self.s.removals if self.waiting(x)]:
+        m, p = self.model_key(), self.prompt_for(self.model_key())
+        n = 1 if m in A.REFLECTION_MODELS else self.n_variants()
+        for r in self.waiting_for(m):
             self.jobs.put(("more", r, n, m, p))
             self.pending_gen.add(r.id)
             self.update_row(r)
@@ -1199,7 +1236,7 @@ class App:
     def refine_note(self, why):
         """What "Full detail" would do for the removal shown, or why it does not apply (Session.refine_check)."""
         r = self.cur
-        label = A.label_text(r.chosen_label()) if r is not None and r.chosen is not None else ""
+        label = A.variant_text(r, r.chosen_label()) if r is not None and r.chosen is not None else ""
         model = MODEL_NAMES.get(self.s.refine_model() or "flux")
         return {
             "nosel": _("Full detail: for a long removal (a pole, a cable, a railing), the chosen variant redrawn at "
@@ -1237,6 +1274,7 @@ class App:
         ok, why = self.s.refine_check(self.cur) if on else (False, "nosel")
         self.hd_btn.configure(state="normal" if ok else "disabled")
         self.hd_note.configure(text=self.refine_note(why))
+        self.show_strength()
         if self.shadow_btn is not None:
             self.shadow_btn.configure(state="normal" if (has and ready) else "disabled")
 
@@ -1332,6 +1370,7 @@ class App:
                 A.log("ERROR:", traceback.format_exc())
                 self.post("error", str(e) if isinstance(e, A.Fail) else traceback.format_exc(limit=3))
             finally:
+                self.making = None
                 self.post("job_end")
 
     @staticmethod
@@ -1354,13 +1393,14 @@ class App:
             m = "lama" if kind == "lama" else model
             return s.variant_seconds(r, m) if r is not None else A.expected("lama" if m == "lama" else f"{m}_variant")
         parts = []
-        if r is None:
-            parts.append(("area", _("Preparing the area"), A.expected("area")))
-        elif s.leaks(r):  # made before an area could hold a long selection: it grows first (Session.fit_area)
-            parts.append(("fit", _("Preparing the area"), 2 * A.expected("area")))
-        elif not s.area_ready(r):  # a reopened removal: its area is rendered from the RAW at its first change
-            parts.append(("prep", _("Preparing the area"), A.expected("area")))
         reflect = model in A.REFLECTION_MODELS  # no LaMa with it: nothing is filled
+        area = A.expected("reflection_area" if reflect else "area")
+        if r is None:
+            parts.append(("area", _("Preparing the area"), area))
+        elif s.leaks(r):  # made before an area could hold a long selection: it grows first (Session.fit_area)
+            parts.append(("fit", _("Preparing the area"), 2 * area))
+        elif not s.area_ready(r):  # a reopened removal: its area is rendered from the RAW at its first change
+            parts.append(("prep", _("Preparing the area"), area))
         if (r is not None and not r.candidates and not r.counts and model != "lama" and not reflect and s.thin(r)):
             parts.append(("lama", "LaMa", variant_secs("lama")))  # a part's first variants: as a new removal's
         if model == "lama":  # only the model the user picked runs
@@ -1385,6 +1425,7 @@ class App:
             if kind in ("area", "fit"):
                 if kind == "area":
                     r = s.new_removal(mask, hints, reflection=reflect)
+                    self.making = r.id  # being made: not "waiting" (a failure or Stop: it waits again)
                     self.post("removal_new", r)
                     if model != "lama" and not reflect and s.thin(r):  # a cord, a cable: LaMa in squares is the best
                         # fill, in seconds
@@ -1747,6 +1788,7 @@ class App:
         self.update_row(r)
         if r is self.cur:
             self.fill_tiles()
+            self.show_strength()
         self.render_main()
         self.update_buttons()
         self.autosave()
@@ -1822,7 +1864,7 @@ class App:
     # ------------------------------------------------------------------------------------------ main view
     def composite(self):
         live = [r for r in self.s.removals if not r.deleted and r.chosen is not None]
-        key = tuple((r.id, r.chosen_label()) for r in live)
+        key = tuple((r.id, r.chosen_label(), r.strength if r.reflects() else None) for r in live)
         if key != self.comp_key:
             self.comp, self.comp_key = self.s.composite(), key
         return self.comp
@@ -1909,7 +1951,7 @@ class App:
             return
         f, th, t1, t2 = self.row_widgets[r.id]
         n = len(r.candidates)
-        t1.configure(text=f"#{r.id}" + (f"  ·  {A.label_text(r.chosen_label())}" if r.chosen is not None else ""))
+        t1.configure(text=f"#{r.id}" + (f"  ·  {A.variant_text(r, r.chosen_label())}" if r.chosen is not None else ""))
         t2.configure(text=_n("{n} variant", "{n} variants", n) if n else
                      _("waiting: choose a model, then Generate") if self.waiting(r) else
                      (_("generating…") if self.busy else _("no variants")))
@@ -1950,6 +1992,7 @@ class App:
             f.configure(highlightbackground=ACCENT if rid == r.id else CARD)
         self.var_title.configure(text=_("Variants of #{id}", id=r.id).upper())
         self.fill_tiles()
+        self.show_strength()
         self.render_main()
         self.update_buttons()
         self.update_prompt_note()
@@ -1965,7 +2008,8 @@ class App:
             text = (_("Not made yet: choose a model above, then \"Generate #{id}\"", id=r.id) if self.waiting(r) else
                     _("Generating the variants…") if self.busy else
                     _("No variants: add some with \"＋ more for #{id}\" under \"Remove selection\"", id=r.id))
-            tk.Label(self.vars.inner, text=text, font=self.f_small, fg=DIM, bg=CARD).pack(anchor="w")
+            tk.Label(self.vars.inner, text=text, font=self.f_small, fg=DIM, bg=CARD, justify="left",
+                     wraplength=self.side_w - int(80 * self.k)).pack(anchor="w")
             return
         for c in range(2):
             self.vars.inner.columnconfigure(c, weight=1)
@@ -1978,8 +2022,8 @@ class App:
             lb = tk.Label(f, image=ph, bg=CARD_HI, bd=0)
             lb.image = ph
             lb.pack(padx=3, pady=(3, 0))
-            cap = tk.Label(f, text=("✓  " if on else "") + A.label_text(label), font=self.f_small, fg=ACCENT if on else FG,
-                           bg=CARD_HI)
+            cap = tk.Label(f, text=("✓  " if on else "") + A.variant_text(r, label), font=self.f_small,
+                           fg=ACCENT if on else FG, bg=CARD_HI)
             cap.pack(pady=(2, 3))
             for w in (f, lb, cap):
                 w.bind("<Button-1>", lambda e, i=i: self.choose(i))
@@ -1990,6 +2034,54 @@ class App:
                 w.bind("<Enter>", lambda e, f=f, i=i: self.on_variant_hover(f, i, True))
                 w.bind("<Leave>", lambda e, f=f, i=i: self.on_variant_hover(f, i, False))
             self.tiles.append(f)
+
+    def show_strength(self):
+        """The strength slider, for a reflection removal with its result (and where it stands); else hidden."""
+        r = self.cur
+        if r is None or r.deleted or not r.reflects() or not r.candidates:
+            self.str_row.pack_forget()
+            return
+        if not self.str_row.winfo_manager():
+            self.str_row.pack(fill="x", pady=(int(8 * self.k), 0), before=self.vb)
+        self._str_busy = True  # set from here: no on_strength
+        self.str_scale.set(round(100 * r.strength))
+        self._str_busy = False
+        self.str_lbl.configure(text=f"{round(100 * r.strength)} %")
+
+    def on_strength(self, v):
+        """The slider moved: the removal's strength, its preview redrawn while it moves (at most every 80 ms: one
+        redraw of a whole photo takes about 0.2 s)."""
+        r = self.cur
+        if getattr(self, "_str_busy", False) or r is None or not r.reflects():
+            return
+        s = round(float(v)) / 100
+        if s == r.strength:
+            return
+        self.s.set_strength(r, s)
+        self.str_lbl.configure(text=f"{round(100 * s)} %")
+        self.dng_dirty = True
+        if self.str_job is None:
+            self.str_job = self.root.after(80, self.redraw_strength)
+
+    def redraw_strength(self):
+        self.str_job = None
+        r = self.cur
+        if r is None:
+            return
+        self.render_main()
+        self.update_row(r)
+        for f, (label, __) in zip(self.tiles, r.candidates):  # the tile's caption: its strength
+            for w in f.winfo_children():
+                if isinstance(w, tk.Label) and w.cget("text").endswith("%"):
+                    w.configure(text=("✓  " if label == r.chosen_label() else "") + A.variant_text(r, label))
+
+    def strength_done(self):
+        """The slider let go: the tiles redrawn and the project saved (the DNG on the next save)."""
+        if self.cur is not None and self.cur.reflects():
+            A.log(f"#{self.cur.id}: strength {round(100 * self.cur.strength)} %")
+            self.fill_tiles()
+            self.update_buttons()  # the notes under the variants name it too
+            self.autosave()
 
     def on_variant_hover(self, f, i, inside):
         if self.cur is None:
@@ -2087,13 +2179,11 @@ class App:
             self.status.configure(text=_("LaMa always gives the same result: pick RORem or FLUX Fill for more "
                                          "variants"))
             return
-        m, n = self.model_key(), self.n_variants()
-        if (m in A.REFLECTION_MODELS) != r.reflects():  # update_more says why: the button is disabled
+        m = self.model_key()
+        reflect = m in A.REFLECTION_MODELS
+        if (reflect or r.reflects()) and not (self.waiting(r) and r.reflects() == reflect):  # no button (update_more)
             return
-        if m in A.REFLECTION_MODELS:  # the strengths it has not got yet
-            n = min(n, len(engines.REFLECTION_STRENGTHS) - r.counts.get(m, 0))
-            if n <= 0:
-                return
+        n = 1 if reflect else self.n_variants()
         if self.waiting(r):  # a part's first variants: "Generate"
             self.pending_gen.add(r.id)
             self.update_row(r)
@@ -2171,6 +2261,11 @@ class App:
         if getattr(self, "model_labels", None):
             A.remember("model", self.model_key())
             self.picker.show()
+            # DAI makes one result per removal (its strength is a slider): no number of variants
+            if self.model_key() in A.REFLECTION_MODELS:
+                self.vrow.pack_forget()
+            elif not self.vrow.winfo_manager():
+                self.vrow.pack(fill="x", before=self.gen_btn)
             self.apply_prompt_mode()
             if hasattr(self, "hd_btn"):  # "Remove selection" / "Remove reflections" (built after the menu)
                 self.update_buttons()
@@ -2203,9 +2298,7 @@ class App:
         has = self.sel_mask is not None and self.sel_mask.any()
         if not (has or m in A.REFLECTION_MODELS) or self.writing or self.s.raw is None:
             return
-        n = self.n_variants()
-        if m in A.REFLECTION_MODELS:  # one variant per strength
-            n = min(n, len(engines.REFLECTION_STRENGTHS))
+        n = 1 if m in A.REFLECTION_MODELS else self.n_variants()  # one result: its strength is a slider
         mask = self.sel_mask.copy() if has else np.ones(self.s.base_arr.shape[:2], bool)
         self.jobs.put(("new", mask, *self.selected(), n, m, self.prompt_for(m)))
         self.ops, self.history, self.pending = [], [], {}
@@ -2488,6 +2581,7 @@ class App:
         zoom:f,x,y · click:x,y · alt:x,y · shift:x,y · brush:x1,y1,… · erase:… · size:f · wait:ms · undo · log ·
         snap:n · shadow · remove:n[,model 1 flux/2 lama/4 qwen/5 rorem/6 dai (MODEL_KEYS)] · more:n · pick:i ·
         detail · dropvar:i · waitvars:n · stop · step:±1 · info · select:id · delete · waitidle · save · quit ·
+        strength:% (a reflection removal's slider, let go) ·
         menu (opens / closes the model list) · wheel:notches,mods (on the photo; mods 1 Ctrl/Cmd, 2 Alt/Option) ·
         describe:text (Describe's field and "Select all") · right:x,y (a right-click) · split ("Split into parts") ·
         genall ("Generate all … waiting") · geometry:w,h (the window's size, pixels) ·
@@ -2568,6 +2662,11 @@ class App:
         elif kind == "model":
             self.model_var.set(self.model_labels[MODEL_KEYS[int(vals[0])]])
             delay = 50
+        elif kind == "strength":  # as dragging the slider there and letting go
+            self.str_scale.set(vals[0])
+            self.redraw_strength()
+            self.strength_done()
+            delay = 500
         elif kind == "detail":
             self.full_detail()
             delay = 500

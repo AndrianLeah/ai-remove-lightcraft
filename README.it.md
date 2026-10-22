@@ -38,7 +38,8 @@ PNG, TIFF, WebP, HEIC e AVIF.
 menu dei modelli e premi **Rimuovi riflessi**: senza selezione lavora su tutta la foto, con una selezione solo lì,
 sfumando intorno. Come "Rimuovi riflessi" di Lightroom, toglie la luce che il vetro riflette (la strada vista nella
 vetrina, il velo su ciò che sta dietro), e la toglie dai valori del RAW stesso: niente viene ridisegnato, restano ogni
-dettaglio e il rumore del sensore.
+dettaglio e il rumore del sensore. **Intensità**, sotto il risultato, dice quanto toglierne (da 0 a 150 %, 75 %
+all'inizio), e la foto segue mentre trascini.
 
 Ogni rimozione resta modificabile: la puoi rigenerare, cambiare variante o eliminare in qualsiasi momento. Tutto è
 salvato in un unico file accanto alla foto (`<foto>.airemove`). L'originale non viene mai modificato.
@@ -149,7 +150,7 @@ Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cache/hu
 | **SAM 3** | La selezione con un clic, o descrivendo cosa selezionare ("people"). Senza, si usa il pennello. | | 3,2 GB, oppure 0 GB se è già in LightCraft | SAM License (Meta) |
 | **OSOR** (facoltativo, su FLUX) | Trova le ombre e i riflessi accanto a ciò che selezioni, per "Includi l'ombra" (insieme a SAM 3). | | 0,6 GB | FLUX.1 [dev] Non-Commercial |
 | **Qwen-Image 2.1 Turbo** (facoltativo) | Persone e oggetti su sfondi complessi (una persona davanti a una scalinata, un palo davanti alle colonne): riconosce cosa hai selezionato e lo toglie chiamandolo per nome. Circa 30 s a variante a 1024 px. Serve una GPU NVIDIA o AMD da 16 GB. | Quando hai fretta: circa un minuto per la prima variante di una rimozione | 14,4 GB | Qwen Research License (non commerciale); il suo encoder del testo Qwen3-VL: Apache-2.0 |
-| **DAI** (facoltativo) | I riflessi nel vetro, "Rimuovi riflessi": su tutta la foto o su una selezione, in pochi secondi con una GPU; il riflesso si toglie dai valori del RAW, niente viene ridisegnato. Le varianti ne tolgono il 75 % (il più vicino al risultato di Lightroom, misurato su una vetrina), il 100 %, il 50 %, il 125 %. | Riempire qualcosa; un riflesso nitido e luminoso (alberi specchiati in una vetrina, il cielo in una pozzanghera) si toglie solo in parte | 5,7 GB | Apache-2.0, ritocco di Stable Diffusion 2 (CreativeML Open RAIL++-M) |
+| **DAI** (facoltativo) | I riflessi nel vetro, "Rimuovi riflessi": su tutta la foto o su una selezione, in pochi secondi con una GPU; il riflesso si toglie dai valori del RAW, niente viene ridisegnato. **Intensità**, sotto il risultato, dice quanto toglierne, da 0 a 150 % (75 % all'inizio: il più vicino al risultato di Lightroom, misurato su una vetrina). | Riempire qualcosa; un riflesso nitido e luminoso (alberi specchiati in una vetrina, il cielo in una pozzanghera) si toglie solo in parte | 5,7 GB | Apache-2.0, ritocco di Stable Diffusion 2 (CreativeML Open RAIL++-M) |
 
 **Modelli tolti.** SDXL Inpainting non è più nel menu: ridisegnava una persona o un oggetto strano dove RORem non ne
 ridisegnava nessuno (11 rimozioni di prova su 12, contro 0), e RORem, che usa i suoi file, fa il suo lavoro. ObjectClear
