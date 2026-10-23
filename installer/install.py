@@ -1,4 +1,4 @@
-"""AI Remove for LightCraft — installer for Windows, macOS and Linux.
+"""AI Remove for LightCraft and Chromaforge — installer for Windows, macOS and Linux.
 
 Started by the double-click files next to it (or by the MCP server), through uv, on a Python 3.12 that uv keeps in the
 install folder. Standard library only. What it does, in order (each step can be re-run: it skips what is done):
@@ -584,7 +584,7 @@ def make_shortcuts(d, cfg):
               "$s.Description = '%s'; $s.Save()"
               % (str(lnk).replace("'", "''"), str(launcher_exe(d)).replace("'", "''"),
                  str(d).replace("'", "''"), str(icon / "airemove.ico").replace("'", "''"),
-                 _("AI Remove for LightCraft: removes objects from photos").replace("'", "''")))
+                 _("AI Remove for LightCraft and Chromaforge: removes objects from photos").replace("'", "''")))
         run(["powershell", "-NoProfile", "-Command", ps], quiet=True, check=False)
         cfg["shortcut"] = str(lnk)
         size_kb = int(sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) / 1024)
@@ -592,17 +592,17 @@ def make_shortcuts(d, cfg):
         uninst.write_text('@echo off\r\nset "AIREMOVE_HOME=%~dp0"\r\n'
                           'powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0installer\\bootstrap.ps1" '
                           '--uninstall %*\r\n', encoding="utf-8")
-        for name, typ, val in (("DisplayName", "REG_SZ", "AI Remove for LightCraft"),
+        for name, typ, val in (("DisplayName", "REG_SZ", "AI Remove for LightCraft and Chromaforge"),
                                ("DisplayVersion", "REG_SZ", VERSION),
-                               ("Publisher", "REG_SZ", "AI Remove (unofficial LightCraft plug-in)"),
+                               ("Publisher", "REG_SZ", "AI Remove (unofficial plug-in for LightCraft and Chromaforge)"),
                                ("DisplayIcon", "REG_SZ", str(icon / "airemove.ico")),
                                ("InstallLocation", "REG_SZ", str(d)),
                                ("UninstallString", "REG_SZ", f'"{uninst}"'),
                                ("NoModify", "REG_DWORD", "1"), ("NoRepair", "REG_DWORD", "1"),
                                ("EstimatedSize", "REG_DWORD", str(size_kb))):
             output(["reg", "add", WIN_UNINSTALL_KEY, "/v", name, "/t", typ, "/d", val, "/f"])
-        out.write("  " + _("Start menu: {app} · Settings > Apps: \"AI Remove for LightCraft\" (to uninstall)",
-                                app=APP_NAME))
+        out.write("  " + _("Start menu: {app} · Settings > Apps: \"AI Remove for LightCraft and Chromaforge\" "
+                           "(to uninstall)", app=APP_NAME))
         win_project_type(f'"{launcher_exe(d)}" "%1"', str(icon / "airemove-project.ico"))
         return str(launcher_exe(d))
     if s == "macos":
@@ -646,9 +646,10 @@ def make_shortcuts(d, cfg):
     entry = data / "applications" / "airemove.desktop"
     entry.parent.mkdir(parents=True, exist_ok=True)
     entry.write_text("[Desktop Entry]\nType=Application\nName=AI Remove\n"
-                     "GenericName=Object removal for LightCraft\nGenericName[it]=Rimozione oggetti per LightCraft\n"
-                     "Comment=Removes objects from photos with AI, in LightCraft or on its own\n"
-                     "Comment[it]=Rimuove oggetti dalle foto con l'AI, in LightCraft o da solo\n"
+                     "GenericName=Object removal for LightCraft and Chromaforge\n"
+                     "GenericName[it]=Rimozione oggetti per LightCraft e Chromaforge\n"
+                     "Comment=Removes objects from photos with AI, in LightCraft, in Chromaforge or on its own\n"
+                     "Comment[it]=Rimuove oggetti dalle foto con l'AI, in LightCraft, in Chromaforge o da solo\n"
                      f'Exec="{launcher_exe(d)}" %f\nIcon=airemove\nTerminal=false\n'
                      f"Categories=Graphics;Photography;\nMimeType={LINUX_PROJECT_MIME};\nStartupWMClass=Airemove\n",
                      encoding="utf-8")
@@ -940,18 +941,25 @@ def choose_apps(cfg, yes):
 
 def configurable(host):
     """Whether the app can be set up now: LightCraft always (it may be installed after AI Remove, as before
-    Chromaforge); Chromaforge once it is installed or has run — a settings folder made before its first start would
-    stop it from copying LightCraft's (its models, its preferences) as it does then."""
+    Chromaforge); Chromaforge once it is installed or has run (one never opened gets only its port: see
+    configure_lightcraft)."""
     return host is system.LIGHTCRAFT or bool(host.app()) or host.config_dir().is_dir()
 
 
 def configure_lightcraft(d, cfg, editor, yes=False, host=system.LIGHTCRAFT):
     """Set up one app (LightCraft or Chromaforge). Returns (state, message): state 'done' | 'pending' (the app must be
-    closed first)."""
+    closed first) | 'first_run' (Chromaforge never opened: it must be opened once first)."""
     port = int(cfg.get(host.cfg_key("port")) or host.default_port)
     notes = set_control_port(port, cfg, host)
     out.write("  " + _("control channel: {how}", how=", ".join(notes)))
     cfg["editor"] = editor
+    if host is not system.LIGHTCRAFT and not host.config_dir().is_dir():
+        # never opened: its settings folder made now (ui.json) would stop Chromaforge copying LightCraft's at its
+        # first start (models, preferences). The port is set (a variable, no folder); the rest waits for that start
+        cfg[host.key] = "pending"
+        return "first_run", _("{app} has never been opened: open it once, close it, then run the configuration again "
+                              "(install --configure-lightcraft, or the MCP tool configure_lightcraft) for its external "
+                              "editor and shortcut", app=host.name)
     if lc_request(port, "engine.execute", {"command": "library.state", "params": {}}, host=host):
         r1 = lc_request(port, "ui.set", {"settings": {"externalEditor": editor}}, host=host)
         r2 = lc_request(port, "engine.execute", {"command": "app.setShortcut",
@@ -1118,7 +1126,7 @@ def uninstall(d, keep_models, yes):
 
 # ------------------------------------------------------------------------------------------------ main
 def parse():
-    ap = argparse.ArgumentParser(description="Install AI Remove for LightCraft")
+    ap = argparse.ArgumentParser(description="Install AI Remove for LightCraft and Chromaforge")
     ap.add_argument("--dir", help="install folder (default: ~/AIRemove)")
     ap.add_argument("--models", default=None, help=",".join(MODELS) + " | recommended | none")
     ap.add_argument("--hf-token", default=None, help="Hugging Face token (only for SAM 3 / FLUX, models with a licence to accept)")
@@ -1163,12 +1171,12 @@ def main():
         results = configure_apps(d, cfg, cfg.get("editor") or str(launcher_exe(d)),
                                  choose_apps(cfg, args.yes) if apps is None else apps, args.yes)
         write_cfg(d, cfg)
-        pending = any(state == "pending" for __, state, __ in results)
+        pending = any(state != "done" for __, state, __ in results)
         msg = " · ".join(f"{h.name}: {m}" for h, __, m in results) or _("no app set up")
         out.status("pending" if pending else "done", msg)
         return 2 if pending else 0
 
-    out.write(_("AI Remove for LightCraft {version} — installation ({os})", version=VERSION,
+    out.write(_("AI Remove for LightCraft and Chromaforge {version} — installation ({os})", version=VERSION,
                 os=f"{platform.system()} {platform.machine()}"))
     out.title(1, _("The computer"))
     gpus = detect_gpus()
@@ -1320,6 +1328,7 @@ def main():
     write_cfg(d, cfg)
     names = " / ".join(h.name for h, __, __ in results)
     pending = " / ".join(h.name for h, state, __ in results if state == "pending")
+    first_run = " / ".join(h.name for h, state, __ in results if state == "first_run")
 
     out.title(7, _("Check"))
     __, txt = run([venv_python(d), str(d / "airemove" / "airemove.py"), "--check"], check=False, quiet=True)
@@ -1336,10 +1345,12 @@ def main():
              _("Done. Open \"AI Remove\" from the menu: it works on a photo on its own (no app was set up)."))
     if pending:
         final += " " + _("FIRST: close {apps} and finish the configuration (see above).", apps=pending)
+    if first_run:
+        final += " " + _("FIRST: open {apps} once, close it and finish the configuration (see above).", apps=first_run)
     if failed:
         final += " " + _("Some models were not installed (see above).")
     out.write("\n" + final)
-    out.status("done" if not pending else "pending_lightcraft", final, models=cfg.get("models"),
+    out.status("done" if not (pending or first_run) else "pending_lightcraft", final, models=cfg.get("models"),
                failed=[f"{m}: {w}" for m, w in failed])
     return 0
 

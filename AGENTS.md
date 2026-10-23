@@ -1,7 +1,7 @@
 # Instructions for AI agents: installing and using AI Remove
 
-AI Remove is an unofficial LightCraft plug-in (it also works in Chromaforge, a LightCraft fork once named LightCraft
-Classic) that removes objects from photos with local AI: from a RAW it writes
+AI Remove is an unofficial plug-in for LightCraft and Chromaforge (a LightCraft fork, once named LightCraft Classic)
+that removes objects from photos with local AI: from a RAW it writes
 the result into a DNG, from a JPEG, PNG, TIFF, WebP, HEIC or AVIF into a copy in the same format. Talk to the user in
 their language. Most users of this package speak Italian.
 
@@ -49,7 +49,8 @@ Setup of the server: `mcp/README.md`.
    minutes.
 6. **After the install**, the user must restart the app (LightCraft, Chromaforge) once. If the status is
    `pending_lightcraft`:
-   1. the user closes the app the message names;
+   1. the user closes the app the message names (a Chromaforge never opened yet: the user opens it once, then
+      closes it — its settings folder must come from its own first start);
    2. run `bootstrap --configure-lightcraft --yes` (with the same `--apps`). Chromaforge installed later:
       `bootstrap --configure-lightcraft --yes --apps chromaforge`.
 

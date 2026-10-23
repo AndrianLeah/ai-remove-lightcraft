@@ -1,5 +1,5 @@
 #!/bin/sh
-# AI Remove for LightCraft - macOS / Linux bootstrap.
+# AI Remove for LightCraft and Chromaforge - macOS / Linux bootstrap.
 # Gets uv (a small Python manager, into <install>/bin) if it is missing, then runs install.py on a Python 3.12 that
 # uv keeps in <install>/python (with Tk, which some Linux distributions' Python lacks). Arguments go to install.py
 # (--dir DIR, --models ..., --yes, --uninstall, ...).

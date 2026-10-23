@@ -1,5 +1,5 @@
-"""MCP server for AI Remove (a LightCraft plug-in): lets an AI assistant explain, install, configure, check, use and
-uninstall AI Remove on Windows, macOS and Linux.
+"""MCP server for AI Remove (a plug-in for LightCraft and Chromaforge): lets an AI assistant explain, install,
+configure, check, use and uninstall AI Remove on Windows, macOS and Linux.
 
 Standard library only (Python 3.8+), stdio transport (one JSON-RPC message per line), so it runs before anything is
 installed. Start it with mcp/run_mcp.cmd (Windows) or mcp/run_mcp.sh (macOS / Linux): they find a Python, or get one
@@ -94,8 +94,9 @@ Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended 
    accepted. It runs in the background (10-60 min, mostly downloads; on Windows a console window shows it). Poll
    install_status every 30-60 s and report progress.
 4. When done: the app (LightCraft, Chromaforge) must be restarted once (it reads the control-channel setting at
-   start). If install_status says pending_lightcraft, ask the user to close the app it names, then call
-   configure_lightcraft (with the same apps). Chromaforge installed later: configure_lightcraft(apps=chromaforge).
+   start). If install_status says pending_lightcraft, ask the user to close the app it names (or, for a Chromaforge
+   never opened yet, to open it once and close it), then call configure_lightcraft (with the same apps). Chromaforge
+   installed later: configure_lightcraft(apps=chromaforge).
 5. Usage: in LightCraft or Chromaforge select a photo, press Ctrl+Shift+X (Cmd+Shift+X on Mac), or open "AI Remove"
    from the Start menu / Applications / app menu (it works on the app's active photo, else asks for a photo file).""",
     "use": """In the AI Remove window: click an object (SAM 3 selects it whole); Alt/Option+click removes a part,
@@ -547,14 +548,14 @@ def read_resource(uri):
 
 
 PROMPTS = {
-    "install_ai_remove": ("Install AI Remove for LightCraft on this computer, step by step.",
-                          "Install AI Remove for LightCraft on this computer. Start with ai_remove_guide(topic="
-                          "install) and check_system, tell me what will be downloaded and the licences, and wait for "
-                          "my OK before installing."),
-    "remove_object": ("Remove an object from the active LightCraft photo.",
-                      "Help me remove an object from the photo that is active in LightCraft with AI Remove: open the "
-                      "AI Remove window for me and explain how to select and generate, or — if I describe the object "
-                      "— do it headless with a \"Remove\" mask and remove_with_masks."),
+    "install_ai_remove": ("Install AI Remove for LightCraft and Chromaforge on this computer, step by step.",
+                          "Install AI Remove for LightCraft and Chromaforge on this computer. Start with "
+                          "ai_remove_guide(topic=install) and check_system, tell me what will be downloaded and the "
+                          "licences, ask me which app to set up, and wait for my OK before installing."),
+    "remove_object": ("Remove an object from the active photo of LightCraft or Chromaforge.",
+                      "Help me remove an object from the photo that is active in LightCraft or Chromaforge with AI "
+                      "Remove: open the AI Remove window for me and explain how to select and generate, or — if I "
+                      "describe the object — do it headless with a \"Remove\" mask and remove_with_masks."),
 }
 
 
@@ -563,7 +564,8 @@ def handle(msg):
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion") or PROTOCOL,
                 "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
-                "serverInfo": {"name": "ai-remove", "title": "AI Remove for LightCraft", "version": system.VERSION},
+                "serverInfo": {"name": "ai-remove", "title": "AI Remove for LightCraft and Chromaforge",
+                               "version": system.VERSION},
                 "instructions": INSTRUCTIONS}
     if method == "ping":
         return {}

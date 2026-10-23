@@ -1,5 +1,5 @@
-"""AI Remove for LightCraft — remove objects with LaMa / SDXL / FLUX and write the result into the RAW (DNG), or into
-a copy of an ordinary picture (JPEG, PNG, TIFF, WebP, HEIC, AVIF: imagefile.py) in its own format.
+"""AI Remove for LightCraft and Chromaforge — remove objects with LaMa / SDXL / FLUX and write the result into the RAW
+(DNG), or into a copy of an ordinary picture (JPEG, PNG, TIFF, WebP, HEIC, AVIF: imagefile.py) in its own format.
 
 How to use:
   1. In LightCraft select a photo and press Ctrl+Shift+X (Cmd+Shift+X on a Mac) = Photo > Edit In > "Open Original

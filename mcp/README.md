@@ -57,7 +57,7 @@ claude mcp add ai-remove -- sh ~/AIRemove/mcp/run_mcp.sh
 Use the same command and arguments in the client's MCP settings: `cmd /c …\run_mcp.cmd` on Windows,
 `sh …/run_mcp.sh` on macOS and Linux.
 
-Then ask: *"Install AI Remove for LightCraft"*. The `install_ai_remove` prompt does the same.
+Then ask: *"Install AI Remove for LightCraft and Chromaforge"*. The `install_ai_remove` prompt does the same.
 
 ## Tools
 
