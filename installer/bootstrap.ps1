@@ -1,4 +1,4 @@
-# AI Remove for LightCraft - Windows bootstrap.
+# AI Remove for LightCraft and Chromaforge - Windows bootstrap.
 # Gets uv (a small Python manager, into <install>\bin) if it is missing, then runs install.py on a Python 3.12 that
 # uv keeps in <install>\python - outside AppData on purpose: LightCraft has to start it. Arguments go to install.py
 # (--dir DIR, --models ..., --yes, --uninstall, ...).
