@@ -10,6 +10,9 @@ Toglie oggetti e persone dalle foto con l'intelligenza artificiale, direttamente
 Fa quello che in Lightroom è "Rimozione generativa", ma tutto gira sul tuo computer. Lavora sui RAW e anche su JPEG,
 PNG, TIFF, WebP, HEIC e AVIF.
 
+Funziona allo stesso modo in [Chromaforge](https://github.com/emmertex/lightcraft-classic) (prima "LightCraft
+Classic"), un fork di LightCraft con l'impostazione di Lightroom Classic: in uno dei due, o in entrambi.
+
 1. In LightCraft scegli una foto e premi **Ctrl+Shift+X** (**Cmd+Shift+X** su Mac).
 2. Nella finestra di AI Remove clicca su ciò che vuoi togliere: SAM 3 lo seleziona tutto. Oppure **descrivilo**:
    scrivi "people" (in inglese) e SAM 3 seleziona tutte le persone della foto, anche quelle lontane (guarda la foto
@@ -67,7 +70,7 @@ piccola anteprima, che mostrerebbe ancora ciò che hai rimosso.
 
 | | |
 |---|---|
-| **LightCraft** | installato (getartcraft.com) |
+| **LightCraft** o **Chromaforge** | installato (getartcraft.com; Chromaforge: github.com/emmertex/lightcraft-classic), o tutti e due |
 | **Windows 10/11** | scheda NVIDIA, AMD Radeon RX 7000/9000 o Intel Arc; senza GPU funziona solo LaMa |
 | **macOS 12+** | Mac con chip Apple (M1 o successivi); meglio con almeno 16 GB di memoria |
 | **Linux x86-64** | scheda NVIDIA, oppure AMD con ROCm |
@@ -98,16 +101,23 @@ L'installer:
    ce l'hai già sul disco, puoi indicare la sua cartella invece di riscaricarlo (vedi sotto);
 3. scarica Python e PyTorch nella cartella `AIRemove` della tua home;
 4. crea il programma "AI Remove" con la sua icona (menu Start, Applicazioni o menu delle app);
-5. configura LightCraft: attiva il suo canale di controllo, imposta AI Remove come editor esterno e assegna la
-   scorciatoia.
+5. configura l'app che scegli — te lo chiede: **LightCraft, Chromaforge o entrambi** (quelli installati sono la
+   risposta predefinita). In ciascuno attiva il canale di controllo, imposta AI Remove come editor esterno e assegna la
+   scorciatoia. Il canale di LightCraft è sulla porta 7980 (`LIGHTCRAFT_CONTROL_PORT`), quello di Chromaforge sulla
+   7981 (`LIGHTCRAFT_CLASSIC_CONTROL_PORT`): così possono essere aperti tutti e due.
 
 Ci vogliono da 10 minuti a un'ora, quasi tutto per i download.
 
-**Dopo l'installazione riavvia LightCraft una volta**: legge l'impostazione del canale di controllo solo all'avvio.
+**Dopo l'installazione riavvia l'app una volta**: legge l'impostazione del canale di controllo solo all'avvio.
 
-Se LightCraft era aperto, l'installer ti chiede di chiuderlo per scrivere le impostazioni. Puoi anche ripetere solo
-questo passaggio più tardi, con `installer/bootstrap.ps1 --configure-lightcraft` su Windows o
-`installer/bootstrap.sh --configure-lightcraft` su Mac e Linux.
+Se l'app era aperta, l'installer ti chiede di chiuderla per scrivere le impostazioni. Puoi anche ripetere solo
+questo passaggio più tardi (per esempio dopo aver installato Chromaforge), con
+`installer/bootstrap.ps1 --configure-lightcraft` su Windows o `installer/bootstrap.sh --configure-lightcraft` su Mac e
+Linux; `--apps lightcraft|chromaforge|both` sceglie senza domande.
+
+Con tutti e due aperti, Ctrl/Cmd+Shift+X apre la foto dell'app in cui l'hai premuto: AI Remove chiede a ciascuna quale
+foto ha selezionato. Il canale di controllo di Chromaforge vuole un token, che Chromaforge scrive nella sua cartella
+delle impostazioni a ogni avvio (`control-token-<porta>`): AI Remove lo legge da lì.
 
 ### SAM 3 e FLUX: token di Hugging Face
 
@@ -224,13 +234,15 @@ istruzioni in [AGENTS.md](AGENTS.md).
   - Mac: `Uninstall AI Remove.command` nella cartella `AIRemove`;
   - Linux: `uninstall.sh` nella cartella `AIRemove`.
 
-  La disinstallazione toglie il programma, i modelli e le impostazioni aggiunte a LightCraft. Le foto, i DNG creati e i
-  progetti `.airemove` restano.
+  La disinstallazione toglie il programma, i modelli e le impostazioni aggiunte a LightCraft e Chromaforge. Le foto, i
+  DNG creati e i progetti `.airemove` restano.
 
 ## Problemi frequenti
 
-- **"LightCraft non risponde"**: LightCraft è chiuso oppure è stato aperto prima dell'installazione. Riavvialo. Su
-  Linux con Wayland la sua finestra deve essere visibile.
+- **"LightCraft non risponde"** (o **"Chromaforge non risponde"**): l'app è chiusa oppure è stata aperta prima
+  dell'installazione. Riavviala. Su Linux con Wayland la sua finestra deve essere visibile.
+- **"Chromaforge non ha accettato AI Remove"**: il token del suo canale di controllo non è quello che AI Remove ha
+  letto. Chiudi Chromaforge e riaprilo.
 - **La prima variante è lenta (AMD)**: la GPU compila i suoi programmi la prima volta che incontra una dimensione,
   poi va veloce.
 - **Mac: "Python vorrebbe accedere a…"**: se i RAW sono su un disco esterno, sulla Scrivania o in Documenti, macOS
@@ -245,7 +257,9 @@ istruzioni in [AGENTS.md](AGENTS.md).
 Le foto non lasciano mai il computer. Dopo l'installazione l'unica richiesta a internet è il controllo giornaliero
 di nuove versioni (vedi sopra). Per parlare con LightCraft, AI Remove usa il suo canale di controllo:
 un'interfaccia raggiungibile solo dal tuo computer (127.0.0.1, porta 7980), ma **senza password**. Mentre LightCraft è
-aperto, qualunque programma sul tuo computer può comandarlo. La disinstallazione lo disattiva.
+aperto, qualunque programma sul tuo computer può comandarlo. Il canale di Chromaforge (porta 7981) vuole invece un
+token che scrive nella sua cartella delle impostazioni: lo possono usare solo i programmi che leggono quella cartella.
+La disinstallazione li disattiva.
 
 ## Licenze
 

@@ -1,6 +1,7 @@
 """Download AI Remove's models from Hugging Face into <install>/models — or link them from another install
-(--from) or, for SAM 3, from LightCraft's own copy. A part the user already has in a folder of their own (--paths:
-the installer found it there and records it in airemove.json) stays where it is: nothing is downloaded for it.
+(--from) or, for SAM 3, from LightCraft's (or Chromaforge's) own copy. A part the user already has in a folder of
+their own (--paths: the installer found it there and records it in airemove.json) stays where it is: nothing is
+downloaded for it.
 Runs in the install's Python (needs huggingface_hub). Prints one line per model for the installer:
 MODEL_OK <name> | MODEL_FAIL <name> <why>.
 
@@ -43,29 +44,31 @@ def link_tree(src, dst):
 
 
 def sam3_from_lightcraft(dest):
-    lc = system.lightcraft_sam3_dir() / mf.SAM3_WEIGHTS
-    if lc.exists():
-        how = system.link_or_copy(lc, dest / "sam3" / mf.SAM3_WEIGHTS)
-        print("  " + (_("SAM 3: using the model LightCraft already downloaded (linked)") if how != "copy" else
-                      _("SAM 3: using the model LightCraft already downloaded (copied)")))
+    """SAM 3 from the copy LightCraft (or Chromaforge) downloaded for its Object masks, if one did."""
+    host = system.sam3_host(mf.SAM3_WEIGHTS)
+    if host is not None:
+        how = system.link_or_copy(host.sam3_dir() / mf.SAM3_WEIGHTS, dest / "sam3" / mf.SAM3_WEIGHTS)
+        print("  " + (_("SAM 3: using the model {app} already downloaded (linked)", app=host.name) if how != "copy" else
+                      _("SAM 3: using the model {app} already downloaded (copied)", app=host.name)))
         return True
     return False
 
 
 def sam3_to_lightcraft(sam3, token):
-    """LightCraft's Object masks use the same model: give LightCraft our copy if it has none (with its two
-    tokenizer files)."""
-    lcd = system.lightcraft_sam3_dir()
-    if (lcd / mf.SAM3_WEIGHTS).exists():
-        return
-    try:
-        from huggingface_hub import hf_hub_download
-        for f in ("vocab.json", "merges.txt"):
-            hf_hub_download("facebook/sam3", f, local_dir=str(lcd), token=token)
-        system.link_or_copy(sam3 / mf.SAM3_WEIGHTS, lcd / mf.SAM3_WEIGHTS)
-        print("  " + _("SAM 3 given to LightCraft too ({dir}): its Object masks work now", dir=lcd))
-    except Exception as e:  # nice to have only
-        print("  " + _("(SAM 3 not shared with LightCraft: {error})", error=type(e).__name__))
+    """LightCraft's and Chromaforge's Object masks use the same model: give each our copy if it has none (with its
+    two tokenizer files). LightCraft always, as before; Chromaforge when it is installed."""
+    for host in (h for h in system.HOSTS if h is system.LIGHTCRAFT or h.app()):
+        lcd = host.sam3_dir()
+        if (lcd / mf.SAM3_WEIGHTS).exists():
+            continue
+        try:
+            from huggingface_hub import hf_hub_download
+            for f in ("vocab.json", "merges.txt"):
+                hf_hub_download("facebook/sam3", f, local_dir=str(lcd), token=token)
+            system.link_or_copy(sam3 / mf.SAM3_WEIGHTS, lcd / mf.SAM3_WEIGHTS)
+            print("  " + _("SAM 3 given to {app} too ({dir}): its Object masks work now", app=host.name, dir=lcd))
+        except Exception as e:  # nice to have only
+            print("  " + _("(SAM 3 not shared with {app}: {error})", app=host.name, error=type(e).__name__))
 
 
 def fetch(dest, model, token, other, paths):
