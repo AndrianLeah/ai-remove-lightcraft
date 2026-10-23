@@ -130,7 +130,7 @@ jobs:
             pre=()
             case "$TAG" in *-*) pre=(--prerelease) ;; esac
             gh release create "$TAG" "${files[@]}" --draft "${pre[@]}" --target "$SHA" \
-              --title "AI Remove for LightCraft and Chromaforge ${TAG#v}" --notes-file release-notes.md --generate-notes
+              --title "${TAG#v}" --notes-file release-notes.md --generate-notes
           fi
           gh release view "$TAG" --json url,isDraft,isPrerelease,assets \
             --jq '"\(.url) draft=\(.isDraft) prerelease=\(.isPrerelease)", (.assets[] | "  \(.name) \(.size) bytes")'
