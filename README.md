@@ -9,6 +9,9 @@ Remove objects and people from photos with local AI, from inside
 own computer. From a RAW the result goes back into a **RAW DNG**, so you keep developing it like any raw file. From a
 JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
 
+It works the same way in [Chromaforge](https://github.com/emmertex/lightcraft-classic) (once "LightCraft Classic"),
+a fork of LightCraft with the Lightroom Classic layout: in one of the two, or in both.
+
 [Italiano](README.it.md)
 
 > AI Remove is an **unofficial** plug-in. It is not made, sponsored or endorsed by the ArtCraft team, who make
@@ -104,7 +107,8 @@ embedded preview, which would still show what was removed.
 
 ## Requirements
 
-- **LightCraft** installed ([getartcraft.com](https://getartcraft.com)).
+- **LightCraft** ([getartcraft.com](https://getartcraft.com)) or **Chromaforge**
+  ([releases](https://github.com/emmertex/lightcraft-classic/releases)) installed, or both.
 - **Windows 10/11** with NVIDIA, AMD Radeon RX 7000/9000 or Intel Arc graphics. Without a GPU only LaMa is practical.
 - **macOS 12+** on Apple Silicon (M1 or later; 16 GB of memory recommended). Intel Macs are not supported.
 - **Linux x86-64** with NVIDIA, or AMD with ROCm.
@@ -129,10 +133,16 @@ The installer:
    on disk can be used from its folder instead of being downloaded again (see below);
 3. puts a private Python 3.12, PyTorch and the models in `~/AIRemove`;
 4. creates the **AI Remove** app with its icon (Start menu, Applications, or the app menu);
-5. sets LightCraft up: it enables LightCraft's local control channel (`LIGHTCRAFT_CONTROL_PORT`), makes AI Remove its
-   external editor, and assigns Ctrl/Cmd+Shift+X.
+5. sets up the app you choose — it asks: **LightCraft, Chromaforge or both** (the ones installed are the default). In
+   each it enables the local control channel, makes AI Remove its external editor, and assigns Ctrl/Cmd+Shift+X.
+   LightCraft's channel is on port 7980 (`LIGHTCRAFT_CONTROL_PORT`), Chromaforge's on 7981
+   (`LIGHTCRAFT_CLASSIC_CONTROL_PORT`), so both can be open at the same time.
 
-**Restart LightCraft once afterwards:** it reads the control-channel setting only when it starts.
+**Restart the app once afterwards:** it reads the control-channel setting only when it starts.
+
+With both open, Ctrl/Cmd+Shift+X opens the photo of the app you pressed it in: AI Remove asks each app which photo it
+has selected. Chromaforge's control channel asks for a token, which it writes in its settings folder at every start
+(`control-token-<port>`): AI Remove reads it there.
 
 Non-interactive install:
 
@@ -155,8 +165,9 @@ Other options:
 | `--torch cuda\|rocm\|rocm-win\|xpu\|mps\|cpu` | Override the detected PyTorch build |
 | `--model-dir MODEL=FOLDER` | Use a model you already have on disk, where it is (see below); once per model |
 | `--models-from OTHER/models` | Reuse another install's models (linked, no extra space) |
-| `--no-lightcraft` | Leave LightCraft's settings alone |
-| `--configure-lightcraft` | Only apply the LightCraft integration (for example after closing LightCraft) |
+| `--apps lightcraft\|chromaforge\|both\|none` | The apps to set up, without the question (with `--yes` and no `--apps`: the ones chosen last time, else the ones installed) |
+| `--no-lightcraft` | Leave the apps' settings alone (`--apps none`) |
+| `--configure-lightcraft` | Only apply the integration (for example after closing the app, or after installing Chromaforge) |
 | `--status` | Print a JSON report |
 | `--uninstall [--keep-models]` | Remove AI Remove |
 
@@ -277,7 +288,7 @@ LightCraft does it. To add a language:
 ## For AI assistants
 
 - `mcp/` holds an MCP server that uses only the Python standard library. It works before AI Remove is installed, and
-  can check the computer, install, configure LightCraft, open the app and run headless removals. Setup is in
+  can check the computer, install, configure LightCraft and/or Chromaforge, open the app and run headless removals. Setup is in
   [mcp/README.md](mcp/README.md).
 - Agents with a shell should read [AGENTS.md](AGENTS.md).
 
@@ -289,15 +300,17 @@ LightCraft does it. To add a language:
 | **macOS** | `Uninstall AI Remove.command` in `~/AIRemove` |
 | **Linux** | `uninstall.sh` in `~/AIRemove` |
 
-Uninstalling removes the app, its models and the LightCraft settings it added. Your photos, the DNGs it made and the
-`.airemove` projects stay.
+Uninstalling removes the app, its models and the settings it added to LightCraft and Chromaforge. Your photos, the
+DNGs it made and the `.airemove` projects stay.
 
 ## Privacy and security
 
 Your photos never leave your computer. The only request to the internet after the install is the daily check for a
 new version (above). AI Remove drives LightCraft through LightCraft's control channel. That
 channel only accepts connections from your own computer (127.0.0.1, port 7980), but it has **no password**: while
-LightCraft runs, any program on your computer can drive it. Uninstalling turns the channel off.
+LightCraft runs, any program on your computer can drive it. Chromaforge's channel (port 7981) asks for a token it
+writes in its settings folder, so only programs that can read that folder can drive it. Uninstalling turns the
+channels off.
 
 ## Development
 

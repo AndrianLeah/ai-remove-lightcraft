@@ -28,14 +28,19 @@ How to use:
 
 It talks to the running LightCraft through LightCraft's control channel (JSON lines on 127.0.0.1, see system.py):
 LightCraft must be started with it on — the installer sets LIGHTCRAFT_CONTROL_PORT for it on every OS.
+Chromaforge (LightCraft Classic, a fork of LightCraft: system.Host) works the same way, on its own port
+(LIGHTCRAFT_CLASSIC_CONTROL_PORT, 7981) and with the token its channel asks for; the app that has the photo
+selected is the one used, --app picks one.
 
-usage: airemove.py [PHOTO] [--id PHOTO_ID] [--variants N] a photo LightCraft does not have selected opens on its own
-       airemove.py --auto lama|rorem|flux|qwen|sdxl|osor[N] [--shadow] [--id PHOTO_ID]
+usage: airemove.py [PHOTO…] [--app A] [--id PHOTO_ID] [--variants N]   a photo no app has selected opens on its own
+       airemove.py --auto lama|rorem|flux|qwen|sdxl|osor[N] [--shadow] [--app A] [--id PHOTO_ID]
                                                              no window: the "Rimuovi" masks removed with that
                                                              model (far-apart parts each in a removal of its own),
                                                              variant N used, written into the DNG;
                                                              --shadow: the object's shadow too (as the button)
-       airemove.py --check                                   JSON report: GPU, models, LightCraft connection
+       airemove.py --check                                   JSON report: GPU, models, LightCraft and Chromaforge
+                                                             connections
+A: lightcraft | chromaforge
 """
 import argparse, base64, collections, json, os, re, socket, subprocess, sys, threading, time, traceback, zlib
 from pathlib import Path
@@ -172,22 +177,54 @@ class Stopped(Exception):
 
 
 class LC:
-    """The running LightCraft, through its control channel: one JSON request per line on 127.0.0.1:<port>, one reply
-    per line (LightCraft docs/control-protocol.md). Commands go through engine.execute; replies are
-    {"ok": true, "result": ...} or {"ok": false, "error": ...}. One connection, one request at a time (the window's
-    threads share it)."""
+    """The running LightCraft (or Chromaforge: host), through its control channel: one JSON request per line on
+    127.0.0.1:<port>, one reply per line (LightCraft docs/control-protocol.md). Commands go through engine.execute;
+    replies are {"ok": true, "result": ...} or {"ok": false, "error": ...}. An app that wants a token (Chromaforge) gets
+    it first on every new connection. One connection, one request at a time (the window's threads share it)."""
 
-    def __init__(self, port=None):
-        self.port = port or system.control_port()
+    def __init__(self, port=None, host=None):
+        self.host = host or system.LIGHTCRAFT
+        self.port = port or self.host.port()
         self._lock = threading.Lock()
         self._sock, self._buf, self._id = None, b"", 0
 
+    @property
+    def name(self):
+        return self.host.name
+
     def _not_running(self, e):
-        return Fail(_("LightCraft does not answer on port {port} ({error}).\n\nOpen LightCraft. If it is open "
-                      "already, close it and open it again: AI Remove talks to it through its control channel, which "
-                      "the installation turns on (LIGHTCRAFT_CONTROL_PORT) but only for LightCraft started after it. "
-                      "On Linux with Wayland LightCraft's window must be visible.",
-                      port=self.port, error=type(e).__name__))
+        return Fail(_("{app} does not answer on port {port} ({error}).\n\nOpen {app}. If it is open already, close "
+                      "it and open it again: AI Remove talks to it through its control channel, which the "
+                      "installation turns on ({variable}) but only for {app} started after it. On Linux with Wayland "
+                      "{app}'s window must be visible.",
+                      app=self.name, port=self.port, error=type(e).__name__, variable=self.host.var("CONTROL_PORT")))
+
+    def _connect(self):
+        """A new connection; with the app's token first when it wants one (it closes a connection that starts
+        with anything else)."""
+        self._sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        self._sock.settimeout(180)  # LightCraft gives a request up to 60 s; exports of big raws included
+        token = self.host.token(self.port)
+        if token:
+            self._send("auth", {"token": token})
+            r = self._reply()
+            if not r.get("ok"):
+                self.close()
+                raise Fail(_("{app} did not accept AI Remove on its control channel ({error}). Close {app} and open "
+                             "it again.", app=self.name, error=r.get("error")))
+
+    def _send(self, method, params):
+        self._id += 1
+        self._sock.sendall((json.dumps({"id": self._id, "method": method, "params": params}) + "\n").encode())
+
+    def _reply(self):
+        while b"\n" not in self._buf:
+            chunk = self._sock.recv(1 << 20)
+            if not chunk:
+                raise ConnectionResetError(f"connection closed by {self.name}")
+            self._buf += chunk
+        line, self._buf = self._buf.split(b"\n", 1)
+        return json.loads(line.decode("utf-8").lstrip("﻿"))
 
     def close(self):
         if self._sock is not None:
@@ -204,21 +241,13 @@ class LC:
             sent = False
             try:
                 if self._sock is None:
-                    self._sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
-                    self._sock.settimeout(180)  # LightCraft gives a request up to 60 s; exports of big raws included
-                self._id += 1
-                self._sock.sendall((json.dumps({"id": self._id, "method": method, "params": params}) + "\n").encode())
+                    self._connect()
+                self._send(method, params)
                 sent = True
-                while b"\n" not in self._buf:
-                    chunk = self._sock.recv(1 << 20)
-                    if not chunk:
-                        raise ConnectionResetError("connection closed by LightCraft")
-                    self._buf += chunk
-                line, self._buf = self._buf.split(b"\n", 1)
-                return json.loads(line.decode("utf-8").lstrip("﻿"))
+                return self._reply()
             except socket.timeout as e:
                 self.close()
-                raise Fail(_("LightCraft did not answer {command} in time",
+                raise Fail(_("{app} did not answer {command} in time", app=self.name,
                              command=params.get("command", method))) from e
             except (OSError, ValueError) as e:
                 self.close()
@@ -420,15 +449,15 @@ def find_photo(lc, args):
                     pid = i
                     break
     if not pid:
-        raise Fail(_("No active photo in LightCraft: select a photo and press {shortcut} again.",
+        raise Fail(_("No active photo in {app}: select a photo and press {shortcut} again.", app=lc.name,
                      shortcut=SHORTCUT))
     info = lc.one("photo.inspect", {"id": pid})
     src = Path((info.get("source") or {}).get("path", ""))
     if (raw_arg and Path(raw_arg).suffix.lower() in (".tif", ".tiff", ".psd")
             and os.path.normcase(os.path.abspath(raw_arg)) != os.path.normcase(os.path.abspath(src))):
         # a copy LightCraft made for "Edit In" (a TIFF original is the photo's own file, and opens)
-        raise Fail(_("LightCraft passed a TIFF/PSD copy: for AI Remove use\nPhoto > Edit In > \"Open Original in "
-                     "Other Editor (RAW, no copy)\".\n(The copy {file} can be deleted from the library.)",
+        raise Fail(_("{app} passed a TIFF/PSD copy: for AI Remove use\nPhoto > Edit In > \"Open Original in Other "
+                     "Editor (RAW, no copy)\".\n(The copy {file} can be deleted from the library.)", app=lc.name,
                      file=Path(raw_arg).name))
     m = re.match(r"(.+)-AIRemove(?:-\d+)?$", src.stem)
     if m and (src.suffix.lower() == ".dng" or imagefile.format_of(src)):
@@ -488,7 +517,7 @@ def extract(lc, pid, info, targets, work):
                       + [{"command": "app.export", "params": {"path": mask_png, "longEdge": 2400}}]))
         bad = [x for x in r if not x.get("ok")]
         if bad:
-            raise Fail("LightCraft: " + str(bad[0].get("error")))
+            raise Fail(f"{lc.name}: " + str(bad[0].get("error")))
     finally:
         restore = [sel] + [{"command": "mask.adjust", "params": {"id": m["id"], "values": {k: v for k, v in m["adjust"].items()}}}
                            for m in targets]
@@ -549,16 +578,17 @@ def standalone_info(path):
 def extract_headless(path, work):
     """base.png and the photo's data, for a photo opened on its own:
     - an ordinary picture: base.png is the picture as it is shown (upright), its data is its own file;
-    - a RAW: from lightcraft-cli (LightCraft installed, its window not needed), the photo with LightCraft's default
-      development, uncropped and without lens and geometry corrections — the frame extract() makes from the running
-      app — and the raw DNG."""
+    - a RAW: from lightcraft-cli (LightCraft installed, its window not needed; else Chromaforge's
+      lightcraft-classic-cli), the photo with that app's default development, uncropped and without lens and geometry
+      corrections — the frame extract() makes from the running app — and the raw DNG."""
     if imagefile.format_of(path):
         open_source(path).upright(2400).save(work / "base.png")
         return None, base_luminance(work / "base.png"), str(path)
-    cli = system.lightcraft_cli()
+    host, cli = system.host_cli()
     if cli is None:
-        raise Fail(_("LightCraft's command line (lightcraft-cli) was not found: AI Remove reads RAW files through "
-                     "it, also with LightCraft closed. Install LightCraft, or open AI Remove from it."))
+        raise Fail(_("LightCraft's command line (lightcraft-cli) was not found, nor Chromaforge's: AI Remove reads RAW "
+                     "files through it, also with the app closed. Install LightCraft or Chromaforge, or open AI Remove "
+                     "from it."))
     neutral = work / "neutral.json"
     neutral.write_text(json.dumps({"crop": {"geometry": {"angle": 0.0, "rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0,
                                                                                  "y1": 1.0}}},
@@ -573,11 +603,11 @@ def extract_headless(path, work):
             p = subprocess.run(cli + ["render", str(path), "-o", str(out)] + extra, capture_output=True, text=True,
                                encoding="utf-8", errors="replace", timeout=300, **no_window)
         except (OSError, subprocess.SubprocessError) as e:
-            raise Fail(_("LightCraft could not read {file}:\n{error}", file=path.name, error=e)) from e
+            raise Fail(_("{app} could not read {file}:\n{error}", app=host.name, file=path.name, error=e)) from e
         if p.returncode or not out.exists():
-            raise Fail(_("LightCraft could not read {file}:\n{error}", file=path.name,
+            raise Fail(_("{app} could not read {file}:\n{error}", app=host.name, file=path.name,
                          error=(p.stderr or p.stdout).strip()[-400:]))
-        log(f"lightcraft-cli: {out.name} in {time.time() - t0:.1f}s")
+        log(f"{host.exe}-cli: {out.name} in {time.time() - t0:.1f}s")
     return None, base_luminance(base_png), str(dng)
 
 
@@ -598,16 +628,39 @@ def open_source(path):
                      "pattern (Fuji X-Trans and already demosaiced DNGs are not supported).")) from e
 
 
-def lightcraft_has(lc, path):
-    """Whether LightCraft has this file selected (it passes the selected photo's file to its external editor)."""
-    want = os.path.normcase(os.path.abspath(path))
+def selected_file(lc, paths):
+    """The one of paths the app has selected, its active photo's first, else None. The app passes the selected photos'
+    files to its external editor: LightCraft one, Chromaforge all of them in one command."""
+    want = {os.path.normcase(os.path.abspath(p)): p for p in paths}
     sel = lc.state().get("selection") or {}
     for i in ([sel.get("active")] + list(sel.get("ids") or []))[:50]:
         if i:
             p = (lc.one("photo.inspect", {"id": i}).get("source") or {}).get("path", "")
-            if p and os.path.normcase(os.path.abspath(p)) == want:
-                return True
-    return False
+            if p and os.path.normcase(os.path.abspath(p)) in want:
+                return want[os.path.normcase(os.path.abspath(p))]
+    return None
+
+
+def answering_hosts(args):
+    """The apps to look for the photo in: the one --app names, else every one answering on its control port."""
+    named = system.host_named(getattr(args, "app", None))
+    return [named] if named else [h for h in system.HOSTS if h.reachable()]
+
+
+def host_for(args):
+    """The app --id / --auto work in: the one --app names, else the one answering (with both open: the first with an
+    active photo), else the first installed (its "does not answer" says what to do)."""
+    hosts = answering_hosts(args)
+    for h in hosts if len(hosts) > 1 else ():
+        lc = LC(host=h)
+        try:
+            if (lc.state().get("selection") or {}).get("active"):
+                return h
+        except Fail as e:
+            log(f"{h.name}: {e}")
+        finally:
+            lc.close()
+    return (hosts or system.installed_hosts() or [system.LIGHTCRAFT])[0]
 
 
 def ask_photo(parent=None):
@@ -642,33 +695,41 @@ def project_photo(path):
 
 def open_session(args):
     """The window's session, or None when no photo was chosen:
-    - LightCraft's photo when LightCraft answers and passes it (its external editor: the file is its selection) or,
-      started without a file, has one active: its development shown, the result stacked there;
+    - the photo of the app (LightCraft or Chromaforge) that answers and passes it (its external editor: the file is
+      its selection) or, started without a file, has one active: its development shown, the result stacked there;
     - else a photo on its own (a file given or picked): a RAW read through lightcraft-cli, a picture as it is; the
-      result written next to it. Also when LightCraft is open but its control channel does not answer: the photo
-      opens anyway.
-    A project (<photo>.airemove: double-clicked, picked) opens its photo."""
+      result written next to it. Also when the app is open but its control channel does not answer: the photo opens
+      anyway.
+    A project (<photo>.airemove: double-clicked, picked) opens its photo. Several files (Chromaforge passes its whole
+    selection): the app's active one, else the first."""
     if args.id is not None:
-        return Session(LC(), args)
-    path = project_photo(args.raw) if args.raw else None
-    args.raw = str(path) if path else None  # what find_photo looks for in LightCraft's selection
-    if system.lightcraft_reachable():
-        lc = LC()
+        return Session(LC(host=host_for(args)), args)
+    paths = [project_photo(p) for p in (getattr(args, "files", None) or ([args.raw] if args.raw else []))]
+    args.raw = str(paths[0]) if paths else None  # what find_photo looks for in the app's selection
+    hosts = answering_hosts(args)
+    for h in hosts:
+        lc = LC(host=h)
         try:
-            if path is None:
+            if not paths:
                 if (lc.state().get("selection") or {}).get("active"):
                     return Session(lc, args)
-            elif lightcraft_has(lc, path):
-                return Session(lc, args)
+            else:
+                f = selected_file(lc, paths)
+                if f is not None:
+                    args.raw = str(f)
+                    return Session(lc, args)
         except Fail as e:
-            log(f"LightCraft: {e}")
+            log(f"{h.name}: {e}")
         lc.close()
+    path = paths[0] if paths else None
     if path is None:
         path = ask_photo()
         if path is None:
             return None
         path = project_photo(path)
-    log(f"on its own: {path} (LightCraft {'answers' if system.lightcraft_reachable() else 'does not answer'})")
+    elif len(paths) > 1:
+        log(f"{len(paths)} files given, none selected in an app that answers: the first one opens")
+    log(f"on its own: {path} (answering: {', '.join(h.name for h in hosts) or 'neither LightCraft nor Chromaforge'})")
     return Session(None, args, path)
 
 
@@ -1085,15 +1146,17 @@ def reflection_variant(label):
 
 
 class Session:
-    """Everything for one photo: the export from LightCraft, the removals, the engines, writing the result.
-    self.raw is the photo's data, a RAW's or a picture's (open_source); dng_path / dng_id: the result, a DNG for a
-    RAW, a picture in the original's format for a picture."""
+    """Everything for one photo: the export from LightCraft (or Chromaforge: self.lc.host), the removals, the
+    engines, writing the result. self.raw is the photo's data, a RAW's or a picture's (open_source); dng_path /
+    dng_id: the result, a DNG for a RAW, a picture in the original's format for a picture."""
 
     def __init__(self, lc, args, path=None):
         """lc None: a photo on its own (path), read through lightcraft-cli or as it is; the result is written next to
         it only."""
         self.lc, self.args = lc, args
         self.standalone, self.file = lc is None, path
+        # the app's name in the window: the one the photo is in, or (on its own) the one whose command line reads RAWs
+        self.app = lc.name if lc is not None else (system.host_cli()[0] or system.LIGHTCRAFT).name
         self.raw = self.info = self.sam = None
         for attr in ENGINE_ATTRS.values():  # self.sdxl, self.flux, ...: the engine loaded, if any
             setattr(self, attr, None)
@@ -2247,7 +2310,7 @@ class Session:
             + ", ".join(f"#{r.id} {r.chosen_label()}" for r in rs) + noise)
         if self.standalone:  # on its own: the file only; a LightCraft id from an earlier save stays for the next one
             nid = self.dng_id
-            log("saved next to the original (opened on its own: not imported into LightCraft)")
+            log("saved next to the original (opened on its own: not imported into an app)")
         else:
             nid = self._to_lightcraft(out, update)
         self.dng_path, self.dng_id = out, nid
@@ -2268,10 +2331,10 @@ class Session:
         if nid is not None:
             self.lc.run([{"command": "photo.reload", "params": {"ids": [nid]}},
                          {"command": "library.select", "params": {"ids": [nid], "active": nid}}])
-            log(f"reloaded in LightCraft (id {nid})")
+            log(f"reloaded in {self.lc.name} (id {nid})")
         else:
             nid = import_stacked(self.lc, self.pid, self.info, out)
-            log(f"imported into LightCraft (id {nid}), stacked with the original, same development")
+            log(f"imported into {self.lc.name} (id {nid}), stacked with the original, same development")
         return nid
 
     def close(self):
@@ -2281,17 +2344,31 @@ class Session:
 
 
 def check():
-    """--check: what this install has and whether it can reach LightCraft, as JSON (the installer and the MCP
-    server read it)."""
+    """--check: what this install has and whether it can reach LightCraft and Chromaforge, as JSON (the installer and
+    the MCP server read it). The top-level port / lightcraft_* / lightcraft keys are LightCraft's, as before
+    Chromaforge; "apps" has both."""
+    __, cli = system.host_cli()
     rep = {"version": system.VERSION, "os": system.system(), "python": sys.version.split()[0], "root": str(ROOT),
-           "port": system.control_port(), "lightcraft_settings": str(system.lightcraft_config_dir()),
-           "lightcraft_cli": " ".join(system.lightcraft_cli() or []) or None,  # RAWs opened on their own: read with it
-           "heic": imagefile.heif_available()}  # HEIC pictures: pillow-heif
-    try:
-        sel = LC().state().get("selection") or {}
-        rep["lightcraft"] = {"connected": True, "active_photo": sel.get("active"), "selected": len(sel.get("ids") or [])}
-    except Fail as e:
-        rep["lightcraft"] = {"connected": False, "error": str(e).splitlines()[0]}
+           "port": system.LIGHTCRAFT.port(), "lightcraft_settings": str(system.LIGHTCRAFT.config_dir()),
+           "lightcraft_cli": " ".join(cli or []) or None,  # RAWs opened on their own: read with it
+           "heic": imagefile.heif_available(), "apps": {}}  # HEIC pictures: pillow-heif
+    for h in system.HOSTS:
+        a = rep["apps"][h.key] = {"name": h.name, "app": h.app(), "port": h.port(), "settings": str(h.config_dir())}
+        if not h.reachable():
+            a["connected"] = False
+            continue
+        lc = LC(host=h)
+        try:
+            sel = lc.state().get("selection") or {}
+            a.update(connected=True, active_photo=sel.get("active"), selected=len(sel.get("ids") or []))
+        except Fail as e:
+            a.update(connected=False, error=str(e).splitlines()[0])
+        finally:
+            lc.close()
+    lc_rep = rep["apps"]["lightcraft"]
+    rep["lightcraft"] = ({k: lc_rep[k] for k in ("connected", "active_photo", "selected")} if lc_rep.get("connected")
+                         else {"connected": False,
+                               "error": lc_rep.get("error") or str(LC()._not_running(OSError())).splitlines()[0]})
     try:
         import torch
         rep["torch"] = torch.__version__
@@ -2323,13 +2400,13 @@ def auto(args):
         pick = 1
     if model != "lama" and not engines.usable(model, engines.device()):
         raise Fail(_("{model} is not installed or does not run on this computer (see --check)", model=MODELS[model]))
-    s = Session(LC(), args)
+    s = Session(LC(host=host_for(args)), args)
     try:
         s.prepare()
         reflection = model in REFLECTION_MODELS
         if s.init_mask is None and not reflection:
-            raise Fail(_("--auto needs a \"Remove\" mask on the photo in LightCraft (e.g. an Object mask renamed "
-                         "\"Remove\", or \"Remove: old wooden door\" to guide the fill)"))
+            raise Fail(_("--auto needs a \"Remove\" mask on the photo in {app} (e.g. an Object mask renamed "
+                         "\"Remove\", or \"Remove: old wooden door\" to guide the fill)", app=s.lc.name))
         sel = s.init_mask if s.init_mask is not None else np.ones(s.base_arr.shape[:2], bool)
         if getattr(args, "shadow", False) and not reflection:
             shadow = s.find_shadow(sel)
@@ -2353,7 +2430,8 @@ def auto(args):
         out, nid, update = s.write_all()
         # "dng": the result for any photo (its name since before pictures), "file" the same; "removal" / "variant":
         # the first part's (from before selections were split), "removals": every part's
-        print(json.dumps({"ok": True, "dng": str(out), "file": str(out), "photo_id": nid, "updated": update,
+        print(json.dumps({"ok": True, "app": s.lc.host.key, "dng": str(out), "file": str(out), "photo_id": nid,
+                          "updated": update,
                           "removal": made[0].id, "removals": [r.id for r in made],
                           "variant": variant_text(made[0], made[0].chosen_label()),
                           "project": str(project.path_for(s.src_path))}), flush=True)
@@ -2363,20 +2441,25 @@ def auto(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="AI Remove for LightCraft")
-    ap.add_argument("raw", nargs="?", help="a photo (RAW, JPEG, PNG, TIFF, WebP, HEIC, AVIF) or its .airemove "
-                                           "project: the one LightCraft passes (its external editor), or any file, "
-                                           "opened on its own")
-    ap.add_argument("--id", type=int, help="LightCraft photo id (default: the active photo)")
+    ap = argparse.ArgumentParser(description="AI Remove for LightCraft and Chromaforge")
+    ap.add_argument("files", nargs="*", metavar="photo",
+                    help="a photo (RAW, JPEG, PNG, TIFF, WebP, HEIC, AVIF) or its .airemove project: the one the app "
+                         "passes (its external editor; Chromaforge passes every selected photo, the active one opens), "
+                         "or any file, opened on its own")
+    ap.add_argument("--app", choices=[h.key for h in system.HOSTS],
+                    help="the app to work in (default: the one that answers; both: the one with an active photo)")
+    ap.add_argument("--id", type=int, help="photo id in the app (default: the active photo)")
     ap.add_argument("--variants", type=int, default=None, help="variants per removal (window default: last used)")
     ap.add_argument("--auto", help=f"no window: {' | '.join(ENGINES)}[N] on the photo's Rimuovi masks")
     ap.add_argument("--shadow", action="store_true", help="--auto: remove the object's shadow and reflection too")
     ap.add_argument("--check", action="store_true", help="print a JSON report and exit")
     args = ap.parse_args()
+    args.raw = args.files[0] if args.files else None
     if args.check:
         return check()
     LOG_FILE.write_text("", encoding="utf-8")
-    log(f"AI Remove {system.VERSION} started ({system.system()})", f"(file: {args.raw})" if args.raw else "")
+    log(f"AI Remove {system.VERSION} started ({system.system()})",
+        f"(files: {', '.join(args.files)})" if args.files else "")
     if args.auto:
         return auto(args)
     session = open_session(args)

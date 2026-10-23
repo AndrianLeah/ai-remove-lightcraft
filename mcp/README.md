@@ -64,14 +64,14 @@ Then ask: *"Install AI Remove for LightCraft"*. The `install_ai_remove` prompt d
 | Tool | What it does |
 |---|---|
 | `ai_remove_guide` | What AI Remove is; how to install, use, troubleshoot, uninstall |
-| `check_system` | GPU, PyTorch build, what each model is for with its size and licence, disk, LightCraft state, install self-test; with `model_dirs` ({model: folder}), what those folders hold of the models (read-only) |
-| `install` | Background install, after the user accepted sizes and licences (`accept_licenses: true`); optional `models`, `model_dirs` (models the user already has: used from there, not downloaded), `hf_token`, `install_dir`, `torch` |
+| `check_system` | GPU, PyTorch build, what each model is for with its size and licence, disk, the state of LightCraft and Chromaforge (`apps`), install self-test; with `model_dirs` ({model: folder}), what those folders hold of the models (read-only) |
+| `install` | Background install, after the user accepted sizes and licences (`accept_licenses: true`); optional `models`, `model_dirs` (models the user already has: used from there, not downloaded), `hf_token`, `install_dir`, `torch`, `apps` (`lightcraft`, `chromaforge`, `both`, `none`: ask the user which) |
 | `install_status` | Progress (step n/7) and the end of the log |
-| `configure_lightcraft` | (Re)apply the LightCraft integration: control channel, external editor, Ctrl/Cmd+Shift+X |
-| `open_ai_remove` | Open the window on LightCraft's active photo, or on `photo_id` |
-| `remove_with_masks` | Headless: fill the photo's "Remove" (or "Rimuovi") masks with `rorem` (the default), `lama`, `flux` or `qwen` (`sdxl` and `osor` still work, `objectclear` runs `osor`; `shadow: true` also takes the object's shadow and reflection; far-apart parts become removals of their own), write the result (a DNG, or a picture's copy in its format) |
+| `configure_lightcraft` | (Re)apply the integration with LightCraft and/or Chromaforge (`apps`): control channel, external editor, Ctrl/Cmd+Shift+X |
+| `open_ai_remove` | Open the window on the active photo of LightCraft or Chromaforge (`app` picks one), or on `photo_id` |
+| `remove_with_masks` | Headless: fill the photo's "Remove" (or "Rimuovi") masks with `rorem` (the default), `lama`, `flux` or `qwen` (`sdxl` and `osor` still work, `objectclear` runs `osor`; `shadow: true` also takes the object's shadow and reflection; far-apart parts become removals of their own), write the result (a DNG, or a picture's copy in its format); `app` when both apps are open |
 | `project_info` | A photo's removals, chosen variants and result |
-| `uninstall` | Remove AI Remove and its LightCraft settings (`confirm: true`); photos and projects are kept |
+| `uninstall` | Remove AI Remove and its settings in LightCraft and Chromaforge (`confirm: true`); photos and projects are kept |
 
 Resources:
 

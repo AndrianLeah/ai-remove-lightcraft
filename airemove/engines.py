@@ -111,9 +111,9 @@ def _free_gpu():
 
 # ------------------------------------------------------------------------------------------------ what is installed
 def sam3_dir():
-    """models/sam3 with the SAM 3 weights: the same file LightCraft downloaded for its Object masks, linked (no
-    second 3.2 GB copy) when it is there — or the user's own folder the installer found it in. No config files are
-    needed: transformers' defaults for the SAM 3 tracker are this checkpoint's (checked: identical masks)."""
+    """models/sam3 with the SAM 3 weights: the same file LightCraft (or Chromaforge) downloaded for its Object masks,
+    linked (no second 3.2 GB copy) when it is there — or the user's own folder the installer found it in. No config
+    files are needed: transformers' defaults for the SAM 3 tracker are this checkpoint's (checked: identical masks)."""
     d = mf.part_dir("sam3")
     if d != MODELS / "sam3":
         return d
@@ -121,9 +121,9 @@ def sam3_dir():
     try:
         d.mkdir(parents=True, exist_ok=True)
         if not w.exists():
-            lc = system.lightcraft_sam3_dir() / SAM3_WEIGHTS
-            if lc.exists():
-                system.link_or_copy(lc, w)
+            host = system.sam3_host(SAM3_WEIGHTS)
+            if host is not None:
+                system.link_or_copy(host.sam3_dir() / SAM3_WEIGHTS, w)
     except OSError:
         pass
     return d
@@ -258,8 +258,8 @@ class SAM3:
         hf_logging.set_verbosity_error()  # "sam3_video checkpoint into sam3_tracker" is expected
         path = sam3_dir()
         if not (path / SAM3_WEIGHTS).exists():
-            raise FileNotFoundError(_("the SAM 3 model is missing ({file}): download it in LightCraft (Object mask) "
-                                      "or with the AI Remove installer", file=path / SAM3_WEIGHTS))
+            raise FileNotFoundError(_("the SAM 3 model is missing ({file}): download it in LightCraft or Chromaforge "
+                                      "(Object mask) or with the AI Remove installer", file=path / SAM3_WEIGHTS))
         self.torch, self.dev = torch, dev
         # bfloat16 where the GPU has it; Apple and the processor get float32 (half precision there is slow or lossy)
         self.dtype = torch.bfloat16 if dev in ("cuda", "xpu") else torch.float32
@@ -363,7 +363,7 @@ class SAM3:
         if (self.path / "tokenizer.json").exists() or (self.path / "tokenizer_config.json").exists():
             self.det_proc = Sam3Processor.from_pretrained(self.path)
         else:
-            vocab = next((d for d in (self.path, system.lightcraft_sam3_dir())
+            vocab = next((d for d in (self.path,) + tuple(h.sam3_dir() for h in system.HOSTS)
                           if (d / "vocab.json").exists() and (d / "merges.txt").exists()), None)
             if vocab is None:
                 raise FileNotFoundError(_("Describe needs SAM 3's text files (vocab.json and merges.txt), which come "

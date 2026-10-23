@@ -10,17 +10,22 @@ install folder. Standard library only. What it does, in order (each step can be 
      Qwen-Image) and removes the ones AI Remove no longer uses from its own models folder (RETIRED);
      a model the user already has in a folder of their own is used from there (airemove.json "model_paths")
   5. creates the launcher (AI Remove.exe / app / command) with its icon, a Start menu / Applications / menu entry
-  6. sets up LightCraft: its control channel (LIGHTCRAFT_CONTROL_PORT), AI Remove as its external editor and the
-     shortcut Ctrl+Shift+X (Cmd+Shift+X on a Mac) for Photo > Edit In > Open Original in Other Editor
+  6. sets up the apps chosen — LightCraft, Chromaforge (LightCraft Classic) or both, asked at the start (--apps): the
+     app's control channel (LIGHTCRAFT_CONTROL_PORT 7980, LIGHTCRAFT_CLASSIC_CONTROL_PORT 7981), AI Remove as its
+     external editor and the shortcut Ctrl+Shift+X (Cmd+Shift+X on a Mac) for Photo > Edit In > Open Original in
+     Other Editor
   7. checks the result (airemove --check)
 
   install.py [--dir DIR] [--models lama,sam3,rorem,flux,osor,qwen | recommended | none]
              [--yes] [--model-dir MODEL=FOLDER ...] [--hf-token TOKEN] [--torch auto|cuda|rocm|rocm-win|xpu|mps|cpu]
-             [--models-from DIR] [--port 7980] [--no-lightcraft]
-  install.py --configure-lightcraft [--dir DIR]      only step 6 (e.g. after closing LightCraft)
+             [--models-from DIR] [--apps lightcraft|chromaforge|both|none] [--port 7980] [--no-lightcraft]
+  install.py --configure-lightcraft [--apps …] [--dir DIR]   only step 6 (e.g. after closing the app, or installing
+                                                             Chromaforge); asks which apps unless --apps / --yes
   install.py --status [--dir DIR]                    JSON: what is installed
-  install.py --uninstall [--keep-models] [--yes]     removes AI Remove and its LightCraft settings (not your photos,
+  install.py --uninstall [--keep-models] [--yes]     removes AI Remove and its settings in the apps (not your photos,
                                                      not the .airemove projects next to them)
+--yes without --apps: the apps chosen last time (an install from before Chromaforge: LightCraft), else the ones
+installed, else LightCraft.
 """
 import argparse
 import getpass
@@ -70,6 +75,7 @@ RETIRED = {"objectclear": ("objectclear",)}
 # runtimes it needs (CUDA, ROCm) are NVIDIA's and AMD's.
 QWEN_VRAM, QWEN_TORCH = 15.5, ("cuda", "rocm", "rocm-win")
 SHORTCUT = "Cmd+Shift+X"  # LightCraft's notation: Cmd = Ctrl on Windows and Linux
+APP_KEY = "Cmd+Shift+X" if system.system() == "macos" else "Ctrl+Shift+X"  # the same, as the user presses it
 EDIT_COMMAND = "photo.openOriginalInExternal"
 APP_NAME = "AI Remove"
 WIN_UNINSTALL_KEY = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\AIRemoveLightCraft"
@@ -491,7 +497,7 @@ def ask_model(model, default, required):
         para(why, "    ! ", "      ")
 
 
-def choose_models(flavour, gpu, installed, given, lc_sam):
+def choose_models(flavour, gpu, installed, given, sam_host):
     """The questions, model by model: what it is for, its download and its licence; y, n, or the folder where the
     user already has it (what is there goes into given). Returns the models wanted."""
     rec = recommended_models(flavour, gpu)
@@ -510,7 +516,7 @@ def choose_models(flavour, gpu, installed, given, lc_sam):
             continue
         if m == "osor" and "flux" not in wanted + installed:
             continue  # it runs on FLUX
-        lc = m == "sam3" and lc_sam
+        lc = m == "sam3" and sam_host is not None
         out.write("")
         para(f"{mod.name} — {_(mod.what)}")
         notes = [f"{num(mod.gb)} GB", _("licence {licence}", licence=mod.licence)]
@@ -523,7 +529,7 @@ def choose_models(flavour, gpu, installed, given, lc_sam):
             say_found(m, given[m])
             wanted.append(m)
         elif lc:
-            out.write("    " + _("already in LightCraft: linked, nothing to download"))
+            out.write("    " + _("already in {app}: linked, nothing to download", app=sam_host.name))
             wanted.append(m)
         else:
             ans = ask_model(m, m in ("lama", "sam3") or m in rec, m == "lama")
@@ -650,7 +656,7 @@ def make_shortcuts(d, cfg):
     linux_project_type(data)
     cfg["shortcut"] = str(entry)
     editor = str(launcher_exe(d))
-    if system.flatpak_lightcraft():  # LightCraft in its sandbox starts the editor inside it: hop out to the host
+    if any(h.is_flatpak() for h in system.HOSTS):  # the app in its sandbox starts the editor inside it: hop out
         hop = d / "airemove-flatpak.sh"
         hop.write_text(f'#!/bin/sh\nexec flatpak-spawn --host "{launcher_exe(d)}" "$@"\n', encoding="utf-8")
         hop.chmod(0o755)
@@ -730,86 +736,117 @@ def linux_project_type(data, remove=False):
         out.write("  " + _(".airemove projects: a double-click opens the photo in AI Remove"))
 
 
-# ------------------------------------------------------------------------------------------------ 6. LightCraft
-def lc_running():
-    s = system.system()
-    if s == "windows":
-        return "lightcraft.exe" in output(["tasklist", "/FI", "IMAGENAME eq lightcraft.exe", "/NH"]).lower()
-    if s == "macos":
-        return bool(output(["pgrep", "-x", "LightCraft"]).strip())
-    return bool(output(["pgrep", "-x", "lightcraft"]).strip())
+# ------------------------------------------------------------------------------------------------ 6. the apps
+def lc_running(host=system.LIGHTCRAFT):
+    """Whether the app (LightCraft, Chromaforge) is running, with or without its control channel."""
+    if system.system() == "windows":
+        return f"{host.exe}.exe" in output(["tasklist", "/FI", f"IMAGENAME eq {host.exe}.exe", "/NH"]).lower()
+    return bool(output(["pgrep", "-x", host.process()]).strip())
 
 
-def lc_request(port, method, params, timeout=10):
-    """One control-channel request to the running LightCraft (None if it does not answer)."""
+def lc_request(port, method, params, timeout=10, host=system.LIGHTCRAFT):
+    """One control-channel request to the running app (None if it does not answer); after its token, on the same
+    connection, when the app wants one (Chromaforge). A refused token: that reply."""
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=2) as c:
             c.settimeout(timeout)
-            c.sendall((json.dumps({"id": 1, "method": method, "params": params}) + "\n").encode())
-            buf = b""
-            while b"\n" not in buf:
-                chunk = c.recv(65536)
-                if not chunk:
-                    return None
-                buf += chunk
-            return json.loads(buf.split(b"\n", 1)[0].decode("utf-8", "replace").lstrip("﻿"))
+            token, buf = host.token(port), b""
+            for n, (m, p) in enumerate(([("auth", {"token": token})] if token else []) + [(method, params)], 1):
+                c.sendall((json.dumps({"id": n, "method": m, "params": p}) + "\n").encode())
+                while b"\n" not in buf:
+                    chunk = c.recv(65536)
+                    if not chunk:
+                        return None
+                    buf += chunk
+                line, buf = buf.split(b"\n", 1)
+                reply = json.loads(line.decode("utf-8", "replace").lstrip("﻿"))
+                if m == "auth" and not reply.get("ok"):
+                    return reply
+            return reply
     except (OSError, ValueError):
         return None
 
 
-def set_control_port(port, cfg):
-    """LIGHTCRAFT_CONTROL_PORT for LightCraft started from now on (it reads it at start)."""
-    s, done = system.system(), []
+def mac_agent(host):
+    """The LaunchAgent that sets the app's control port at login (LightCraft's kept its name from before)."""
+    return MAC_AGENT if host is system.LIGHTCRAFT else f"com.airemove.{host.key}-control"
+
+
+def set_control_port(port, cfg, host=system.LIGHTCRAFT):
+    """The app's <PREFIX>_CONTROL_PORT (LIGHTCRAFT_CONTROL_PORT, LIGHTCRAFT_CLASSIC_CONTROL_PORT) for the app started
+    from now on (it reads it at start)."""
+    s, done, var = system.system(), [], host.var("CONTROL_PORT")
     if s == "windows":
-        output(["setx", "LIGHTCRAFT_CONTROL_PORT", str(port)])
-        done.append(_("user variable LIGHTCRAFT_CONTROL_PORT"))
+        output(["setx", var, str(port)])
+        done.append(_("user variable {variable}", variable=var))
     elif s == "macos":
-        agent = Path.home() / "Library" / "LaunchAgents" / f"{MAC_AGENT}.plist"
+        agent = Path.home() / "Library" / "LaunchAgents" / f"{mac_agent(host)}.plist"
         agent.parent.mkdir(parents=True, exist_ok=True)
         agent.write_text(
             '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
             '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n'
-            f'  <key>Label</key><string>{MAC_AGENT}</string>\n'
+            f'  <key>Label</key><string>{mac_agent(host)}</string>\n'
             '  <key>ProgramArguments</key><array><string>/bin/launchctl</string><string>setenv</string>'
-            f'<string>LIGHTCRAFT_CONTROL_PORT</string><string>{port}</string></array>\n'
+            f'<string>{var}</string><string>{port}</string></array>\n'
             '  <key>RunAtLoad</key><true/>\n</dict></plist>\n', encoding="utf-8")
-        output(["launchctl", "setenv", "LIGHTCRAFT_CONTROL_PORT", str(port)])
+        output(["launchctl", "setenv", var, str(port)])
         output(["launchctl", "load", "-w", str(agent)])
         done.append(f"LaunchAgent {agent.name}")
     else:
         envd = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "environment.d"
         envd.mkdir(parents=True, exist_ok=True)
-        (envd / "60-lightcraft-control.conf").write_text(f"LIGHTCRAFT_CONTROL_PORT={port}\n", encoding="utf-8")
+        (envd / f"60-{host.key}-control.conf").write_text(f"{var}={port}\n", encoding="utf-8")
         done.append(_("~/.config/environment.d (from the next login)"))
-        output(["systemctl", "--user", "set-environment", f"LIGHTCRAFT_CONTROL_PORT={port}"])
-        if system.flatpak_lightcraft():
-            output(["flatpak", "override", "--user", f"--env=LIGHTCRAFT_CONTROL_PORT={port}", "--share=network",
-                    f"--filesystem={cfg['dir']}", "--talk-name=org.freedesktop.Flatpak", system.LIGHTCRAFT_ID])
+        output(["systemctl", "--user", "set-environment", f"{var}={port}"])
+        if host.is_flatpak():
+            output(["flatpak", "override", "--user", f"--env={var}={port}", "--share=network",
+                    f"--filesystem={cfg['dir']}", "--talk-name=org.freedesktop.Flatpak", host.app_id])
             done.append(_("Flatpak permissions (local network, AI Remove's folder, starting programs)"))
-            cfg["flatpak_override"] = True
-        else:  # the menu entry starts LightCraft with the channel on, without waiting for a new login
+            cfg[host.cfg_key("flatpak_override")] = True
+        else:  # the menu entry starts the app with the channel on, without waiting for a new login
             data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "applications"
-            src = next((Path(p) / "applications" / f"{system.LIGHTCRAFT_ID}.desktop" for p in
+            src = next((Path(p) / "applications" / f"{host.app_id}.desktop" for p in
                         (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
-                        if (Path(p) / "applications" / f"{system.LIGHTCRAFT_ID}.desktop").exists()), None)
+                        if (Path(p) / "applications" / f"{host.app_id}.desktop").exists()), None)
             if src:
                 text = src.read_text(encoding="utf-8")
-                text = re.sub(r"^Exec=(?!env LIGHTCRAFT_CONTROL_PORT)", f"Exec=env LIGHTCRAFT_CONTROL_PORT={port} ",
-                              text, flags=re.M)
+                text = re.sub(rf"^Exec=(?!env {var})", f"Exec=env {var}={port} ", text, flags=re.M)
                 data.mkdir(parents=True, exist_ok=True)
                 (data / src.name).write_text(text, encoding="utf-8")
-                cfg["desktop_override"] = str(data / src.name)
-                done.append(_("LightCraft's menu entry"))
-    cfg["port"], cfg["control_env"] = port, True
+                cfg[host.cfg_key("desktop_override")] = str(data / src.name)
+                done.append(_("{app}'s menu entry", app=host.name))
+    cfg[host.cfg_key("port")], cfg[host.cfg_key("control_env")] = port, True
     return done
 
 
-def ui_json():
-    return system.lightcraft_config_dir() / "ui.json"
+def unset_control_port(d, cfg, host=system.LIGHTCRAFT):
+    """Undo set_control_port."""
+    s, var = system.system(), host.var("CONTROL_PORT")
+    if s == "windows":
+        output(["reg", "delete", "HKCU\\Environment", "/v", var, "/f"])
+    elif s == "macos":
+        agent = Path.home() / "Library" / "LaunchAgents" / f"{mac_agent(host)}.plist"
+        output(["launchctl", "unload", str(agent)])
+        output(["launchctl", "unsetenv", var])
+        agent.unlink(missing_ok=True)
+    else:
+        envd = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "environment.d"
+        (envd / f"60-{host.key}-control.conf").unlink(missing_ok=True)
+        output(["systemctl", "--user", "unset-environment", var])
+        if cfg.get(host.cfg_key("desktop_override")):
+            Path(cfg[host.cfg_key("desktop_override")]).unlink(missing_ok=True)
+        if cfg.get(host.cfg_key("flatpak_override")):
+            output(["flatpak", "override", "--user", f"--unset-env={var}",
+                    f"--nofilesystem={d}", "--no-talk-name=org.freedesktop.Flatpak", host.app_id])
+    out.write("  " + _("{app}'s control channel: removed", app=host.name))
+
+
+def ui_json(host=system.LIGHTCRAFT):
+    return host.ui_json()
 
 
 def is_ours(value, d, cfg):
-    """Whether LightCraft's external editor is this install's AI Remove — never another program, nor another copy of
+    """Whether the app's external editor is this install's AI Remove — never another program, nor another copy of
     AI Remove (uninstalling a second install must not unhook the first)."""
     if not value:
         return False
@@ -818,12 +855,12 @@ def is_ours(value, d, cfg):
     return v in [norm(x) for x in (cfg.get("editor"), cfg.get("shortcut")) if x] or v.startswith(norm(d) + os.sep)
 
 
-def edit_ui_json(editor, remove=None):
-    """Set (or clear) the external editor and the shortcut in LightCraft's ui.json — only while LightCraft is closed
+def edit_ui_json(editor, remove=None, host=system.LIGHTCRAFT):
+    """Set (or clear) the external editor and the shortcut in the app's ui.json — only while the app is closed
     (it rewrites the file when it quits). Written in place: on Windows a new file under AppData made from inside a
-    packaged app (the Claude app) would be invisible to LightCraft. remove: a test of the current editor (is_ours);
+    packaged app (the Claude app) would be invisible to the app. remove: a test of the current editor (is_ours);
     the editor and the shortcut are cleared only when it says yes. Returns whether the file was changed."""
-    p = ui_json()
+    p = ui_json(host)
     data = {}
     if p.exists():
         raw = p.read_text(encoding="utf-8-sig")
@@ -851,33 +888,109 @@ def edit_ui_json(editor, remove=None):
     return True
 
 
-def configure_lightcraft(d, cfg, editor, yes=False):
-    """Returns (state, message): state 'done' | 'pending' (LightCraft must be closed first)."""
-    port = int(cfg.get("port") or system.DEFAULT_PORT)
-    notes = set_control_port(port, cfg)
+def default_apps(cfg):
+    """The apps to set up when nobody is asked: the ones chosen last time; LightCraft for an install from before
+    Chromaforge (an update does not take over Chromaforge's external editor unasked); else the ones installed, else
+    LightCraft (it may be installed after AI Remove)."""
+    if isinstance(cfg.get("apps"), list):
+        return [h for h in system.HOSTS if h.key in cfg["apps"]]
+    if cfg.get("lightcraft"):
+        return [system.LIGHTCRAFT]
+    return system.installed_hosts() or [system.LIGHTCRAFT]
+
+
+def parse_apps(value):
+    """--apps: lightcraft, chromaforge, both (or lightcraft,chromaforge), none."""
+    v = value.strip().lower()
+    if v in ("both", "all"):
+        return list(system.HOSTS)
+    if v == "none":
+        return []
+    hosts = [system.host_named(x) for x in v.split(",") if x.strip()]
+    if not hosts or None in hosts:
+        raise Stop(_("--apps wants lightcraft, chromaforge, both or none (it was: {value})", value=value))
+    return [h for h in system.HOSTS if h in hosts]
+
+
+def choose_apps(cfg, yes):
+    """The question: which apps AI Remove is set up for — LightCraft, Chromaforge or both, each said found or not;
+    the default is the ones chosen last time, else the ones found."""
+    default = default_apps(cfg)
+    if yes:
+        return default
+    options = {str(n): [h] for n, h in enumerate(system.HOSTS, 1)}
+    options.update({str(len(system.HOSTS) + 1): list(system.HOSTS), "0": []})
+    out.write("")
+    para(_("AI Remove works inside LightCraft and inside Chromaforge (LightCraft Classic): it becomes the app's "
+           "external editor, on {key}, and turns on its control channel. Which one should it be set up for?",
+           key=APP_KEY), "  ", "  ")
+    for n, h in enumerate(system.HOSTS, 1):
+        out.write(f"    {n}) {h.name} — " + (h.app() or _("not found on this computer")))
+    out.write(f"    {len(system.HOSTS) + 1}) " + _("both"))
+    out.write("    0) " + _("neither (their settings are left alone)"))
+    dflt = next((k for k, v in options.items() if v == default), "1")
+    while True:
+        try:
+            a = input("  " + _("Choice [{default}]: ", default=dflt)).strip()
+        except EOFError:
+            a = ""
+        if a in options or not a:
+            return options[a or dflt]
+
+
+def configurable(host):
+    """Whether the app can be set up now: LightCraft always (it may be installed after AI Remove, as before
+    Chromaforge); Chromaforge once it is installed or has run — a settings folder made before its first start would
+    stop it from copying LightCraft's (its models, its preferences) as it does then."""
+    return host is system.LIGHTCRAFT or bool(host.app()) or host.config_dir().is_dir()
+
+
+def configure_lightcraft(d, cfg, editor, yes=False, host=system.LIGHTCRAFT):
+    """Set up one app (LightCraft or Chromaforge). Returns (state, message): state 'done' | 'pending' (the app must be
+    closed first)."""
+    port = int(cfg.get(host.cfg_key("port")) or host.default_port)
+    notes = set_control_port(port, cfg, host)
     out.write("  " + _("control channel: {how}", how=", ".join(notes)))
     cfg["editor"] = editor
-    if lc_request(port, "engine.execute", {"command": "library.state", "params": {}}):
-        r1 = lc_request(port, "ui.set", {"settings": {"externalEditor": editor}})
+    if lc_request(port, "engine.execute", {"command": "library.state", "params": {}}, host=host):
+        r1 = lc_request(port, "ui.set", {"settings": {"externalEditor": editor}}, host=host)
         r2 = lc_request(port, "engine.execute", {"command": "app.setShortcut",
-                                                 "params": {"id": EDIT_COMMAND, "shortcut": SHORTCUT}})
+                                                 "params": {"id": EDIT_COMMAND, "shortcut": SHORTCUT}}, host=host)
         if r1 and r1.get("ok"):
-            msg = _("LightCraft is open: external editor set right away")
+            msg = _("{app} is open: external editor set right away", app=host.name)
             if not (r2 and r2.get("ok")):
                 msg += " " + _("(shortcut not set: {error})", error=(r2 or {}).get("error"))
-            cfg["lightcraft"] = "done"
+            cfg[host.key] = "done"
             return "done", msg
     tries = 0
-    while lc_running():
+    while lc_running(host):
         if yes or tries >= 3:
-            cfg["lightcraft"] = "pending"
-            return "pending", _("LightCraft is open: close it, then run the configuration again "
-                                "(install --configure-lightcraft, or the MCP tool configure_lightcraft)")
-        input("  " + _("LightCraft is open: close it (save your work), then press Enter… "))
+            cfg[host.key] = "pending"
+            return "pending", _("{app} is open: close it, then run the configuration again "
+                                "(install --configure-lightcraft, or the MCP tool configure_lightcraft)", app=host.name)
+        input("  " + _("{app} is open: close it (save your work), then press Enter… ", app=host.name))
         tries += 1
-    edit_ui_json(editor)
-    cfg["lightcraft"] = "done"
-    return "done", _("settings written to {file}", file=ui_json())
+    edit_ui_json(editor, host=host)
+    cfg[host.key] = "done"
+    return "done", _("settings written to {file}", file=ui_json(host))
+
+
+def configure_apps(d, cfg, editor, apps, yes=False):
+    """Step 6 for the apps chosen (choose_apps): [(host, state, message)]; the others are left as they are."""
+    cfg["apps"] = [h.key for h in apps]
+    results = []
+    for host in system.HOSTS:
+        if host not in apps:
+            out.write(f"  {host.name}: " + _("not chosen, left as it is"))
+        elif not configurable(host):
+            out.write(f"  {host.name}: " + _("not installed yet, nothing set up: once it is (and has been opened "
+                                              "once), run the configuration again (install --configure-lightcraft)"))
+        else:
+            out.write(f"  {host.name}:")
+            state, msg = configure_lightcraft(d, cfg, editor, yes, host)
+            out.write("  " + msg)
+            results.append((host, state, msg))
+    return results
 
 
 # ------------------------------------------------------------------------------------------------ status / uninstall
@@ -893,17 +1006,23 @@ def write_cfg(d, cfg):
 
 
 def status(d):
+    """JSON: what is installed. The lightcraft_* keys are LightCraft's, as before Chromaforge; "apps" has both."""
     cfg = read_cfg(d)
-    rep = {"installed": venv_python(d).exists(), "dir": str(d), "config": cfg, "os": system.system(),
-           "lightcraft_app": system.lightcraft_app(), "lightcraft_running": lc_running(),
-           "lightcraft_reachable": system.lightcraft_reachable(int(cfg.get("port") or system.DEFAULT_PORT)),
-           "lightcraft_settings": str(system.lightcraft_config_dir())}
-    try:
-        st = json.loads(ui_json().read_text(encoding="utf-8-sig")).get("settings", {})
-        rep["lightcraft_editor"] = st.get("externalEditor")
-        rep["lightcraft_shortcut"] = (st.get("keymap") or {}).get(EDIT_COMMAND)
-    except (OSError, ValueError):
-        pass
+    rep = {"installed": venv_python(d).exists(), "dir": str(d), "config": cfg, "os": system.system(), "apps": {}}
+    for h in system.HOSTS:
+        a = rep["apps"][h.key] = {"name": h.name, "app": h.app(), "running": lc_running(h),
+                                  "reachable": h.reachable(int(cfg.get(h.cfg_key("port")) or h.default_port)),
+                                  "settings": str(h.config_dir()), "configured": cfg.get(h.key)}
+        try:
+            st = json.loads(ui_json(h).read_text(encoding="utf-8-sig")).get("settings", {})
+            a["editor"], a["shortcut"] = st.get("externalEditor"), (st.get("keymap") or {}).get(EDIT_COMMAND)
+        except (OSError, ValueError):
+            pass
+    lc = rep["apps"]["lightcraft"]
+    rep.update(lightcraft_app=lc["app"], lightcraft_running=lc["running"], lightcraft_reachable=lc["reachable"],
+               lightcraft_settings=lc["settings"])
+    if "editor" in lc:
+        rep["lightcraft_editor"], rep["lightcraft_shortcut"] = lc["editor"], lc["shortcut"]
     if rep["installed"]:
         __, txt = run([venv_python(d), str(d / "airemove" / "airemove.py"), "--check"], check=False, quiet=True)
         try:
@@ -913,6 +1032,33 @@ def status(d):
     print(json.dumps(rep, indent=1, ensure_ascii=False))
 
 
+def unhook(d, cfg, host=system.LIGHTCRAFT):
+    """The app's external editor and shortcut, when they are this install's: cleared live, else in its ui.json."""
+    port = int(cfg.get(host.cfg_key("port")) or host.default_port)
+    ours = lambda v: is_ours(v, d, cfg)  # noqa: E731
+    live = lc_request(port, "ui.set", {}, host=host)  # no change: replies with the app's current settings
+    if live and live.get("ok"):
+        st = (live.get("result") or {}).get("settings") or {}
+        if ours(st.get("externalEditor")):
+            lc_request(port, "ui.set", {"settings": {"externalEditor": ""}}, host=host)
+            if (st.get("keymap") or {}).get(EDIT_COMMAND) == SHORTCUT:
+                lc_request(port, "engine.execute", {"command": "app.setShortcut",
+                                                    "params": {"id": EDIT_COMMAND, "shortcut": ""}}, host=host)
+            out.write("  " + _("{app}: external editor removed", app=host.name))
+        else:
+            out.write("  " + _("{app}: its external editor is not this installation, left as it is", app=host.name))
+    elif not lc_running(host):
+        try:
+            done = edit_ui_json("", remove=ours, host=host)
+            out.write("  " + (_("{app}: external editor and shortcut removed", app=host.name) if done else
+                              _("{app}: its external editor is not this installation, left as it is", app=host.name)))
+        except (OSError, ValueError) as e:
+            out.write("  ! " + _("ui.json not changed: {error}", error=e))
+    else:
+        out.write("  ! " + _("{app} is open: remove the external editor yourself in Settings > External Editing",
+                             app=host.name))
+
+
 def uninstall(d, keep_models, yes):
     cfg = read_cfg(d)
     s = system.system()
@@ -920,47 +1066,11 @@ def uninstall(d, keep_models, yes):
                 _("Uninstall AI Remove from {dir}?", dir=d)) + " " +
                _("The photos, the DNGs made and the .airemove projects next to the RAWs stay."), True, yes):
         return
-    port = int(cfg.get("port") or system.DEFAULT_PORT)
-    ours = lambda v: is_ours(v, d, cfg)  # noqa: E731
-    live = lc_request(port, "ui.set", {})  # no change: replies with LightCraft's current settings
-    if live and live.get("ok"):
-        st = (live.get("result") or {}).get("settings") or {}
-        if ours(st.get("externalEditor")):
-            lc_request(port, "ui.set", {"settings": {"externalEditor": ""}})
-            if (st.get("keymap") or {}).get(EDIT_COMMAND) == SHORTCUT:
-                lc_request(port, "engine.execute", {"command": "app.setShortcut",
-                                                    "params": {"id": EDIT_COMMAND, "shortcut": ""}})
-            out.write("  " + _("LightCraft: external editor removed"))
-        else:
-            out.write("  " + _("LightCraft: its external editor is not this installation, left as it is"))
-    elif not lc_running():
-        try:
-            done = edit_ui_json("", remove=ours)
-            out.write("  " + (_("LightCraft: external editor and shortcut removed") if done else
-                              _("LightCraft: its external editor is not this installation, left as it is")))
-        except (OSError, ValueError) as e:
-            out.write("  ! " + _("ui.json not changed: {error}", error=e))
-    else:
-        out.write("  ! " + _("LightCraft is open: remove the external editor yourself in Settings > External "
-                             "Editing"))
-    if cfg.get("control_env"):
-        if s == "windows":
-            output(["reg", "delete", "HKCU\\Environment", "/v", "LIGHTCRAFT_CONTROL_PORT", "/f"])
-        elif s == "macos":
-            agent = Path.home() / "Library" / "LaunchAgents" / f"{MAC_AGENT}.plist"
-            output(["launchctl", "unload", str(agent)])
-            output(["launchctl", "unsetenv", "LIGHTCRAFT_CONTROL_PORT"])
-            agent.unlink(missing_ok=True)
-        else:
-            envd = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "environment.d"
-            (envd / "60-lightcraft-control.conf").unlink(missing_ok=True)
-            output(["systemctl", "--user", "unset-environment", "LIGHTCRAFT_CONTROL_PORT"])
-            if cfg.get("desktop_override"):
-                Path(cfg["desktop_override"]).unlink(missing_ok=True)
-            if cfg.get("flatpak_override"):
-                output(["flatpak", "override", "--user", "--unset-env=LIGHTCRAFT_CONTROL_PORT",
-                        f"--nofilesystem={d}", "--no-talk-name=org.freedesktop.Flatpak", system.LIGHTCRAFT_ID])
-        out.write("  " + _("LightCraft's control channel: removed"))
+    for host in system.HOSTS:  # LightCraft as before; Chromaforge where this install set it up
+        if host is system.LIGHTCRAFT or cfg.get(host.key):
+            unhook(d, cfg, host)
+        if cfg.get(host.cfg_key("control_env")):
+            unset_control_port(d, cfg, host)
     sc = cfg.get("shortcut")
     if sc and s == "macos" and Path(sc).exists():
         output([LSREGISTER, "-u", sc])  # its .airemove type goes with it
@@ -1018,8 +1128,10 @@ def parse():
     ap.add_argument("--model-dir", action="append", metavar="MODEL=FOLDER",
                     help="a model you already have on disk (another install, a Hugging Face cache, ComfyUI's models): "
                          "used from there, not downloaded; once per model")
+    ap.add_argument("--apps", default=None, help="the apps to set up: lightcraft, chromaforge, both or none (default: "
+                                                 "asked; with --yes the ones chosen last time, else the installed)")
     ap.add_argument("--port", type=int, default=None, help="port of LightCraft's control channel (7980)")
-    ap.add_argument("--no-lightcraft", action="store_true", help="leave LightCraft's settings alone")
+    ap.add_argument("--no-lightcraft", action="store_true", help="leave the apps' settings alone (--apps none)")
     ap.add_argument("--yes", "-y", action="store_true", help="no questions (recommended choices)")
     ap.add_argument("--reinstall", action="store_true", help="rebuild the Python environment")
     ap.add_argument("--configure-lightcraft", action="store_true")
@@ -1045,13 +1157,16 @@ def main():
     cfg.update({"version": VERSION, "dir": str(d)})
     if args.port:
         cfg["port"] = args.port
+    apps = [] if args.no_lightcraft else parse_apps(args.apps) if args.apps else None  # None: asked
     if args.configure_lightcraft:
-        out.title(6, "LightCraft")
-        state, msg = configure_lightcraft(d, cfg, cfg.get("editor") or str(launcher_exe(d)), args.yes)
+        out.title(6, " · ".join(h.name for h in system.HOSTS))
+        results = configure_apps(d, cfg, cfg.get("editor") or str(launcher_exe(d)),
+                                 choose_apps(cfg, args.yes) if apps is None else apps, args.yes)
         write_cfg(d, cfg)
-        out.write("  " + msg)
-        out.status(state if state != "done" else "done", msg)
-        return 0 if state == "done" else 2
+        pending = any(state == "pending" for __, state, __ in results)
+        msg = " · ".join(f"{h.name}: {m}" for h, __, m in results) or _("no app set up")
+        out.status("pending" if pending else "done", msg)
+        return 2 if pending else 0
 
     out.write(_("AI Remove for LightCraft {version} — installation ({os})", version=VERSION,
                 os=f"{platform.system()} {platform.machine()}"))
@@ -1063,10 +1178,14 @@ def main():
     out.write(f"  PyTorch: {_(TORCH_FLAVOURS[flavour][0])}")
     if flavour == "cpu":
         out.write("  ! " + _("no usable GPU: LaMa and the selection will work; SDXL would be very slow"))
-    lc = system.lightcraft_app()
-    out.write("  LightCraft: " + (lc or _("not found (install it from getartcraft.com: AI Remove works inside "
-                                            "LightCraft)")))
-    lc_sam = (system.lightcraft_sam3_dir() / mf.SAM3_WEIGHTS).exists()
+    for h in system.HOSTS:
+        out.write(f"  {h.name}: " + (h.app() or _("not found")))
+    if not system.installed_hosts():
+        out.write("  " + _("AI Remove works inside LightCraft (getartcraft.com) or Chromaforge "
+                           "(github.com/emmertex/lightcraft-classic): install one of them"))
+    if apps is None:
+        apps = choose_apps(cfg, args.yes)
+    sam_host = system.sam3_host(mf.SAM3_WEIGHTS)  # an app that has SAM 3 already: linked, not downloaded
 
     # models: what this install has already — in its models/ or, from an earlier run, in the user's own folders (a
     # re-run keeps it and does not ask about it again) —, the folders given with --model-dir, then the questions
@@ -1088,7 +1207,7 @@ def main():
         if not asked:  # the questions show it with the model
             say_found(m.strip().lower(), found)
     if args.models in (None, "recommended"):
-        wanted = choose_models(flavour, gpu, installed, given, lc_sam) if asked else recommended_models(flavour, gpu)
+        wanted = choose_models(flavour, gpu, installed, given, sam_host) if asked else recommended_models(flavour, gpu)
     elif args.models == "none":
         wanted = []
     else:
@@ -1103,13 +1222,13 @@ def main():
         return dict(kept, **{p: f for m in wanted for p, f in given.get(m, {}).items()})
 
     def source(part):
-        """Where a part comes from: 'there' (models/), 'yours' (a folder of the user's), 'lightcraft' (SAM 3),
-        'other' (--models-from, linked) or 'get' (downloaded)."""
+        """Where a part comes from: 'there' (models/), 'yours' (a folder of the user's), 'app' (SAM 3, from
+        LightCraft or Chromaforge), 'other' (--models-from, linked) or 'get' (downloaded)."""
         paths = mine()
         if mf.part_ok(part, mf.part_dir(part, models_dir, paths)):
             return "yours" if part in paths else "there"
-        if part == "sam3" and lc_sam:
-            return "lightcraft"
+        if part == "sam3" and sam_host:
+            return "app"
         return "other" if other and mf.part_ok(part, other / part) else "get"
 
     def drop(model, why):
@@ -1153,7 +1272,7 @@ def main():
         get = sum(mf.PARTS[p].gb for p, s in src.items() if s == "get")
         state = (_("used from your folder, {gb} GB to download", gb=num(get)) if "yours" in src.values() and get else
                  _("used from your folder (0 GB)") if "yours" in src.values() else
-                 _("already in LightCraft: linked (0 GB)") if "lightcraft" in src.values() else
+                 _("already in {app}: linked (0 GB)", app=sam_host.name) if "app" in src.values() else
                  _("linked from {dir} (0 GB)", dir=other) if "other" in src.values() and not get else
                  _("already there (0 GB)") if not get else f"{num(get)} GB")
         # the questions said what each model is for; without them, the summary says it
@@ -1194,35 +1313,33 @@ def main():
     editor = make_shortcuts(d, cfg)
     write_cfg(d, cfg)
 
-    out.title(6, "LightCraft")
+    out.title(6, " · ".join(h.name for h in system.HOSTS))
     if args.no_lightcraft:
         out.write("  " + _("skipped (--no-lightcraft)"))
-        lc_state, lc_msg = "skipped", _("LightCraft not configured")
-    else:
-        lc_state, lc_msg = configure_lightcraft(d, cfg, editor, args.yes)
-        out.write("  " + lc_msg)
+    results = configure_apps(d, cfg, editor, apps, args.yes)
     write_cfg(d, cfg)
+    names = " / ".join(h.name for h, __, __ in results)
+    pending = " / ".join(h.name for h, state, __ in results if state == "pending")
 
     out.title(7, _("Check"))
     __, txt = run([venv_python(d), str(d / "airemove" / "airemove.py"), "--check"], check=False, quiet=True)
     try:
         rep = json.loads(txt[txt.index("{"):])
-        out.write("  " + _("device: {gpu} · usable models: {models} · LightCraft {state}", gpu=rep.get("gpu"),
-                             models=", ".join(rep.get("usable_models", [])),
-                             state=_("connected") if rep["lightcraft"]["connected"] else _("not reachable now")))
+        conn = [f"{h.name} " + (_("connected") if (rep.get("apps") or {}).get(h.key, {}).get("connected") else
+                                _("not reachable now")) for h, __, __ in results]
+        out.write("  " + _("device: {gpu} · usable models: {models}", gpu=rep.get("gpu"),
+                             models=", ".join(rep.get("usable_models", []))) + "".join(f" · {c}" for c in conn))
     except ValueError:
         out.write(txt[-800:])
-    key = "Cmd+Shift+X" if system.system() == "macos" else "Ctrl+Shift+X"
-    final = (_("Done. Restart LightCraft, then select a photo and press {key} (Photo > Edit In > Open Original "
-               "in Other Editor). Or open \"AI Remove\" from the menu.", key=key) if lc_state != "skipped" else
-             _("Done. In LightCraft select a photo and press {key} (Photo > Edit In > Open Original in Other "
-               "Editor). Or open \"AI Remove\" from the menu.", key=key))
-    if lc_state == "pending":
-        final += " " + _("FIRST: close LightCraft and finish the configuration (see above).")
+    final = (_("Done. Restart {apps}, then select a photo and press {key} (Photo > Edit In > Open Original in Other "
+               "Editor). Or open \"AI Remove\" from the menu.", apps=names, key=APP_KEY) if results else
+             _("Done. Open \"AI Remove\" from the menu: it works on a photo on its own (no app was set up)."))
+    if pending:
+        final += " " + _("FIRST: close {apps} and finish the configuration (see above).", apps=pending)
     if failed:
         final += " " + _("Some models were not installed (see above).")
     out.write("\n" + final)
-    out.status("done" if lc_state != "pending" else "pending_lightcraft", final, models=cfg.get("models"),
+    out.status("done" if not pending else "pending_lightcraft", final, models=cfg.get("models"),
                failed=[f"{m}: {w}" for m, w in failed])
     return 0
 

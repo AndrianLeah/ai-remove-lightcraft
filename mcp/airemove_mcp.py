@@ -77,23 +77,27 @@ from a RAW the result is written back into a RAW DNG (<name>-AIRemove.dng) stack
 all the development still works on it; from a JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format
 (<name>-AIRemove.jpg...). Every removal stays editable in a project file next to the photo (<photo>.airemove). It also
 works on its own, on a photo file, without LightCraft's window.
+It works the same way in Chromaforge (github.com/emmertex/lightcraft-classic, once "LightCraft Classic"), a fork of
+LightCraft: one of them or both, the installer sets up the ones chosen.
 Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended (NVIDIA, AMD RX 7000/9000, Apple M).""",
     "install": """1. check_system: shows the GPU, the PyTorch build that will be used, the recommended models, sizes and
-   licences, free disk space, and whether LightCraft is installed / running.
+   licences, free disk space, and whether LightCraft and Chromaforge are installed / running ("apps").
 2. Tell the user what each model is for, what will be downloaded (sizes) and the model licences, and get their OK.
-   SAM 3 is reused from LightCraft when LightCraft already downloaded it; otherwise it and FLUX need a free Hugging
-   Face account, the licence accepted on the model page, and a Read token (huggingface.co/settings/tokens) — never
-   invent or reuse a token, ask the user to paste theirs.
+   Ask which app AI Remove should be set up for: LightCraft, Chromaforge or both (install's apps).
+   SAM 3 is reused from LightCraft or Chromaforge when one already downloaded it; otherwise it and FLUX need a free
+   Hugging Face account, the licence accepted on the model page, and a Read token (huggingface.co/settings/tokens) —
+   never invent or reuse a token, ask the user to paste theirs.
    Ask whether they already have some of the models on disk (another AI Remove install, a Hugging Face cache,
    ComfyUI's models): check_system(model_dirs={model: folder}) says what it finds there; those are then used from
    that folder, nothing downloaded or copied (a part not found there is downloaded).
 3. install with accept_licenses=true, the models the user chose and model_dirs for the folders that check_system
    accepted. It runs in the background (10-60 min, mostly downloads; on Windows a console window shows it). Poll
    install_status every 30-60 s and report progress.
-4. When done: LightCraft must be restarted once (it reads the control-channel setting at start). If install_status
-   says pending_lightcraft, ask the user to close LightCraft, then call configure_lightcraft.
-5. Usage: in LightCraft select a photo, press Ctrl+Shift+X (Cmd+Shift+X on Mac), or open "AI Remove" from the
-   Start menu / Applications / app menu (it works on LightCraft's active photo, else asks for a photo file).""",
+4. When done: the app (LightCraft, Chromaforge) must be restarted once (it reads the control-channel setting at
+   start). If install_status says pending_lightcraft, ask the user to close the app it names, then call
+   configure_lightcraft (with the same apps). Chromaforge installed later: configure_lightcraft(apps=chromaforge).
+5. Usage: in LightCraft or Chromaforge select a photo, press Ctrl+Shift+X (Cmd+Shift+X on Mac), or open "AI Remove"
+   from the Start menu / Applications / app menu (it works on the app's active photo, else asks for a photo file).""",
     "use": """In the AI Remove window: click an object (SAM 3 selects it whole); Alt/Option+click removes a part,
 Shift+click adds one; Brush (B) / Eraser (E) for manual touch-ups; or describe it ("person", then "bag"): SAM 3
 selects every instance. "Include the shadow" adds their shadows (SAM 3, and OSOR when installed) to the selection.
@@ -104,14 +108,19 @@ people and objects on complex backgrounds, removes them by name. "Remove selecti
 Reflections in glass (a shop window, a display case): choose "DAI" under "Remove reflections" in the model menu and
 press "Remove reflections": with nothing selected the whole photo, else the selection. It takes away the light the
 glass reflects and keeps every detail; its slider says how much of it (75 % at first, 0 to 150 %).
-Each removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" writes/updates the
-result (the DNG, or the picture's copy).
+Each removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" (or "Save to
+Chromaforge") writes/updates the result (the DNG, or the picture's copy).
 Zoom: Ctrl/Cmd+wheel or + / -, 0 = fit; pan: wheel, middle button or Space+drag; hold "Originale" (or \\) to compare.
-Headless (no window): put a LightCraft mask named "Remove" (or "Remove: <English prompt>"; "Rimuovi" works too) on the photo — e.g. with
-LightCraft's own MCP tools (an Object mask on the thing, renamed) — then call remove_with_masks; for reflections in
-glass, remove_reflections (the "Remove" masks, else the whole photo).""",
+Headless (no window): put a mask named "Remove" (or "Remove: <English prompt>"; "Rimuovi" works too) on the photo in
+LightCraft or Chromaforge — e.g. with the app's own MCP tools (an Object mask on the thing, renamed) — then call
+remove_with_masks (app=chromaforge when both are open); for reflections in glass, remove_reflections (the "Remove"
+masks, else the whole photo).""",
     "troubleshoot": """- "LightCraft non risponde": LightCraft is closed, or was started before the install: restart it. On Linux
-  with Wayland its window must be visible. The control port is 7980 (LIGHTCRAFT_CONTROL_PORT).
+  with Wayland its window must be visible. The control port is 7980 (LIGHTCRAFT_CONTROL_PORT); Chromaforge's is 7981
+  (LIGHTCRAFT_CLASSIC_CONTROL_PORT; without it Chromaforge takes LIGHTCRAFT_CONTROL_PORT too, and both apps want the
+  same port: run configure_lightcraft(apps=chromaforge)).
+- "Chromaforge non ha accettato AI Remove": its control channel wants the token it writes at every start
+  (control-token-<port> in its settings folder): restart Chromaforge.
 - First FLUX/SDXL variant slow on AMD: the GPU compiles its kernels once (minutes), then it is fast.
 - Out of GPU memory: use SDXL instead of FLUX, fewer variants, close other GPU apps.
 - Windows SmartScreen / macOS Gatekeeper warnings on the install files: they are unsigned scripts. Windows: More info
@@ -146,6 +155,19 @@ def check_folders(dirs):
     return rep
 
 
+def app_state(host, cfg, ins):
+    """What check_system says about LightCraft or Chromaforge: installed, running, reachable, set up."""
+    port = host.port() if host.env("CONTROL_PORT") else int(cfg.get(host.cfg_key("port")) or host.default_port)
+    return {"name": host.name, "app": host.app(), "running": ins.lc_running(host), "control_port": port,
+            "reachable": host.reachable(port), "settings_dir": str(host.config_dir()),
+            "configured": cfg.get(host.key)}
+
+
+def app_args(a):
+    """--app for the app named in the tool's arguments (default: AI Remove picks the one that answers)."""
+    return ["--app", a["app"]] if system.host_named(a.get("app")) else []
+
+
 def check_system(a):
     ins = installer()
     d = install_dir()
@@ -156,9 +178,9 @@ def check_system(a):
         supported = True
     except ins.Stop as e:
         flavour, gpu, rec, supported = None, None, [], str(e)
-    lc_sam = (system.lightcraft_sam3_dir() / mf.SAM3_WEIGHTS).exists()
+    sam_host = system.sam3_host(mf.SAM3_WEIGHTS)  # an app that has SAM 3 already: linked, not downloaded
+    lc_sam = sam_host is not None
     cfg = read_json(d / "airemove.json") or {}
-    port = int(cfg.get("port") or system.control_port())
     paths = cfg.get("model_paths") or {}
     rep = {
         "os": system.system(), "supported": supported,
@@ -169,14 +191,15 @@ def check_system(a):
                        "licence": v.licence, "needs_hf_token": bool(v.gated) and not (m == "sam3" and lc_sam),
                        "recommended": m in rec, "installed": mf.has(m, d / "models", paths, optional=True)}
                    for m, v in mf.MODELS.items()},
-        "sam3_from_lightcraft": lc_sam,
+        "sam3_from_lightcraft": lc_sam, "sam3_from_app": sam_host and sam_host.name,
         "install_dir": str(d), "free_gb": round(ins.gb_free(d), 1),
         "installed": venv_python(d).exists(), "install_config": cfg or None,
         "install_status": read_json(d / "install-status.json"),
-        "lightcraft": {"app": system.lightcraft_app(), "running": ins.lc_running(), "control_port": port,
-                       "reachable": system.lightcraft_reachable(port),
-                       "settings_dir": str(system.lightcraft_config_dir())},
+        # the apps AI Remove works in; "lightcraft" also as before Chromaforge
+        "apps": {h.key: app_state(h, cfg, ins) for h in system.HOSTS},
+        "apps_chosen": cfg.get("apps"),
     }
+    rep["lightcraft"] = rep["apps"]["lightcraft"]
     if a.get("model_dirs"):
         rep["model_dirs"] = check_folders(a["model_dirs"])
     if rep["installed"]:
@@ -246,6 +269,8 @@ def install_args(a, d):
         args += ["--torch", a["torch"]]
     if a.get("configure_lightcraft") is False:
         args.append("--no-lightcraft")
+    elif a.get("apps"):
+        args += ["--apps", str(a["apps"])]
     return args
 
 
@@ -279,7 +304,8 @@ def configure_lightcraft(a):
     d = install_dir()
     if not venv_python(d).exists():
         return {"ok": False, "error": "AI Remove is not installed yet (install first)"}
-    _launch_installer(["--configure-lightcraft", "--yes", "--dir", str(d)], d)
+    _launch_installer(["--configure-lightcraft", "--yes", "--dir", str(d)] + (["--apps", str(a["apps"])]
+                                                                              if a.get("apps") else []), d)
     for _ in range(90):  # quick: a few seconds
         time.sleep(1)
         st = read_json(d / "install-status.json")
@@ -305,11 +331,16 @@ def open_ai_remove(a):
     d = install_dir()
     if not venv_python(d).exists():
         return {"ok": False, "error": "AI Remove is not installed (install first)"}
-    if not system.lightcraft_reachable(system.control_port()):
-        return {"ok": False, "error": "LightCraft is not reachable: open it (restart it once after installing)"}
-    _app(d, ["--id", str(int(a["photo_id"]))] if a.get("photo_id") else [], detach=True)
+    hosts = [h for h in ([system.host_named(a.get("app"))] if system.host_named(a.get("app")) else system.HOSTS)
+             if h.reachable()]
+    if not hosts:
+        return {"ok": False, "error": "neither LightCraft nor Chromaforge is reachable: open it (restart it once "
+                                      "after installing)" if not a.get("app") else
+                                      f"{a['app']} is not reachable: open it (restart it once after installing)"}
+    _app(d, app_args(a) + (["--id", str(int(a["photo_id"]))] if a.get("photo_id") else []), detach=True)
     return {"ok": True, "message": "AI Remove window opening on " +
-                                   (f"photo {a['photo_id']}" if a.get("photo_id") else "LightCraft's active photo")}
+                                   (f"photo {a['photo_id']}" if a.get("photo_id") else "the app's active photo")
+                                   + f" (answering: {', '.join(h.name for h in hosts)})"}
 
 
 def remove_with_masks(a):
@@ -321,6 +352,7 @@ def remove_with_masks(a):
     args = ["--auto", model + (str(int(a["variant"])) if a.get("variant") else "")]
     if a.get("shadow"):
         args.append("--shadow")
+    args += app_args(a)
     if a.get("photo_id"):
         args += ["--id", str(int(a["photo_id"]))]
     try:
@@ -339,7 +371,7 @@ def remove_reflections(a):
     strength = int(a["strength"]) if a.get("strength") is not None else REFLECTION_STRENGTH
     if not 0 <= strength <= REFLECTION_MAX:
         return {"ok": False, "error": f"strength: 0 to {REFLECTION_MAX} (%)"}
-    args = ["--auto", f"dai{strength}"]
+    args = ["--auto", f"dai{strength}"] + app_args(a)
     if a.get("photo_id"):
         args += ["--id", str(int(a["photo_id"]))]
     try:
@@ -353,10 +385,11 @@ def remove_reflections(a):
 def project_info(a):
     raw = a.get("raw_path")
     if not raw and a.get("photo_id"):
-        port = system.control_port()
-        r = installer().lc_request(port, "engine.execute", {"command": "photo.inspect", "params": {"id": int(a["photo_id"])}})
+        host = system.host_named(a.get("app")) or next((h for h in system.HOSTS if h.reachable()), system.LIGHTCRAFT)
+        r = installer().lc_request(host.port(), "engine.execute",
+                                   {"command": "photo.inspect", "params": {"id": int(a["photo_id"])}}, host=host)
         if not r or not r.get("ok"):
-            return {"ok": False, "error": "LightCraft did not answer photo.inspect: " + str((r or {}).get("error"))}
+            return {"ok": False, "error": f"{host.name} did not answer photo.inspect: " + str((r or {}).get("error"))}
         raw = (r["result"].get("source") or {}).get("path")
         m = re.match(r"(.+)-AIRemove(?:-\d+)?$", Path(raw).stem)
         if m:  # a result: its project lives next to the original
@@ -402,6 +435,13 @@ def guide(a):
 
 
 OBJ = {"type": "object"}
+APP = {"type": "string", "enum": [h.key for h in system.HOSTS],
+       "description": "the app the photo is in: lightcraft or chromaforge (default: the one answering; both open: the "
+                      "one with an active photo)"}
+APPS = {"type": "string", "enum": ["lightcraft", "chromaforge", "both", "none"],
+        "description": "the apps to set up (external editor, shortcut, control channel). Ask the user which: "
+                       "LightCraft, Chromaforge or both (check_system says which are installed). Default: the ones "
+                       "chosen last time, else the installed ones"}
 MODEL_DIRS = {"type": "object", "additionalProperties": {"type": "string"},
               "propertyNames": {"enum": list(mf.MODELS)},
               "description": "models the user already has on disk: {model: folder} (another AI Remove install, a "
@@ -411,12 +451,14 @@ TOOLS = [
     ("ai_remove_guide", "What AI Remove is and how to install, use, troubleshoot or uninstall it. Read this first.",
      {"type": "object", "properties": {"topic": {"type": "string", "enum": ["all"] + list(GUIDE)}}}, guide, True),
     ("check_system", "Inspect this computer for AI Remove: OS, graphics card, which PyTorch build and models fit, "
-                     "what each model is for, its download size and licence, free disk, LightCraft "
-                     "installed/running/reachable, and the state of an existing AI Remove install (with a self-test). "
+                     "what each model is for, its download size and licence, free disk, LightCraft and Chromaforge "
+                     "installed/running/reachable/set up (apps), and the state of an existing AI Remove install "
+                     "(with a self-test). "
                      "With model_dirs, also what those folders hold of the models. Read-only.",
      {"type": "object", "properties": {"model_dirs": MODEL_DIRS}}, check_system, True),
     ("install", "Install (or update/repair) AI Remove in the background: Python environment, PyTorch for the GPU, the "
-                "chosen models, launcher with icon, menu entry, LightCraft integration. Only after the user agreed "
+                "chosen models, launcher with icon, menu entry, integration with LightCraft and/or Chromaforge "
+                "(apps). Only after the user agreed "
                 "to the download sizes and model licences shown by check_system. Then poll install_status.",
      {"type": "object", "required": ["accept_licenses"], "properties": {
          "accept_licenses": {"type": "boolean", "description": "true = the user accepted sizes and licences"},
@@ -424,22 +466,25 @@ TOOLS = [
                     "description": "default: the recommended ones for this computer"},
          "model_dirs": MODEL_DIRS,
          "hf_token": {"type": "string", "description": "the user's own Hugging Face Read token; only needed for "
-                                                       "sam3 (when LightCraft has not got it) and flux"},
+                                                       "sam3 (when neither LightCraft nor Chromaforge has it) and flux"},
          "install_dir": {"type": "string", "description": "default ~/AIRemove"},
          "torch": {"type": "string", "enum": ["cuda", "rocm", "rocm-win", "xpu", "mps", "cpu"],
                    "description": "override the detected PyTorch build"},
-         "configure_lightcraft": {"type": "boolean", "description": "default true"}}}, install, False),
+         "apps": APPS,
+         "configure_lightcraft": {"type": "boolean", "description": "false: set up no app (as apps=none)"}}},
+     install, False),
     ("install_status", "Progress of a running install (state, step n/7, message) and the end of its log.",
      {"type": "object", "properties": {"lines": {"type": "integer"}, "install_dir": {"type": "string"}}},
      install_status, True),
-    ("configure_lightcraft", "(Re)apply the LightCraft integration: control channel, AI Remove as external editor, "
-                             "Ctrl/Cmd+Shift+X. If LightCraft is running and not reachable, the user must close it "
-                             "first.", OBJ, configure_lightcraft, False),
-    ("open_ai_remove", "Open the AI Remove window on LightCraft's active photo (or photo_id).",
-     {"type": "object", "properties": {"photo_id": {"type": "integer"}}}, open_ai_remove, False),
-    ("remove_with_masks", "Headless removal: the photo's LightCraft masks named \"Remove\" (or \"Remove: <English "
-                          "prompt>\") are filled with the model (far-apart parts each as a removal of its own, in its "
-                          "own area) and written into <name>-AIRemove.dng (a picture: "
+    ("configure_lightcraft", "(Re)apply the integration with LightCraft and/or Chromaforge (apps): control channel, "
+                             "AI Remove as external editor, Ctrl/Cmd+Shift+X. If the app is running and not "
+                             "reachable, the user must close it first.",
+     {"type": "object", "properties": {"apps": APPS}}, configure_lightcraft, False),
+    ("open_ai_remove", "Open the AI Remove window on the active photo of LightCraft or Chromaforge (or photo_id).",
+     {"type": "object", "properties": {"photo_id": {"type": "integer"}, "app": APP}}, open_ai_remove, False),
+    ("remove_with_masks", "Headless removal: the photo's masks (LightCraft or Chromaforge) named \"Remove\" (or "
+                          "\"Remove: <English prompt>\") are filled with the model (far-apart parts each as a "
+                          "removal of its own, in its own area) and written into <name>-AIRemove.dng (a picture: "
                           "<name>-AIRemove.jpg..., its own format), stacked on the original (like the window's Save). "
                           "Can take minutes. Returns the result's path (dng / file), photo id and the removals made.",
      {"type": "object", "properties": {
@@ -452,7 +497,7 @@ TOOLS = [
          "shadow": {"type": "boolean", "description": "first add the object's shadow and reflection to the masks "
                                                       "(needs osor installed), then fill with model"},
          "variant": {"type": "integer", "description": "generate this many variants and use the last (default 1)"},
-         "photo_id": {"type": "integer", "description": "default: LightCraft's active photo"}}},
+         "app": APP, "photo_id": {"type": "integer", "description": "default: the app's active photo"}}},
      remove_with_masks, False),
     ("remove_reflections", "Headless \"Remove reflections\": the light a glass reflects (a shop window, a display "
                            "case) is taken away from the photo with DAI (installed as the \"dai\" model), from its "
@@ -463,23 +508,25 @@ TOOLS = [
                       "description": f"% of the reflection DAI found that is taken away (default "
                                      f"{REFLECTION_STRENGTH}: closest to Lightroom's Reflection Removal where "
                                      f"measured; DAI alone takes more)"},
-         "photo_id": {"type": "integer", "description": "default: LightCraft's active photo"}}},
+         "app": APP, "photo_id": {"type": "integer", "description": "default: the app's active photo"}}},
      remove_reflections, False),
     ("project_info", "The AI Remove project of a photo: its removals, the chosen variants and the result it writes.",
-     {"type": "object", "properties": {"photo_id": {"type": "integer"},
+     {"type": "object", "properties": {"photo_id": {"type": "integer"}, "app": APP,
                                        "raw_path": {"type": "string", "description": "the photo's file (a RAW or "
                                                                                      "a picture)"}}},
      project_info, True),
-    ("uninstall", "Uninstall AI Remove and undo its LightCraft settings (photos and projects are kept). Ask first.",
+    ("uninstall", "Uninstall AI Remove and undo its settings in LightCraft / Chromaforge (photos and projects are "
+                  "kept). Ask first.",
      {"type": "object", "required": ["confirm"], "properties": {"confirm": {"type": "boolean"},
                                                                  "keep_models": {"type": "boolean"}}},
      uninstall, False),
 ]
-INSTRUCTIONS = """AI Remove: an unofficial LightCraft plug-in that removes objects from photos with local AI and
-writes the result back into a DNG (from a RAW) or a copy in the picture's format (JPEG, PNG, TIFF, WebP, HEIC, AVIF).
-To install: ai_remove_guide(topic=install), then check_system, explain sizes and licences and get the user's consent,
-install(accept_licenses=true), poll install_status, then tell the user to restart LightCraft and press Ctrl+Shift+X
-(Cmd+Shift+X on Mac) on a photo. Never invent a Hugging Face token."""
+INSTRUCTIONS = """AI Remove: an unofficial plug-in for LightCraft and Chromaforge (a LightCraft fork) that removes
+objects from photos with local AI and writes the result back into a DNG (from a RAW) or a copy in the picture's format
+(JPEG, PNG, TIFF, WebP, HEIC, AVIF). To install: ai_remove_guide(topic=install), then check_system, explain sizes and
+licences, ask which app to set up (LightCraft, Chromaforge or both) and get the user's consent,
+install(accept_licenses=true, apps=...), poll install_status, then tell the user to restart the app and press
+Ctrl+Shift+X (Cmd+Shift+X on Mac) on a photo. Never invent a Hugging Face token."""
 
 
 # ------------------------------------------------------------------------------------------------ MCP plumbing

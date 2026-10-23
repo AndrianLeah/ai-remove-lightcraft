@@ -76,17 +76,20 @@ def system_language():
         return None
 
 
-def lightcraft_language():
-    """The language LightCraft's interface is in (its ui.json "language"), if one we ship."""
-    try:
-        data = json.loads((system.lightcraft_config_dir() / "ui.json").read_text(encoding="utf-8-sig"))
-        return parse_tag(data.get("language"))
-    except (OSError, ValueError, AttributeError):
-        return None
+def app_language():
+    """The language LightCraft's interface is in (its ui.json "language"), else Chromaforge's, if one we ship."""
+    for host in system.HOSTS:
+        try:
+            data = json.loads(host.ui_json().read_text(encoding="utf-8-sig"))
+            if parse_tag(data.get("language")):
+                return parse_tag(data.get("language"))
+        except (OSError, ValueError, AttributeError):
+            pass
+    return None
 
 
 def chosen_language():
-    """The language picked in AI Remove's window ("auto" or absent: follow LightCraft)."""
+    """The language picked in AI Remove's window ("auto" or absent: follow LightCraft or Chromaforge)."""
     try:
         return parse_tag(json.loads(SETTINGS.read_text(encoding="utf-8-sig")).get("language"))
     except (OSError, ValueError, AttributeError):
@@ -94,7 +97,7 @@ def chosen_language():
 
 
 def detect():
-    return (parse_tag(os.environ.get("AIREMOVE_LANG")) or chosen_language() or lightcraft_language()
+    return (parse_tag(os.environ.get("AIREMOVE_LANG")) or chosen_language() or app_language()
             or system_language() or SOURCE)
 
 

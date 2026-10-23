@@ -928,7 +928,7 @@ class App:
         self.lang_btn.pack(side="left", padx=(int(14 * k), 0))
         self.lang_menu = tk.Menu(r, tearoff=0, bg=CARD, fg=FG, activebackground=ACCENT, activeforeground="#1b1b1b",
                                  selectcolor=ACCENT, bd=0, relief="flat", font=self.f_small)
-        self.lang_menu.add_radiobutton(label=_("Auto (as LightCraft)"), value="auto", variable=self.lang_code,
+        self.lang_menu.add_radiobutton(label=_("Auto (as {app})", app=self.s.app), value="auto", variable=self.lang_code,
                                        command=self.on_language)
         for code, name in i18n.LANGUAGES.items():
             self.lang_menu.add_radiobutton(label=name, value=code, variable=self.lang_code, command=self.on_language)
@@ -985,7 +985,7 @@ class App:
         code = self.lang_code.get()
         A.remember("language", code)
         self.root.focus_set()
-        new = code if code != "auto" else (i18n.lightcraft_language() or i18n.system_language() or i18n.SOURCE)
+        new = code if code != "auto" else (i18n.app_language() or i18n.system_language() or i18n.SOURCE)
         if new != i18n.language():
             self.set_idle_status(_("The language changes the next time AI Remove opens"))
 
@@ -1285,7 +1285,7 @@ class App:
     def worker(self):
         s = self.s
         try:
-            self.post("task", _("Reading the photo") if s.standalone else _("Reading the photo from LightCraft"))
+            self.post("task", _("Reading the photo") if s.standalone else _("Reading the photo from {app}", app=s.app))
             s.find()
             self.post("found")
             threading.Thread(target=self.sam_worker, daemon=True).start()
@@ -1678,7 +1678,8 @@ class App:
         self.describe_btn.configure(state="disabled")
         self.set_tool("brush")
         self.set_idle_status(_("SAM 3 is not installed: select with the Brush") if self.s.standalone else
-                             _("SAM 3 is not installed: select with the Brush (or with a \"Remove\" mask in LightCraft)"))
+                             _("SAM 3 is not installed: select with the Brush (or with a \"Remove\" mask in {app})",
+                               app=self.s.app))
 
     def on_models(self, _data):
         self.refresh_models()
@@ -1686,7 +1687,8 @@ class App:
     def on_found(self, _data):
         self.title_text = self.s.info["file_name"]
         if self.s.standalone:  # said once, where it stays: what this photo is shown with and where it is saved
-            self.mode_text = (_("on its own: LightCraft's default development · the DNG goes next to the RAW")
+            self.mode_text = (_("on its own: {app}'s default development · the DNG goes next to the RAW",
+                                app=self.s.app)
                               if self.s.out_format == "DNG" else
                               _("on its own · the edited copy goes next to the original"))
         self.fit_header()
@@ -1804,8 +1806,8 @@ class App:
             msg = (_("{file} updated, next to the original", file=out.name) if updated else
                    _("{file} saved next to the original", file=out.name))
         else:
-            msg = (_("{file} updated in LightCraft", file=out.name) if updated else
-                   _("{file} created and stacked on the original in LightCraft", file=out.name))
+            msg = (_("{file} updated in {app}", file=out.name, app=self.s.app) if updated else
+                   _("{file} created and stacked on the original in {app}", file=out.name, app=self.s.app))
         self.set_idle_status(msg + " ✓")
         self.update_buttons()
         if getattr(self, "open_after_save", None) is not None:
@@ -1819,12 +1821,12 @@ class App:
         if self.s.standalone:
             fmt = self.s.out_format
             return _("Update the {format} file", format=fmt) if self.s.dng_path else _("Save as {format}", format=fmt)
-        return _("Update in LightCraft") if self.s.dng_path else _("Save to LightCraft")
+        return _("Update in {app}", app=self.s.app) if self.s.dng_path else _("Save to {app}", app=self.s.app)
 
     def save_task(self):
         fmt = self.s.out_format
         return (_("Writing the {format} file", format=fmt) if self.s.standalone else
-                _("Writing the {format} file for LightCraft", format=fmt))
+                _("Writing the {format} file for {app}", format=fmt, app=self.s.app))
 
     def open_other(self):
         """"Open photo…": another photo, in a new AI Remove (A.reopen); this one offers to save its changes first."""
@@ -2756,7 +2758,7 @@ class App:
             self.status.configure(text=_("Saving: one moment…"))
             return
         if self.extracting and not self.s.standalone:  # LightCraft's crop/lens are neutral for a moment: wait
-            self.status.configure(text=_("Waiting for LightCraft to restore the development…"))
+            self.status.configure(text=_("Waiting for {app} to restore the development…", app=self.s.app))
             self.root.after(300, self.cancel)
             return
         live = any(not r.deleted and r.chosen is not None for r in self.s.removals)
@@ -2765,8 +2767,8 @@ class App:
                      "project next to the photo anyway: opening AI Remove on it brings them back.)",
                      format=self.s.out_format)
                    if self.s.standalone else
-                   _("Update the photo in LightCraft with the latest changes?\n\n(The removals and variants stay "
-                     "saved in the project next to the photo anyway: opening AI Remove on it brings them back.)"))
+                   _("Update the photo in {app} with the latest changes?\n\n(The removals and variants stay saved in "
+                     "the project next to the photo anyway: opening AI Remove on it brings them back.)", app=self.s.app))
             ans = messagebox.askyesnocancel("AI Remove", ask, parent=self.root)
             if ans is None:
                 return
