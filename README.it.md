@@ -53,6 +53,13 @@ Dietro ogni richiesta c'è lo stesso lavoro della finestra:
 - le aree lunghe riempite a tasselli lungo l'oggetto;
 - la stessa fusione invisibile.
 
+**Pixel, non il RAW.** L'app manda la foto come la mostra, e riceve indietro dei pixel. Riscrivere il risultato nel
+RAW, come DNG con i dati della fotocamera, resta compito della finestra:
+- l'API per le immagini di OpenAI non ha posto per un RAW;
+- l'adattatore OpenAI del livello Craft manda solo PNG, JPEG o WebP.
+
+Come una rimozione resti non distruttiva su un RAW lo decide poi l'app.
+
 ## A che punto è
 
 - **Fatto in questa beta:**
@@ -68,6 +75,9 @@ Dietro ogni richiesta c'è lo stesso lavoro della finestra:
     modelli di una connessione personalizzata. I modelli di AI Remove compariranno lì quando per loro il prompt sarà
     facoltativo. La modifica è stata proposta a chi sviluppa il livello.
   - È stato proposto anche uno strumento per i riflessi, per i modelli `dai-…`.
+  - Il suo adattatore rifiuta un'immagine di risposta oltre i 32 MiB. Un PNG li supera intorno ai 30 megapixel, quindi
+    per le foto più grandi l'app dovrebbe chiedere `output_format` `webp` o `jpeg`. In alternativa, l'adattatore
+    potrebbe consegnare i risultati grandi come file, come fa il suo adattatore per ComfyUI.
 
 ## Avviare il server
 
@@ -152,9 +162,17 @@ Gli indirizzi funzionano anche senza `/v1`.
   - `image`, o il primo `image[]` (PNG, JPEG o WebP; la trasparenza resta);
   - `mask`;
   - `prompt`;
-  - `n` (da 1 a 4 varianti; LaMa e DAI ne danno sempre una).
-- **La risposta** è `{"created": …, "data": [{"b64_json": …}]}`: un PNG di tutta l'immagine, delle stesse dimensioni,
-  uguale fuori dalla rimozione. I link (`response_format=url`) non ci sono.
+  - `n` (da 1 a 4 varianti; LaMa e DAI ne danno sempre una);
+  - `output_format`: `png` (se non lo indichi), `jpeg` o `webp`;
+  - `output_compression`: la qualità di un JPEG o di un WebP, da 0 a 100 (100 se non la indichi; un WebP a 100 è
+    senza perdita).
+- **La risposta** è `{"created": …, "output_format": …, "data": [{"b64_json": …}]}`: tutta l'immagine, delle stesse
+  dimensioni, uguale fuori dalla rimozione (a parte la perdita propria di un JPEG o di un WebP con perdita). I link
+  (`response_format=url`) non ci sono.
+- **Quanto pesa la risposta:**
+  - un PNG occupa circa 1,1 byte per pixel: circa 17 MiB per una foto da 13 megapixel;
+  - un WebP senza perdita occupa circa un quarto in meno;
+  - un JPEG a 95 occupa circa un quarto del PNG.
 - **La maschera** segue la convenzione di OpenAI quando ha la trasparenza: trasparente = l'area da cambiare.
   Altrimenti bianco = l'area. Una maschera di altre dimensioni viene adattata all'immagine. I modelli che riempiono
   ne vogliono una; DAI senza maschera lavora su tutta l'immagine.

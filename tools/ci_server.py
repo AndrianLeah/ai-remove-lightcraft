@@ -10,8 +10,10 @@ synthetic one (a red disc on a textured ground), removed with the real LaMa; DAI
 
 Checks: the models listed (LaMa, and DAI at four strengths); only requests to 127.0.0.1 on its port, none with an
 Origin, and the key when there is one; the disc gone with OpenAI's mask (transparent = change) and with a white one,
-with and without a prompt, the picture the same size and unchanged away from the removal; the refusals (no mask, an
-unknown model, an empty mask, links instead of b64_json, too many variants, another path) in OpenAI's error shape; DAI
+with and without a prompt, the picture the same size and unchanged away from the removal; a PNG by default, a JPEG or
+a WebP (lossless at output_compression 100) when output_format asks; the refusals (no mask, an unknown model, an empty
+mask, links instead of b64_json, too many variants, an unknown output_format or compression, another path) in
+OpenAI's error shape; DAI
 on the whole picture or only where the mask is, more at 100 % than at 50 %, its engine loaded once for every job.
 Exit status 1 at the first check that fails.
 
@@ -181,6 +183,26 @@ def run(d, out):
         expect(res.shape == o.shape and after < 0.15 * before,
                f"  the disc is gone: colour distance to the ground {before:.0f} -> {after:.1f}, size {W}x{H} kept")
         expect(np.array_equal(res[far], o[far]), "  away from the removal, every pixel as it was")
+    expect(base64.b64decode(body["data"][0]["b64_json"]).startswith(b"\x89PNG\r\n\x1a\n")
+           and body.get("output_format") == "png", "  a PNG when no output_format is asked")
+
+    # output_format: a JPEG at output_compression's quality, a WebP lossless at 100 (the default). Away from the
+    # removal the JPEG must be what a JPEG of the original at that quality is, pixel for pixel: no loss but its own.
+    buf = io.BytesIO()
+    Image.fromarray(pic).save(buf, format="JPEG", quality=80)
+    jpeg_of_pic = np.asarray(Image.open(buf).convert("RGB"))
+    for fmt, extra, magic, ref in (("jpeg", {"output_compression": 80}, b"\xff\xd8\xff", jpeg_of_pic),
+                                   ("webp", {}, b"RIFF", pic)):
+        status, body = c.edit("lama", png(pic), png(rgba, "RGBA"), output_format=fmt, **extra)
+        data = base64.b64decode(body["data"][0]["b64_json"]) if status == 200 else b""
+        res = result(body) if status == 200 else None
+        o = pic.astype(np.float64)
+        ok = (status == 200 and data.startswith(magic) and body.get("output_format") == fmt and res.shape == pic.shape
+              and np.linalg.norm(res[disc].astype(np.float64).mean(0) - res[ring].astype(np.float64).mean(0))
+              < 0.15 * np.linalg.norm(o[disc].mean(0) - o[ring].mean(0)))
+        expect(ok and np.array_equal(res[far], ref[far]),
+               f"output_format={fmt} {extra or ''}: a {fmt.upper()} ({len(data) // 1024} KiB), the disc gone, away from "
+               f"it {'a JPEG of the original at the same quality' if ref is jpeg_of_pic else 'every pixel as it was'}")
 
     # refusals, in OpenAI's error shape
     def refused(status, body, want, code=None):
@@ -196,6 +218,10 @@ def run(d, out):
     expect(refused(status, body, 400), f"links instead of b64_json: 400 ({status})")
     status, body = c.edit("lama", png(pic), png(rgba, "RGBA"), n=9)
     expect(refused(status, body, 400), f"n=9: 400 ({status})")
+    status, body = c.edit("lama", png(pic), png(rgba, "RGBA"), output_format="gif")
+    expect(refused(status, body, 400), f"output_format=gif: 400 ({status})")
+    status, body = c.edit("lama", png(pic), png(rgba, "RGBA"), output_format="jpeg", output_compression=101)
+    expect(refused(status, body, 400), f"output_compression=101: 400 ({status})")
     status, body = c.ask("POST", "/v1/images/generations", b"{}", "application/json")
     expect(refused(status, body, 404), f"text-to-image is not served: 404 ({status})")
     status, body = c.ask("POST", "/v1/images/edits", b"{}", "application/json")

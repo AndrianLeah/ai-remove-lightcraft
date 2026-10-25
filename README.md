@@ -54,6 +54,13 @@ The work behind each request is the same as in the window:
 - long areas filled in tiles along them;
 - the same seamless blending.
 
+**Pixels, not the RAW.** The app sends the photo as it renders it, and gets pixels back. Writing the result back
+into the RAW, as a DNG with the camera's own data, stays the window's job:
+- OpenAI's image API has no room for a RAW;
+- the Craft layer's OpenAI adapter sends only PNG, JPEG or WebP.
+
+How a removal stays non-destructive over a RAW is then up to the app.
+
 ## Status
 
 - **Done in this beta:**
@@ -68,6 +75,9 @@ The work behind each request is the same as in the window:
     connection. AI Remove's models will show up there once the prompt is optional for them. The change has been
     suggested upstream.
   - A tool for reflections, for the `dai-…` models, has been suggested too.
+  - Its adapter refuses a returned image over 32 MiB. A PNG passes that at about 30 megapixels, so for larger photos
+    the app should ask for `output_format` `webp` or `jpeg`. Alternatively, the adapter could hand large results over
+    as files, as its ComfyUI adapter does.
 
 ## Start the server
 
@@ -153,9 +163,16 @@ The paths also work without `/v1`.
   - `image`, or the first `image[]` (PNG, JPEG or WebP; transparency is kept);
   - `mask`;
   - `prompt`;
-  - `n` (1 to 4 variants; LaMa and DAI always give one).
-- **The answer** is `{"created": …, "data": [{"b64_json": …}]}`: a PNG of the whole picture at its size, unchanged away
-  from the removal. Links (`response_format=url`) are not offered.
+  - `n` (1 to 4 variants; LaMa and DAI always give one);
+  - `output_format`: `png` (the default), `jpeg` or `webp`;
+  - `output_compression`: a JPEG's or WebP's quality, 0 to 100 (100 by default; a WebP at 100 is lossless).
+- **The answer** is `{"created": …, "output_format": …, "data": [{"b64_json": …}]}`: the whole picture at its size,
+  unchanged away from the removal (but for a JPEG's or a lossy WebP's own loss). Links (`response_format=url`) are not
+  offered.
+- **The answer's size:**
+  - a PNG takes about 1.1 bytes per pixel: about 17 MiB for a 13-megapixel photo;
+  - a lossless WebP takes about a quarter less;
+  - a JPEG at 95 takes about a quarter of the PNG.
 - **The mask** follows OpenAI's convention when it has transparency: transparent = the area to change. Otherwise, white
   = the area. A mask of another size is scaled to the picture. The fill models need one; DAI works on the whole
   picture without one.

@@ -8,8 +8,11 @@ image editing), or anything else.
 - `GET /v1/models`: the models this computer can run: lama, rorem, flux, qwen (inpainting: a picture and a mask) and
   dai-50, dai-75, dai-100, dai-125 (reflections in glass, at that strength; the mask is optional).
 - `POST /v1/images/edits` (multipart/form-data, as OpenAI's): `model`, `image` (or `image[]`, the first one), `mask`,
-  `prompt`, `n`. The answer is `{"created": …, "data": [{"b64_json": <PNG>}]}`: the whole picture, the same size,
-  unchanged outside the removal. The work is AI Remove's own: the picture opened on its own (Session, as the window
+  `prompt`, `n`, `output_format` (png, the default; jpeg; webp) and `output_compression` (0-100, the quality of a JPEG
+  or WebP; 100, the default, is a lossless WebP). The answer is `{"created": …, "output_format": …, "data":
+  [{"b64_json": …}]}`: the whole picture, the same size, unchanged outside the removal (but for a JPEG's or a lossy
+  WebP's own loss). A JPEG or WebP keeps a full-size photo under a client's cap on a reply's image: the Craft layer's
+  is 32 MiB, which a PNG passes at about 30 megapixels. The work is AI Remove's own: the picture opened on its own (Session, as the window
   does), its removal planned, filled in squares when it is long, blended into the picture.
 - `GET /health`: `{"ok": true, "version": …}`.
 
@@ -46,6 +49,7 @@ DAI_STRENGTHS = (50, 75, 100, 125)  # dai-75: 75 % of the reflection's light tak
 MAX_BODY = 256 * 1024 * 1024  # a request's bytes
 MAX_PIXELS = 100_000_000  # a picture's
 MAX_N = 4  # variants in one request
+OUTPUT_FORMATS = ("png", "jpeg", "webp")  # OpenAI's output_format values
 
 
 class Bad(Exception):
@@ -140,6 +144,20 @@ def read_mask(data, size):
     return area
 
 
+def encode(im, fmt, quality):
+    """A result's bytes as output_format asks: PNG; JPEG at `quality` (without transparency, which JPEG has not); WebP at
+    `quality`, lossless at 100. The colour profile goes along."""
+    buf = io.BytesIO()
+    icc = im.info.get("icc_profile")
+    if fmt == "jpeg":
+        im.convert("RGB").save(buf, format="JPEG", quality=quality, icc_profile=icc)
+    elif fmt == "webp":
+        im.save(buf, format="WEBP", quality=quality, lossless=quality == 100, icc_profile=icc)
+    else:
+        im.save(buf, format="PNG", icc_profile=icc)
+    return buf.getvalue()
+
+
 class Worker:
     """The jobs, one at a time, with the engines kept loaded from one job to the next (a Session per job: the
     picture's own, as when the window opens it)."""
@@ -150,8 +168,8 @@ class Worker:
         self.log = log
         self.models = available()
 
-    def run(self, model, image, mask_data, prompt, n):
-        """PNG bytes of `n` results for one request."""
+    def run(self, model, image, mask_data, prompt, n, fmt="png", quality=100):
+        """The bytes of `n` results for one request, encoded as `fmt` (see encode)."""
         if model not in self.models:
             raise Bad(404, f"model '{model}' is not available here (GET /v1/models lists them)",
                       code="model_not_found")
@@ -161,9 +179,9 @@ class Worker:
         if reflection or model == "lama":
             n = 1  # one result: DAI's strength is the model id, LaMa always gives the same fill
         with self.lock:
-            return self._run(model, image, mask_data, prompt, n, reflection)
+            return self._run(model, image, mask_data, prompt, n, reflection, fmt, quality)
 
-    def _run(self, model, image, mask_data, prompt, n, reflection):
+    def _run(self, model, image, mask_data, prompt, n, reflection, fmt, quality):
         job = system.ROOT / "work" / "server" / uuid.uuid4().hex[:12]
         job.mkdir(parents=True)
         s = None
@@ -195,9 +213,7 @@ class Worker:
                 r.chosen, r.user_picked = i, True
                 written, __, __ = s.write_all()
                 with Image.open(written) as im:
-                    buf = io.BytesIO()
-                    im.save(buf, format="PNG")
-                out.append(buf.getvalue())
+                    out.append(encode(im, fmt, quality))
             self.log(f"server: {model}, {image.width}x{image.height}, {len(out)} result(s) in "
                      f"{time.time() - t0:.1f}s")
             return out
@@ -286,11 +302,21 @@ def make_handler(worker, port, key):
                     raise Bad(400, "n must be a whole number")
                 if not 1 <= n <= MAX_N:
                     raise Bad(400, f"n must be between 1 and {MAX_N}")
+                fmt = text_field(fields, "output_format", "png").lower()
+                fmt = "jpeg" if fmt == "jpg" else fmt
+                if fmt not in OUTPUT_FORMATS:
+                    raise Bad(400, f"output_format must be one of {', '.join(OUTPUT_FORMATS)}")
+                try:
+                    quality = int(text_field(fields, "output_compression", "100"))
+                except ValueError:
+                    raise Bad(400, "output_compression must be a whole number")
+                if not 0 <= quality <= 100:
+                    raise Bad(400, "output_compression must be between 0 and 100")
                 mask = fields.get("mask")
                 results = worker.run(model, open_picture(images[0][1]), mask[0][1] if mask else None,
-                                     text_field(fields, "prompt"), n)
-                self.reply(200, {"created": int(time.time()), "data": [
-                    {"b64_json": base64.b64encode(png).decode("ascii")} for png in results]})
+                                     text_field(fields, "prompt"), n, fmt, quality)
+                self.reply(200, {"created": int(time.time()), "output_format": fmt, "data": [
+                    {"b64_json": base64.b64encode(data).decode("ascii")} for data in results]})
             except Bad as e:
                 self.refuse(e)
             except A.Stopped:

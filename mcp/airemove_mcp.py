@@ -132,8 +132,10 @@ Start: <install>/venv/Scripts/airemove-cli.exe --serve (Windows; venv/bin/airemo
 GPU work: not next to the user's AI Remove window.
 In craft-ai-integrations: a custom OpenAI-compatible connection, address http://127.0.0.1:7990/v1, the key if any,
 models lama, rorem, flux, qwen declared as image inpainting and dai-50, dai-75, dai-100, dai-125 as image editing.
-API: GET /v1/models; POST /v1/images/edits (multipart: model, image, mask, prompt, n) -> {"data": [{"b64_json": PNG}]},
-the whole picture at its size. Mask: transparent = change (OpenAI's) or white = change; needed by the fill models,
+API: GET /v1/models; POST /v1/images/edits (multipart: model, image, mask, prompt, n, output_format png|jpeg|webp,
+output_compression 0-100 = their quality, a WebP at 100 lossless) -> {"data": [{"b64_json": …}]}, the whole picture at
+its size (a PNG by default; above ~30 MP a PNG passes the Craft layer's 32 MiB cap: ask webp or jpeg). Pixels in,
+pixels out: the DNG write-back over a RAW is only the window's and --auto's. Mask: transparent = change (OpenAI's) or white = change; needed by the fill models,
 optional for dai-*. The prompt goes to flux only. Only 127.0.0.1, no browser Origin, Bearer key with --key-file.
 Status: not yet tried inside a Craft app; the layer's "Remove objects" tool needs the prompt to be optional for
 custom models (suggested upstream).""",

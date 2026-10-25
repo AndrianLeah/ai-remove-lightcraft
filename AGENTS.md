@@ -101,6 +101,10 @@ Setup of the server: `mcp/README.md`.
     - `lama`, `rorem`, `flux` and `qwen` need a mask: transparent (OpenAI's convention) or white = the area. The
       prompt goes to `flux` only.
     - `dai-50`, `dai-75`, `dai-100` and `dai-125` take the mask as optional.
+  - **The answer:** a PNG by default. `output_format` `jpeg` or `webp`, with `output_compression` 0 to 100 as the
+    quality (a WebP at 100 is lossless), keeps a large photo under the Craft layer's 32 MiB cap.
+  - **No RAW:** the server works on pixels and answers with pixels. The DNG write-back is only the window's and
+    `--auto`'s.
   - **The connection** in craft-ai-integrations is a custom OpenAI-compatible one:
     - address `http://127.0.0.1:7990/v1`;
     - the fill models declared as image inpainting, `dai-…` as image editing;
