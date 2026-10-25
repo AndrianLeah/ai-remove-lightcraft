@@ -85,6 +85,14 @@ Setup of the server: `mcp/README.md`.
 - **Projects:** `<photo>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each
   photo. The installer registers it as a file type for the user (Windows `HKCU\Software\Classes\.airemove`, macOS the
   app's Info.plist, Linux `~/.local/share/mime/packages/airemove.xml`): a double-click opens its photo in AI Remove.
+- **As a server (2.0 beta, branch `openai-server`):** `airemove-cli --serve [--port 7990] [--key-file PATH]` serves
+  `GET /v1/models` and `POST /v1/images/edits` (OpenAI's multipart form, `b64_json` PNG answers) on 127.0.0.1 until
+  Ctrl+C, for the Craft apps' shared AI layer as a custom OpenAI-compatible connection. Models:
+  - `lama`, `rorem`, `flux`, `qwen`: these need a mask, transparent or white = the area;
+  - `dai-50`, `dai-75`, `dai-100`, `dai-125`: the mask is optional.
+
+  Never put the key on the command line; it goes in the key file. One job runs at a time, and it is GPU work: don't
+  start it next to the user's AI Remove window. See the README section "As a local AI server".
 
 ## Uninstall
 

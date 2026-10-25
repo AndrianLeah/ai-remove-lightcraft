@@ -252,6 +252,68 @@ La cartella `mcp/` contiene un server MCP. Permette a un assistente AI (Claude, 
 La configurazione è descritta in [mcp/README.md](mcp/README.md). Gli agenti con accesso al terminale trovano le
 istruzioni in [AGENTS.md](AGENTS.md).
 
+## Come server AI locale (2.0 beta)
+
+> **Beta, solo nel branch `openai-server`.** Le versioni 1.x sono il plug-in di oggi; la 2.x sarà AI Remove per il
+> livello AI comune delle app Craft. Chi ha la 1.6 non la riceve dal controllo degli aggiornamenti.
+
+`airemove-cli --serve` trasforma AI Remove in un server sul tuo computer che parla una piccola parte dell'API per le
+immagini di OpenAI. Un programma che sa usare un server "compatibile con OpenAI" può così usare i modelli di AI
+Remove come userebbe una chiave OpenAI, ma niente esce dal tuo computer. È pensato per il livello AI comune delle app
+Craft ([craft-ai-integrations](https://github.com/storytold/craft-ai-integrations)): lì AI Remove è una connessione
+personalizzata compatibile con OpenAI, con queste impostazioni:
+- **indirizzo:** `http://127.0.0.1:7990/v1`;
+- **chiave:** quella del tuo file della chiave, o nessuna;
+- **modelli:** dichiarati come inpainting di immagini (`lama`, `rorem`, `flux`, `qwen`) o modifica di immagini
+  (`dai-…`).
+
+```bash
+~/AIRemove/venv/bin/airemove-cli --serve --port 7990 --key-file ~/airemove-server.key
+```
+
+Su Windows: `%USERPROFILE%\AIRemove\venv\Scripts\airemove-cli.exe`. Quando è in ascolto scrive una riga JSON con
+l'indirizzo e i modelli che questo computer può usare. Si ferma con Ctrl+C.
+
+| Modello | Cosa fa | Maschera | Prompt |
+|---|---|---|---|
+| `lama` | Riempie l'area con ciò che la circonda, in pochi secondi | necessaria | ignorato |
+| `rorem` | Toglie l'oggetto e riempie l'area | necessaria | ignorato |
+| `flux` | Riempie l'area con ciò che il prompt descrive (FLUX Fill) | necessaria | cosa metterci |
+| `qwen` | Toglie l'oggetto (Qwen-Image Edit) | necessaria | ignorato |
+| `dai-50`, `dai-75`, `dai-100`, `dai-125` | Toglie i riflessi nei vetri, con quella intensità | facoltativa: senza, tutta l'immagine | ignorato |
+
+`GET /v1/models` elenca solo i modelli installati che possono girare su questo computer.
+
+- **La richiesta** è `POST /v1/images/edits` in multipart/form-data, come quella di OpenAI, con questi campi:
+  - `model`;
+  - `image` (PNG, JPEG o WebP; la trasparenza resta);
+  - `mask`;
+  - `prompt`;
+  - `n` (da 1 a 4 varianti; LaMa e DAI ne danno sempre una).
+- **La risposta** è `{"data": [{"b64_json": …}]}`: un PNG di tutta l'immagine, delle stesse dimensioni, uguale fuori
+  dalla rimozione. I link (`response_format=url`) non ci sono.
+- **La maschera** segue la convenzione di OpenAI quando ha la trasparenza: trasparente = l'area da cambiare.
+  Altrimenti bianco = l'area. Una maschera di altre dimensioni viene adattata all'immagine.
+- **Limiti:**
+  - immagini fino a 100 megapixel, a 8 bit per canale;
+  - richieste fino a 256 MiB;
+  - un lavoro alla volta, sulla scheda video: gli altri aspettano. I modelli restano caricati tra un lavoro e l'altro.
+- **Tempi** per una foto da 13 megapixel su una scheda AMD da 16 GB, caricamento del modello compreso:
+  - LaMa: circa 20 s;
+  - DAI: circa 25 s;
+  - RORem: circa 45 s;
+  - FLUX e Qwen: circa un minuto.
+- **Sicurezza:**
+  - ascolta solo su 127.0.0.1;
+  - risponde solo alle richieste indirizzate a quell'indirizzo e a quella porta, e a nessuna pagina web;
+  - con `--key-file` vuole `Authorization: Bearer <chiave>`. Metti la chiave in un file che puoi leggere solo tu; la
+    chiave non va mai sulla riga di comando.
+
+Per ora le richieste sono state provate come le costruisce l'adattatore OpenAI di craft-ai-integrations, non dentro
+un'app Craft. Il suo strumento *Rimuovi oggetto* manda un'immagine e una maschera senza prompt. Potrà usare AI Remove
+quando il livello accetterà un prompt mancante per i modelli dichiarati come inpainting; la modifica è stata chiesta
+a chi lo sviluppa.
+
 ## Aggiornare e disinstallare
 
 - **Aggiornare**: rilancia l'installer della nuova versione. Tiene ciò che c'è già e non riscarica i modelli.
@@ -293,6 +355,9 @@ raggiungibili solo dal tuo computer (127.0.0.1):
   possono usare solo i programmi che leggono quella cartella.
 
 La disinstallazione li disattiva.
+
+Il server della 2.0 beta (`airemove-cli --serve`, vedi [Come server AI locale](#come-server-ai-locale-20-beta)) è
+attivo solo mentre lo fai girare, su 127.0.0.1.
 
 ## Licenze
 

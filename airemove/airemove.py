@@ -2453,6 +2453,10 @@ def main():
     ap.add_argument("--auto", help=f"no window: {' | '.join(ENGINES)}[N] on the photo's Rimuovi masks")
     ap.add_argument("--shadow", action="store_true", help="--auto: remove the object's shadow and reflection too")
     ap.add_argument("--check", action="store_true", help="print a JSON report and exit")
+    ap.add_argument("--serve", action="store_true",
+                    help="no window: a local server speaking OpenAI's image API (2.0 beta, see server.py)")
+    ap.add_argument("--port", type=int, default=7990, help="--serve: the port on 127.0.0.1 (default 7990)")
+    ap.add_argument("--key-file", help="--serve: a file holding the key clients must send (Authorization: Bearer)")
     args = ap.parse_args()
     args.raw = args.files[0] if args.files else None
     if args.check:
@@ -2462,6 +2466,9 @@ def main():
         f"(files: {', '.join(args.files)})" if args.files else "")
     if args.auto:
         return auto(args)
+    if args.serve:
+        import server
+        return server.serve(args)
     session = open_session(args)
     if session is None:  # no photo chosen
         log("no photo chosen")
@@ -2488,7 +2495,7 @@ def run():
         code = main() or 0
     except Fail as e:
         log("ERROR:", e)
-        if "--auto" in sys.argv or "--check" in sys.argv:  # no window: the caller reads stdout
+        if any(a in sys.argv for a in ("--auto", "--check", "--serve")):  # no window: the caller reads stdout
             print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False), flush=True)
         else:
             try:

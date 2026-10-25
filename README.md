@@ -318,6 +318,66 @@ LightCraft and Chromaforge do it. To add a language:
   Setup is in [mcp/README.md](mcp/README.md).
 - Agents with a shell should read [AGENTS.md](AGENTS.md).
 
+## As a local AI server (2.0 beta)
+
+> **Beta, on the `openai-server` branch only.** The 1.x versions are the plug-in as it is today; 2.x will be AI Remove
+> for the Craft apps' shared AI layer. Installs of 1.6 don't get this through the update check.
+
+`airemove-cli --serve` turns AI Remove into a server on your own computer that speaks a small part of OpenAI's image
+API. A program that can use an "OpenAI-compatible" server can then use AI Remove's models the way it would use an
+OpenAI key, but nothing leaves your computer. It is meant for the Craft apps' shared AI layer
+([craft-ai-integrations](https://github.com/storytold/craft-ai-integrations)): there, AI Remove is a custom
+OpenAI-compatible connection with these settings:
+- **endpoint:** `http://127.0.0.1:7990/v1`;
+- **key:** the one in your key file, or none;
+- **models:** declared as image inpainting (`lama`, `rorem`, `flux`, `qwen`) or image editing (`dai-…`).
+
+```bash
+~/AIRemove/venv/bin/airemove-cli --serve --port 7990 --key-file ~/airemove-server.key
+```
+
+On Windows: `%USERPROFILE%\AIRemove\venv\Scripts\airemove-cli.exe`. Once it listens, it prints one JSON line with the
+address and the models this computer runs. It stops with Ctrl+C.
+
+| Model | What it does | Mask | Prompt |
+|---|---|---|---|
+| `lama` | Fills the area from its surroundings, in seconds | needed | ignored |
+| `rorem` | Removes the object and fills the area | needed | ignored |
+| `flux` | Fills the area with what the prompt describes (FLUX Fill) | needed | what to put there |
+| `qwen` | Removes the object (Qwen-Image Edit) | needed | ignored |
+| `dai-50`, `dai-75`, `dai-100`, `dai-125` | Takes reflections in glass away, at that strength | optional: the whole picture without one | ignored |
+
+`GET /v1/models` lists only the models that are installed and can run on this computer.
+
+- **The request** is `POST /v1/images/edits` in multipart/form-data, as OpenAI's, with these fields:
+  - `model`;
+  - `image` (PNG, JPEG or WebP; transparency is kept);
+  - `mask`;
+  - `prompt`;
+  - `n` (1 to 4 variants; LaMa and DAI always give one).
+- **The answer** is `{"data": [{"b64_json": …}]}`: a PNG of the whole picture at the same size, unchanged away from
+  the removal. Links (`response_format=url`) are not offered.
+- **The mask** follows OpenAI's convention when it has transparency: transparent = the area to change. Otherwise, white
+  = the area. A mask of another size is scaled to the picture.
+- **Limits:**
+  - pictures up to 100 megapixels, in 8 bits per channel;
+  - requests up to 256 MiB;
+  - one job at a time, on the graphics card: the others wait. The models stay loaded between jobs.
+- **Times** for a 13-megapixel photo on a 16 GB AMD card, model loading included:
+  - LaMa: about 20 s;
+  - DAI: about 25 s;
+  - RORem: about 45 s;
+  - FLUX and Qwen: about a minute.
+- **Security:**
+  - it listens on 127.0.0.1 only;
+  - it answers only requests addressed to that address and port, and none from a web page;
+  - with `--key-file` it asks for `Authorization: Bearer <key>`. Put the key in a file that only you can read; the key
+    never goes on the command line.
+
+So far the requests have been tested as craft-ai-integrations' OpenAI adapter builds them, not inside a Craft app.
+Its *Remove object* tool sends a picture and a mask without a prompt. It will be able to use AI Remove once the
+layer accepts a missing prompt for the models declared as inpainting; that change has been asked for upstream.
+
 ## Uninstall
 
 | System | How |
@@ -340,15 +400,18 @@ connections from your own computer (127.0.0.1):
 
 Uninstalling turns the channels off.
 
+The 2.0 beta's server (`airemove-cli --serve`, see [As a local AI server](#as-a-local-ai-server-20-beta)) runs only
+while you run it, on 127.0.0.1.
+
 ## Development
 
 | Path | What |
 |---|---|
-| `airemove/` | The app: `airemove.py` (session, the bridge to LightCraft and Chromaforge, RAW pipeline, CLI), `ui.py` (Tk window), `engines.py` (SAM 3, LaMa, SDXL, FLUX), `model_files.py` (each model's files, sizes and licence, and where they are), `rawdng.py` (DNG read/write, sensor noise), `imagefile.py` (JPEG, PNG, TIFF, WebP, HEIC, AVIF read/write, with the same calls), `blend.py` (seamless blending), `project.py` (`.airemove` files), `system.py` (per-OS paths; `Host`: each app's ports, token, settings and command line), `i18n.py` + `locales/` (translations) |
+| `airemove/` | The app: `airemove.py` (session, the bridge to LightCraft and Chromaforge, RAW pipeline, CLI), `ui.py` (Tk window), `engines.py` (SAM 3, LaMa, SDXL, FLUX), `model_files.py` (each model's files, sizes and licence, and where they are), `rawdng.py` (DNG read/write, sensor noise), `imagefile.py` (JPEG, PNG, TIFF, WebP, HEIC, AVIF read/write, with the same calls), `blend.py` (seamless blending), `project.py` (`.airemove` files), `server.py` (the local OpenAI-compatible server, 2.0 beta), `system.py` (per-OS paths; `Host`: each app's ports, token, settings and command line), `i18n.py` + `locales/` (translations) |
 | `installer/` | `bootstrap.ps1` / `bootstrap.sh` (fetch uv, then run `install.py`), `install.py` (standard library only), `fetch_models.py` |
 | `mcp/` | The MCP server and its launchers |
 | `assets/icon/` | The icon, and how it was made ([assets/icon/README.md](assets/icon/README.md)) |
-| `tools/` | `build_dist.py` (release packages), `check_dist.py` (checks them), `i18n_check.py` (translation catalogs), `ci_smoke.py` and `ci_removal.py` (CI: a real install, then one removal end to end), `ci_status.py` (CI: the install's status file read while it is written) |
+| `tools/` | `build_dist.py` (release packages), `check_dist.py` (checks them), `i18n_check.py` (translation catalogs), `ci_smoke.py` and `ci_removal.py` (CI: a real install, then one removal end to end), `ci_server.py` (CI: the local server, as an OpenAI client asks it), `ci_status.py` (CI: the install's status file read while it is written) |
 
 Run from source with an install's Python:
 
