@@ -17,8 +17,9 @@
 
 The installer asks which app to set up: LightCraft, Chromaforge or both. Then restart that app once, select a photo
 and press **Ctrl+Shift+X** (Cmd+Shift+X on a Mac). On Windows the AI Remove panel opens beside the app; on macOS
-and Linux its window. Or open **AI Remove** from the Start menu, Applications or the app menu and choose a photo: it works on its own too (a RAW needs LightCraft or Chromaforge installed, a JPEG, PNG, TIFF,
-WebP, HEIC or AVIF does not).
+and Linux its window. Or open **AI Remove** from the Start menu, Applications or the app menu and choose a photo: it
+works on its own too (a RAW needs LightCraft or Chromaforge installed, a JPEG, PNG, TIFF, WebP, HEIC or AVIF does
+not).
 
 **Already installed?** Run the @VERSION@ installer again on the same folder. It updates the app and keeps the models
 you have, without downloading them again.
