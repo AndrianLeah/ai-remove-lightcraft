@@ -1712,8 +1712,26 @@ class Session:
             Y0, Y1, X0, X1 = r.base_rect
             sub = out[Y0:Y1, X0:X1]
             ph, pw = sub.shape[:2]
-            sub[:] = sub * (1 - al[:ph, :pw, None]) + patch[:ph, :pw].astype(np.float32) * al[:ph, :pw, None]
+            a = al[:ph, :pw, None]
+            if r.reflects():  # light taken away: its change goes on what the removals before it made (its preview is
+                # base.png with only its own change, computed from the photo with them: drawn over, it hid them)
+                sub += (patch[:ph, :pw].astype(np.float32) - self.base_arr[Y0:Y0 + ph, X0:X0 + pw]) * a
+            else:
+                sub[:] = sub * (1 - a) + patch[:ph, :pw].astype(np.float32) * a
         return np.clip(out, 0, 255).astype(np.uint8)
+
+    def variant_view(self, r, idx=None):
+        """(patch, alpha) of candidate idx as the photo shows it (the window's tiles, the panel's thumbnails): a
+        reflection removal's change on what the removals before it made, as composite draws it; a fill as it is."""
+        patch, al = self.preview(r, idx)
+        before = [x for x in self.removals[:self.removals.index(r)] if not x.deleted and x.chosen is not None]
+        if not r.reflects() or not before:
+            return patch, al
+        Y0, Y1, X0, X1 = r.base_rect
+        h, w = patch.shape[:2]
+        under = self.composite(only=before)[Y0:Y0 + h, X0:X0 + w].astype(np.int16)
+        return np.clip(under + patch.astype(np.int16) - self.base_arr[Y0:Y0 + h, X0:X0 + w], 0, 255).astype(
+            np.uint8), al
 
     def add_candidate(self, r, label, im):
         r.candidates.append((label, im))

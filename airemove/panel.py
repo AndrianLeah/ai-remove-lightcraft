@@ -459,8 +459,10 @@ class Panel:
     def update_buttons(self):
         ready = self.photo is not None and not self.busy
         has_mask = bool(self.mask_options())
+        # Reflections: one per photo, as Lightroom's; once made, its strength (Amount) is what changes
+        again = self.mode == "reflect" and self.cur is not None and bool(self.cur[2].candidates)
         self.gen_btn.configure(state="normal" if ready and (has_mask or self.mode == "reflect") and self.model_key()
-                               else "disabled")
+                               and not again else "disabled")
         s = self.session_for(self.photo[0])[1] if self.photo else None
         live = self.chosen_removals(s)
         self.save_btn.configure(state="normal" if live and ready else "disabled",
@@ -784,8 +786,12 @@ class Panel:
         # a reopened project: a removal made here from a mask before is that mask's again (its name, in the project)
         names = {m.get("name"): m["id"] for m in s.info["develop"]["masks"] if m.get("name")}
         for r in s.removals:
-            if not r.deleted and names.get(r.mask_name) is not None:
+            if r.deleted:
+                continue
+            if names.get(r.mask_name) is not None:
                 self.gens.setdefault((pid, names[r.mask_name], tab_of(r.kind())), r)
+            elif r.reflects() and r.mask_name is None and r.mask_e.all():  # the whole photo's: the Reflections tab's,
+                self.gens.setdefault((pid, None, "reflect"), r)  # its strength moved, never a second one on top
         return s
 
     def loaded(self, model):
@@ -843,7 +849,7 @@ class Panel:
         side = (self.width - int(20 * self.k) - 2 - 2 * 8) // 2  # the body's padding, the border, two cells' margins
         for i, (label, __) in enumerate(r.candidates):
             try:
-                patch, __ = s.preview(r, i)
+                patch, __ = s.variant_view(r, i)
             except Exception as e:
                 A.log("panel preview:", repr(e))
                 continue
@@ -926,17 +932,17 @@ class Panel:
             return None, _("Not shown on this photo: its Geometry (Upright, perspective…) moves it in {app}. Save "
                            "shows the result.", app=self.host.name)
         h, w = s.base_arr.shape[:2]
-        rgb, alpha = np.zeros((h, w, 3), np.float32), np.zeros((h, w), np.float32)  # premultiplied
+        alpha = np.zeros((h, w), np.float32)  # where the removals shown change the photo
         for r in rs:
-            patch, al = s.preview(r)
+            __, al = s.preview(r)
             y0, y1, x0, x1 = r.base_rect
-            sub, sub_a = rgb[y0:y1, x0:x1], alpha[y0:y1, x0:x1]
+            sub_a = alpha[y0:y1, x0:x1]
             ph, pw = sub_a.shape
-            a = np.asarray(al, np.float32)[:ph, :pw]
-            sub[:] = sub * (1 - a[..., None]) + patch[:ph, :pw].astype(np.float32) * a[..., None]
-            sub_a[:] = sub_a * (1 - a) + a
+            np.maximum(sub_a, np.asarray(al, np.float32)[:ph, :pw], out=sub_a)
         rgba = np.zeros((h, w, 4), np.uint8)
-        rgba[..., :3] = np.clip(rgb / np.maximum(alpha, 1e-6)[..., None], 0, 255).astype(np.uint8)
+        # every chosen removal as the photo shows them (a reflection's change on the ones before it): on a saved
+        # result the DNG has some of them already, and what is drawn over it must have them too
+        rgba[..., :3] = s.composite(only=self.chosen_removals(s))
         rgba[..., 3] = np.clip(alpha * 255, 0, 255).astype(np.uint8)
         # the app's crop, as lightcraft-cli renders it (measured): the whole photo turned about its centre by the angle
         # (clockwise when positive) on the same canvas, the rect cut from that, then the flips

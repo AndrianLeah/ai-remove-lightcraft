@@ -2097,7 +2097,7 @@ class App:
         """Candidate idx of r on the photo around what it filled (base.png look), as a square thumbnail: the whole
         hole for an object, a piece of it a few times its width for a pole or a cord (all of a long one would be a
         thin line, and the variants would all look the same)."""
-        patch, al = self.s.preview(r, idx)
+        patch, al = self.s.variant_view(r, idx)
         Y0, Y1, X0, X1 = r.base_rect
         base = self.s.base_arr[Y0:Y1, X0:X1].astype(np.float32)
         ph, pw = base.shape[:2]
