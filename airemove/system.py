@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # the install folder: airemove/, models/, work/, venv/
 CONFIG_FILE = ROOT / "airemove.json"  # written by the installer
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 REPO = "AndrianLeah/ai-remove-lightcraft"  # on GitHub: its releases are the updates
 RELEASES = f"https://github.com/{REPO}/releases/latest"
 
