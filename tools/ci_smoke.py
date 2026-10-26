@@ -3,7 +3,8 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
 
   ci_smoke.py check DIR        airemove-cli --check prints JSON: PyTorch of the build asked for, LaMa installed and
                                usable, LightCraft not connected; uv in DIR/bin, the menu entry / app made, the
-                               .airemove file type registered to open with it, with the project icon
+                               .airemove file type registered to open with it, with the project icon; the installer
+                               with an app that refuses its external editor while it runs: tools/ci_editor_lock.py
   ci_smoke.py folder DIR       a model the user already has in a folder of their own (--model-dir): DIR's LaMa moved
                                into a folder laid out like a Hugging Face cache, next to DIR; the installer run again
                                with --model-dir lama=<an empty folder> must stop, changing nothing, and with
@@ -157,6 +158,9 @@ def check(d):
     expect(all(w in pt.lower() for w in want), f".airemove projects open AI Remove: {pt}")
     ic = project_icon(cfg["shortcut"])
     expect(ic and Path(ic).is_file() and "project" in Path(ic).name, f".airemove files show the project icon: {ic}")
+    r = run([sys.executable, ROOT / "tools" / "ci_editor_lock.py"])
+    expect(r.returncode == 0, f"the installer with an app that locks its external editor: exit status 0 (it was "
+                              f"{r.returncode})")
 
 
 def installer(d, args):
