@@ -474,24 +474,32 @@ def mask_units(mask, w, h):
 
 def split_into_masks(lc, pid, mask, parts):
     """The app's mask replaced by one Object mask per part (the panel's "Split into masks"): "<name> 1", "<name> 2"…,
-    each with the mask's adjustments; the mask itself deleted, the first part selected in the app. The app's own
-    Undo takes it back. Returns the new masks' ids."""
+    each with the mask's adjustments; the mask itself deleted, the first part selected in the app. All of it one step
+    of the app's history (an interaction), so one Undo takes it back; on a failure the interaction is cancelled.
+    Returns the new masks' ids."""
     name = mask.get("name") or _("Mask {id}", id=mask["id"])
-    sel = {"command": "library.select", "params": {"ids": [pid], "active": pid}}
-    ids = []
-    for i, part in enumerate(parts, 1):
-        r = lc.run([sel, {"command": "mask.add", "params": {"kind": "object", "seg": seg_of(part),
-                                                             "name": f"{name} {i}"}}])
-        if not r[-1].get("ok"):
-            raise Fail(f"{lc.name}: mask.add: {r[-1].get('error')}")
-        ids.append(r[-1]["result"]["activeMask"])
-    adjust = mask.get("adjust") or {}
-    steps = [sel] + ([{"command": "mask.adjust", "params": {"id": i, "values": adjust}} for i in ids] if adjust else [])
-    steps += [{"command": "mask.delete", "params": {"id": mask["id"]}},
-              {"command": "mask.select", "params": {"id": ids[0]}}]
-    bad = [x for x in lc.run(steps) if not x.get("ok")]
-    if bad:
-        raise Fail(f"{lc.name}: " + str(bad[0].get("error")))
+    segs = [seg_of(part) for part in parts]  # before the interaction opens: it stays open as briefly as it can
+
+    def check(r):
+        bad = [x for x in r if not x.get("ok")]
+        if bad:
+            raise Fail(f"{lc.name}: " + str(bad[0].get("error")))
+        return r
+
+    check(lc.run([{"command": "library.select", "params": {"ids": [pid], "active": pid}},
+                  {"command": "develop.beginInteraction", "params": {"label": _("AI Remove: split into masks")}}]))
+    try:
+        ids = [check(lc.run([{"command": "mask.add", "params": {"kind": "object", "seg": seg,
+                                                                "name": f"{name} {i}"}}]))[0]["result"]["activeMask"]
+               for i, seg in enumerate(segs, 1)]
+        adjust = mask.get("adjust") or {}
+        steps = [{"command": "mask.adjust", "params": {"id": i, "values": adjust}} for i in ids] if adjust else []
+        check(lc.run(steps + [{"command": "mask.delete", "params": {"id": mask["id"]}},
+                              {"command": "mask.select", "params": {"id": ids[0]}}]))
+    except BaseException:
+        lc.run([{"command": "develop.cancelInteraction", "params": {}}])
+        raise
+    check(lc.run([{"command": "develop.endInteraction", "params": {}}]))
     log(f"{name}: split into {len(parts)} masks in {lc.name} ({', '.join(map(str, ids))})")
     return ids
 

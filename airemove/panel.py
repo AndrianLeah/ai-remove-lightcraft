@@ -796,14 +796,23 @@ class Panel:
         if sel is None:
             raise A.Fail(_("The mask selects nothing AI Remove can read: choose another, or make an Object mask."))
         h, w = sel.shape
-        parts = A.split_selection(sel, s.base_scale, units=A.mask_units(mask, w, h))
+        units = A.mask_units(mask, w, h)
+        parts = A.split_selection(sel, s.base_scale, units=units)
         name = mask.get("name") or _("Mask {id}", id=mask["id"])
+        # split_selection keeps objects close together in one part, as the window does: each would show in the
+        # other's fill (a person by a stone); fewer parts than objects says so
+        joined = bool(units) and len(parts) < len(units)
         if len(parts) < 2:
-            self.events.put(("progress", _("{name} is one part: nothing to split", name=name)))
+            self.events.put(("progress", _("{name}: its objects are close together, so they are removed together: "
+                                           "nothing to split", name=name) if joined else
+                             _("{name} is one part: nothing to split", name=name)))
             return
         A.split_into_masks(self.lc, pid, mask, parts)
-        self.events.put(("progress", _("{name} split into {n} masks in {app}: each one a selection here, with its own "
-                                       "model", name=name, n=len(parts), app=self.host.name)))
+        msg = _("{name} split into {n} masks in {app}: each one a selection here, with its own model", name=name,
+                n=len(parts), app=self.host.name)
+        if joined:
+            msg += " · " + _("objects close together stay in one mask: each would show in the other's fill")
+        self.events.put(("progress", msg))
 
     def stop_jobs(self):
         """Stop (Esc), as in the window: what runs ends at its next step, the variants made stay; what waits goes
