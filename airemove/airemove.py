@@ -920,7 +920,9 @@ def shadows_touching(found, mask, scale, most=4.0):
 
 
 # ------------------------------------------------------------------------------------------------ import into LightCraft
-def import_stacked(lc, pid, info, out_path):
+def import_stacked(lc, pid, info, out_path, drop=()):
+    """The result imported, stacked on the original with its development; the masks that were only the selection
+    ("Remove…", and `drop`: the names of the masks the panel used) are deleted from the new photo."""
     res = lc.one("library.import", {"paths": [str(out_path)], "mode": "add"})
     # a file at a path that was deleted from the library before comes back from Recently Deleted as "restored"
     ids = (res.get("imported") or []) + (res.get("restored") or []) + (res.get("duplicates") or [])
@@ -936,7 +938,7 @@ def import_stacked(lc, pid, info, out_path):
     lc.run(steps)
     new = lc.one("photo.inspect", {"id": nid})
     dels = [{"command": "mask.delete", "params": {"id": m["id"]}} for m in new["develop"]["masks"]
-            if m.get("name", "").strip().lower().startswith(MASK_PREFIXES)]
+            if m.get("name", "").strip().lower().startswith(MASK_PREFIXES) or m.get("name") in drop]
     # same albums as the original, so the new version shows up where the user is looking (smart albums refuse
     # additions and fill themselves; --keep-going lets those fail quietly)
     meta = [{"command": "album.addPhotos", "params": {"id": a, "ids": [nid]}} for a in info.get("albums") or []]
@@ -1196,6 +1198,7 @@ class Session:
         self._area_lock = threading.RLock()  # the working sensor data and the areas rendered from it
         self._work_cfa, self._work_key = None, None
         self.dng_path, self.dng_id, self.restored = None, None, None
+        self.used_masks = []  # names of the app's masks the panel used as the selection: not carried to the result
 
     # -------------------------------------------------------------- photo
     def find(self):
@@ -2378,7 +2381,7 @@ class Session:
                          {"command": "library.select", "params": {"ids": [nid], "active": nid}}])
             log(f"reloaded in {self.lc.name} (id {nid})")
         else:
-            nid = import_stacked(self.lc, self.pid, self.info, out)
+            nid = import_stacked(self.lc, self.pid, self.info, out, drop=self.used_masks)
             log(f"imported into {self.lc.name} (id {nid}), stacked with the original, same development")
         return nid
 
@@ -2503,6 +2506,8 @@ def main():
     ap.add_argument("--auto", help=f"no window: {' | '.join(ENGINES)}[N] on the photo's Rimuovi masks")
     ap.add_argument("--shadow", action="store_true", help="--auto: remove the object's shadow and reflection too")
     ap.add_argument("--check", action="store_true", help="print a JSON report and exit")
+    ap.add_argument("--panel", action="store_true",
+                    help="prototype: a small panel next to LightCraft's window, on its active photo and its masks")
     args = ap.parse_args()
     args.raw = args.files[0] if args.files else None
     if args.check:
@@ -2512,6 +2517,9 @@ def main():
         f"(files: {', '.join(args.files)})" if args.files else "")
     if args.auto:
         return auto(args)
+    if args.panel:
+        import panel
+        return panel.run(args)
     session = open_session(args)
     if session is None:  # no photo chosen
         log("no photo chosen")
