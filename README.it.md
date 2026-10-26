@@ -14,7 +14,10 @@ anche su JPEG, PNG, TIFF, WebP, HEIC e AVIF.
 Funziona allo stesso modo in tutte e due le app, in una sola o in entrambe insieme: l'installer ti chiede quale
 configurare (vedi [LightCraft e Chromaforge](#lightcraft-e-chromaforge)).
 
-1. In LightCraft o in Chromaforge scegli una foto e premi **Ctrl+Shift+X** (**Cmd+Shift+X** su Mac).
+1. In LightCraft o in Chromaforge scegli una foto e premi **Ctrl+Shift+X** (**Cmd+Shift+X** su Mac). Su Windows si
+   apre il **pannello di AI Remove** accanto alla finestra dell'app e lavora sulla maschera che selezioni nell'app (vedi
+   [Il pannello](#il-pannello)). Il suo pulsante **Finestra intera** apre la finestra di AI Remove, dove si fanno i
+   passi qui sotto. Su macOS e Linux si apre direttamente la finestra.
 2. Nella finestra di AI Remove clicca su ciò che vuoi togliere: SAM 3 lo seleziona tutto. Oppure **descrivilo**:
    scrivi "people" (in inglese) e SAM 3 seleziona tutte le persone della foto, anche quelle lontane (guarda la foto
    intera e a riquadri), ognuna per conto suo, così con un clic destro togli dalla selezione quella che vuoi tenere.
@@ -73,6 +76,48 @@ piccola anteprima, che mostrerebbe ancora ciò che hai rimosso.
 - **PNG, TIFF e WebP senza perdita** si salvano senza perdita; i TIFF a 16 bit restano a 16 bit.
 - **L'HEIC** perde la mappa di profondità e le altre immagini aggiuntive.
 - Un PNG a colori a 16 bit, un'immagine CMYK o animata non si apre (il messaggio dice cosa fare).
+
+## Il pannello
+
+Su Windows, Ctrl+Shift+X apre un piccolo pannello agganciato alla finestra di LightCraft o di Chromaforge. Con le
+maschere dell'app toglie oggetti, riempie e toglie riflessi, senza uscire dall'app.
+
+- **Dove sta:** agganciato al bordo destro dell'app. Resta sopra l'app, e solo sopra di lei, e si sposta e si
+  riduce a icona con lei. Trascinalo dalla barra in alto per metterlo altrove: la volta dopo si riapre lì. Con un
+  doppio clic sulla barra torna agganciato, e **–** lo chiude a metà. Premendo di nuovo Ctrl+Shift+X torna davanti.
+- **La selezione è la maschera dell'app.** Seleziona una maschera nell'app e il pannello la prende. Può essere una
+  maschera Oggetto fatta con un clic del SAM 3 dell'app, un pennello, un gradiente… In *Riflessi* lavora su tutta la
+  foto, come "Rimuovi riflessi" di Lightroom.
+- **Le schede della finestra:**
+  - **Rimuovi** ha il menu dei modelli, con ⓘ *A cosa serve*;
+  - **Riempi** chiede cosa disegnare (obbligatorio);
+  - **Riflessi** usa DAI, poi *Intensità* sotto il risultato.
+
+  Invio genera, Esc ferma, ← → scorrono le varianti.
+- **Il risultato si vede sulla foto nell'app.** La variante scelta viene disegnata sopra la foto, nella vista
+  dell'app stessa, come sua Layout Image. Succede finché la foto si vede intera (vista Dettaglio, Adatta, non durante
+  il ritaglio). Tieni premuto **Originale**, o `\`, per confrontare.
+- **Una rimozione per maschera.** Ogni maschera tiene le sue varianti finché il pannello è aperto, e *Su questa foto*
+  le elenca. **Salva in LightCraft** (o in Chromaforge) scrive tutte le varianti scelte in un solo DNG, impilato
+  sull'originale, e il salvataggio successivo aggiorna lo stesso DNG. Le maschere usate come selezione non passano nel
+  DNG.
+- **Dividi in maschere.** Una maschera fatta di più pezzi, o di più clic Oggetto, diventa una maschera per parte
+  nell'app ("Distractions 1", "Distractions 2"…). Ogni parte è poi una selezione con il suo modello. Gli oggetti
+  vicini restano in una maschera sola, perché ognuno si vedrebbe nel riempimento dell'altro. Un solo Annulla nell'app
+  torna indietro.
+- **Finestra intera** apre la finestra di AI Remove sulla stessa foto. Ha le stesse rimozioni e varianti, e i modelli
+  sono già caricati. Serve per quello che il pannello non fa: i clic con SAM 3, il pennello, la descrizione, *Includi
+  l'ombra*, *Dividi in parti*. **Torna al pannello** riporta indietro quello che hai fatto lì.
+- **Preferisci la finestra?** Nella finestra, il pulsante della lingua in alto a destra (`IT ▾`) ha *Ctrl+Shift+X in
+  LightCraft apre il pannello*: togli la spunta. Su macOS e Linux è già senza spunta. Se la metti, il pannello si apre
+  come una finestra normale accanto all'app.
+
+Le app non hanno pannelli per i plug-in, quindi il pannello è una finestra a sé sopra l'app. Legge lo stato dell'app
+circa ogni secondo e mezzo. L'anteprima sulla foto non viene disegnata in questi casi, e il pannello lo dice:
+- con lo zoom, o durante il ritaglio;
+- con una trasformazione di Geometria (Upright, prospettiva).
+
+Il salvataggio non ne risente. La prima volta che il pannello legge una foto, il ritaglio sparisce per un attimo.
 
 > AI Remove è un plug-in **non ufficiale**: non è fatto, sponsorizzato né approvato dal team di ArtCraft, che sviluppa
 > LightCraft, né da chi sviluppa Chromaforge.

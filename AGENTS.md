@@ -56,9 +56,11 @@ Setup of the server: `mcp/README.md`.
 
 ## Using it
 
-- **For the user:** in LightCraft or Chromaforge, select a photo and press Ctrl+Shift+X (Cmd+Shift+X on a Mac). Or
-  open "AI Remove" from the Start menu / Applications / app menu; it works on the app's active photo (both open:
-  LightCraft's, unless `--app chromaforge`).
+- **For the user:** in LightCraft or Chromaforge, select a photo and press Ctrl+Shift+X (Cmd+Shift+X on a Mac). On
+  Windows that opens the panel beside the app's window (`airemove/panel.py`: the mask selected in the app is the
+  selection; "Full window" opens the window); on macOS and Linux, and with "Ctrl+Shift+X opens the panel" unticked in
+  the window's language menu, the window. Or open "AI Remove" from the Start menu / Applications / app menu; it
+  works on the app's active photo (both open: LightCraft's, unless `--app chromaforge`).
 - **Which app:** AI Remove asks each app that answers which photo it has selected and works in that one;
   `--app lightcraft|chromaforge` picks one (the MCP tools take `app`). LightCraft's control port is 7980
   (`LIGHTCRAFT_CONTROL_PORT`), Chromaforge's 7981 (`LIGHTCRAFT_CLASSIC_CONTROL_PORT`), and Chromaforge's channel wants

@@ -847,11 +847,18 @@ def open_session(args):
     return Session(None, args, path)
 
 
+def shortcut_opens_panel():
+    """Whether the app's Ctrl+Shift+X opens the panel, else the window: "Ctrl+Shift+X opens the panel" in the window's
+    menu. On by default on Windows, where the panel is attached to the app's window; elsewhere it is an ordinary
+    window beside it, so the window stays the default there."""
+    return bool(setting("shortcut_panel", system.system() == "windows"))
+
+
 def shortcut_panel_host(args):
     """The app that started AI Remove on its selection (its external editor: Ctrl+Shift+X), whose panel opens next to
-    it — unless "Ctrl+Shift+X opens the panel" was turned off in the window's menu. None for a file opened on its own
-    (no app has it selected) or without a file (the Start menu): the window, as before."""
-    if not args.files or not setting("shortcut_panel", True):
+    it — when shortcut_opens_panel. None for a file opened on its own (no app has it selected) or without a file (the
+    Start menu): the window, as before."""
+    if not args.files or not shortcut_opens_panel():
         return None
     paths = [project_photo(p) for p in args.files]
     for h in answering_hosts(args):
