@@ -424,6 +424,72 @@ def model_meta():
         "fill": (_(MODEL_NAMES["fill"]), _("What you describe, drawn in the selection"), each("fill_variant"))}
 
 
+def model_infos():
+    """What each model is good at, a few lines each: the window's and the panel's "What it does"."""
+    flux = A.expected("flux_variant")
+    info = {
+        "lama": _("LaMa — on the processor, a single result in ~{time}. It continues what is around (wall, sky, "
+                  "lawn, tarmac): very good for small and medium objects on plain or repetitive backgrounds. On "
+                  "large areas or structures (doors, windows, people in front of buildings) it tends to blur.",
+                  time=App.fmt_s(A.expected("lama"))),
+        "flux": _("FLUX Fill — the most realistic: it respects light, perspective and the lines of architecture; "
+                  "best for large or difficult areas. ~{time} per variant (Turbo, 8 steps). It takes almost the "
+                  "whole GPU: switching to FLUX unloads RORem and SAM (~15 s the first time; SAM reloads by itself "
+                  "at the next click). Non-commercial licence (FLUX.1 [dev]).",
+                  time=App.fmt_s(flux)),
+        "qwen": _("Qwen-Image — it first recognises what you selected (the progress bar says what), then removes "
+                  "it and redraws the scene behind it: steps, columns, railings carry on. For large areas on "
+                  "complex backgrounds, where FLUX invents a bush or a blob. ~{time} per variant, ~1 min more for "
+                  "the first one of a removal. Select the whole object (a bag, a shadow): what is left outside "
+                  "stays. If it names the object wrongly, write its name in English (e.g. \"the lamp post\"). It "
+                  "takes almost the whole GPU. Non-commercial licence (Qwen Research).",
+                  time=App.fmt_s(A.expected("qwen_variant"))),
+        "rorem": _("RORem — SDXL retrained only to remove, ~{time} per variant, each one different. Where SDXL "
+                   "draws a person or an odd object back into the hole (the other one of two people, the owner of a "
+                   "bag left outside the selection), RORem draws what is behind. On a long thin hole (a pole) or up a "
+                   "path it can leave a seam or a rock face: there LaMa or FLUX Fill. It uses SDXL's files. "
+                   "Licence Apache-2.0 (commercial use allowed).",
+                   time=App.fmt_s(A.expected("rorem_variant"))),
+        "dai": _("DAI (Dereflection Any Image) — it finds the light the glass reflects over the photo (the "
+                 "street in a shop window, a veil over what is behind it) and takes it away from the RAW itself: "
+                 "every detail stays, nothing is redrawn. With nothing selected, the whole photo; with a "
+                 "selection, there, fading out around it. ~{time}; then Strength, under the result, says how much "
+                 "of it goes, 0 to 150 % (75 % at first: the closest to Lightroom's Remove Reflections). Licence "
+                 "Apache-2.0.",
+                 time=App.fmt_s(A.expected("dai_variant"))),
+        "fill": _("Generative fill — FLUX Fill draws what you describe (in English) in the selection, with the "
+                  "photo's light and focus, and it is written into the RAW like a removal. The selection is the "
+                  "shape it fills: for something that stands, select down to the ground. It draws no shadow on "
+                  "the ground. A large selection is drawn smaller than the photo and looks soft (the variant says "
+                  "how much). ~{time} per variant. Non-commercial licence (FLUX.1 [dev]).",
+                  time=App.fmt_s(A.expected("fill_variant")))}
+    return info
+
+
+def tile_image(s, r, idx, size):
+    """Candidate idx of r on the photo around what it filled (base.png look), as a square thumbnail: the whole
+    hole for an object, a piece of it a few times its width for a pole or a cord (all of a long one would be a
+    thin line, and the variants would all look the same)."""
+    patch, al = s.variant_view(r, idx)
+    Y0, Y1, X0, X1 = r.base_rect
+    base = s.base_arr[Y0:Y1, X0:X1].astype(np.float32)
+    ph, pw = base.shape[:2]
+    im = base * (1 - al[:ph, :pw, None]) + patch[:ph, :pw].astype(np.float32) * al[:ph, :pw, None]
+    out = Image.fromarray(np.clip(im, 0, 255).astype(np.uint8))
+    ys, xs = np.nonzero(al[:ph, :pw] > 0.02)
+    if len(ys):
+        hh, ww = ys.max() - ys.min() + 1, xs.max() - xs.min() + 1
+        side = int(min(np.clip(3 * min(hh, ww) + 48, 160, max(hh, ww) + 48), ph, pw))
+        cy, cx = (int(ys.mean()), int(xs.mean())) if max(hh, ww) > 4 * min(hh, ww) else \
+            ((ys.min() + ys.max()) // 2, (xs.min() + xs.max()) // 2)
+        y0, x0 = int(np.clip(cy - side // 2, 0, ph - side)), int(np.clip(cx - side // 2, 0, pw - side))
+        out = out.crop((x0, y0, x0 + side, y0 + side))
+    else:
+        s = min(out.size)
+        out = out.crop(((out.width - s) // 2, (out.height - s) // 2, (out.width + s) // 2, (out.height + s) // 2))
+    return out.resize((size, size), Image.LANCZOS)
+
+
 class ModelPicker(tk.Frame):
     """The model menu: a button with the chosen model's name, what it is for and its time on this PC; a click opens
     the list, in two groups, each model with what it is best for (a Combobox line was too short to say it)."""
@@ -780,6 +846,16 @@ class App:
         sp = tk.Frame(self.panel.inner, bg=SIDE)
         sp.pack(fill="both", expand=True, padx=int(14 * k))
 
+        # Remove, Fill or Reflections, on top as in the panel: each tab its models (TABS); a tab with one model shows
+        # it on the model's line, with no menu
+        tabs = tk.Frame(sp, bg=LINE)
+        tabs.pack(fill="x", pady=(int(14 * k), 0))
+        self.tab, self.tab_btns = None, {}
+        for i, (tab, (title, __)) in enumerate(TABS.items()):
+            b = self.button(tabs, _(title), lambda t=tab: self.set_tab(t))
+            b.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 1, 0))
+            tabs.columnconfigure(i, weight=1)
+            self.tab_btns[tab] = b
         _hdr, sel = self.section(sp, _("Selection"))
         seg = tk.Frame(sel, bg=LINE)
         seg.pack(fill="x")
@@ -824,16 +900,6 @@ class App:
             self.shadow_btn.pack(fill="x", pady=(int(6 * k), 0))
 
         _hdr, gen = self.section(sp, _("Generate"))
-        # Remove, Fill or Reflections, as in the panel: each tab its models (TABS); a tab with one model shows it on the
-        # model's line, with no menu
-        tabs = tk.Frame(gen, bg=LINE)
-        tabs.pack(fill="x", pady=(0, int(10 * k)))
-        self.tab, self.tab_btns = None, {}
-        for i, (tab, (title, __)) in enumerate(TABS.items()):
-            b = self.button(tabs, _(title), lambda t=tab: self.set_tab(t), small=True)
-            b.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 1, 0))
-            tabs.columnconfigure(i, weight=1)
-            self.tab_btns[tab] = b
         mrow = self.mrow = tk.Frame(gen, bg=CARD)
         mrow.pack(fill="x")
         self.model_lbl = tk.Label(mrow, text=_("Model"), font=self.f_small, fg=DIM, bg=CARD)
@@ -1131,45 +1197,8 @@ class App:
 
     def show_model_info(self):
         """What the selected model is good at, in one or two lines under the menu."""
-        flux = A.expected("flux_variant")
-        info = {
-            "lama": _("LaMa — on the processor, a single result in ~{time}. It continues what is around (wall, sky, "
-                      "lawn, tarmac): very good for small and medium objects on plain or repetitive backgrounds. On "
-                      "large areas or structures (doors, windows, people in front of buildings) it tends to blur.",
-                      time=self.fmt_s(A.expected("lama"))),
-            "flux": _("FLUX Fill — the most realistic: it respects light, perspective and the lines of architecture; "
-                      "best for large or difficult areas. ~{time} per variant (Turbo, 8 steps). It takes almost the "
-                      "whole GPU: switching to FLUX unloads RORem and SAM (~15 s the first time; SAM reloads by itself "
-                      "at the next click). Non-commercial licence (FLUX.1 [dev]).",
-                      time=self.fmt_s(flux)),
-            "qwen": _("Qwen-Image — it first recognises what you selected (the progress bar says what), then removes "
-                      "it and redraws the scene behind it: steps, columns, railings carry on. For large areas on "
-                      "complex backgrounds, where FLUX invents a bush or a blob. ~{time} per variant, ~1 min more for "
-                      "the first one of a removal. Select the whole object (a bag, a shadow): what is left outside "
-                      "stays. If it names the object wrongly, write its name in English (e.g. \"the lamp post\"). It "
-                      "takes almost the whole GPU. Non-commercial licence (Qwen Research).",
-                      time=self.fmt_s(A.expected("qwen_variant"))),
-            "rorem": _("RORem — SDXL retrained only to remove, ~{time} per variant, each one different. Where SDXL "
-                       "draws a person or an odd object back into the hole (the other one of two people, the owner of a "
-                       "bag left outside the selection), RORem draws what is behind. On a long thin hole (a pole) or up a "
-                       "path it can leave a seam or a rock face: there LaMa or FLUX Fill. It uses SDXL's files. "
-                       "Licence Apache-2.0 (commercial use allowed).",
-                       time=self.fmt_s(A.expected("rorem_variant"))),
-            "dai": _("DAI (Dereflection Any Image) — it finds the light the glass reflects over the photo (the "
-                     "street in a shop window, a veil over what is behind it) and takes it away from the RAW itself: "
-                     "every detail stays, nothing is redrawn. With nothing selected, the whole photo; with a "
-                     "selection, there, fading out around it. ~{time}; then Strength, under the result, says how much "
-                     "of it goes, 0 to 150 % (75 % at first: the closest to Lightroom's Remove Reflections). Licence "
-                     "Apache-2.0.",
-                     time=self.fmt_s(A.expected("dai_variant"))),
-            "fill": _("Generative fill — FLUX Fill draws what you describe (in English) in the selection, with the "
-                      "photo's light and focus, and it is written into the RAW like a removal. The selection is the "
-                      "shape it fills: for something that stands, select down to the ground. It draws no shadow on "
-                      "the ground. A large selection is drawn smaller than the photo and looks soft (the variant says "
-                      "how much). ~{time} per variant. Non-commercial licence (FLUX.1 [dev]).",
-                      time=self.fmt_s(A.expected("fill_variant")))}
         if hasattr(self, "model_info"):
-            self.model_info.configure(text=info[self.model_key()])
+            self.model_info.configure(text=model_infos()[self.model_key()])
 
     def model_key(self):
         v = self.model_var.get()
@@ -2082,7 +2111,8 @@ class App:
         f, th, t1, t2 = self.row_widgets[r.id]
         n = len(r.candidates)
         t1.configure(text=f"#{r.id}" + (f"  ·  {A.variant_text(r, r.chosen_label())}" if r.chosen is not None else ""))
-        t2.configure(text=_n("{n} variant", "{n} variants", n) if n else
+        named = r.mask_name + "  ·  " if r.mask_name else ""  # the mask it was made from, in the panel
+        t2.configure(text=named + _n("{n} variant", "{n} variants", n) if n else
                      _("waiting: choose a model, then Generate") if self.waiting(r) else
                      (_("generating…") if self.busy else _("no variants")))
         if r.chosen is not None:
@@ -2094,27 +2124,7 @@ class App:
         f.configure(highlightbackground=ACCENT if r is self.cur else CARD)
 
     def tile_image(self, r, idx, size, square=False):
-        """Candidate idx of r on the photo around what it filled (base.png look), as a square thumbnail: the whole
-        hole for an object, a piece of it a few times its width for a pole or a cord (all of a long one would be a
-        thin line, and the variants would all look the same)."""
-        patch, al = self.s.variant_view(r, idx)
-        Y0, Y1, X0, X1 = r.base_rect
-        base = self.s.base_arr[Y0:Y1, X0:X1].astype(np.float32)
-        ph, pw = base.shape[:2]
-        im = base * (1 - al[:ph, :pw, None]) + patch[:ph, :pw].astype(np.float32) * al[:ph, :pw, None]
-        out = Image.fromarray(np.clip(im, 0, 255).astype(np.uint8))
-        ys, xs = np.nonzero(al[:ph, :pw] > 0.02)
-        if len(ys):
-            hh, ww = ys.max() - ys.min() + 1, xs.max() - xs.min() + 1
-            side = int(min(np.clip(3 * min(hh, ww) + 48, 160, max(hh, ww) + 48), ph, pw))
-            cy, cx = (int(ys.mean()), int(xs.mean())) if max(hh, ww) > 4 * min(hh, ww) else \
-                ((ys.min() + ys.max()) // 2, (xs.min() + xs.max()) // 2)
-            y0, x0 = int(np.clip(cy - side // 2, 0, ph - side)), int(np.clip(cx - side // 2, 0, pw - side))
-            out = out.crop((x0, y0, x0 + side, y0 + side))
-        else:
-            s = min(out.size)
-            out = out.crop(((out.width - s) // 2, (out.height - s) // 2, (out.width + s) // 2, (out.height + s) // 2))
-        return out.resize((size, size), Image.LANCZOS)
+        return tile_image(self.s, r, idx, size)
 
     def select_removal(self, r):
         self.cur = r
@@ -2937,18 +2947,69 @@ class App:
         A.log("closed")
         self.quit()
 
+    def reopen(self, start):
+        """Opened again from the panel, after it was kept hidden: as the panel is now — the removals it made or deleted
+        since, the selection, the tab, the model, the texts, the number of variants."""
+        self.start = start or {}
+        live = [r for r in self.s.removals if not r.deleted]
+        for rid in [rid for rid in self.row_widgets if not any(x.id == rid for x in live)]:
+            self.row_widgets.pop(rid)[0].destroy()
+            self.outlines.pop(rid, None)
+        for r in live:
+            if r.id in self.row_widgets:
+                self.update_row(r)
+            else:
+                ys, xs = np.nonzero(outline(r.mask_e, 2))
+                self.outlines[r.id] = (ys, xs)
+                self.add_row(r)
+        if not live:
+            self.rows_empty.pack(anchor="w", pady=6)
+        self.fit_rows()
+        self.apply_start()
+        sel = self.start.get("selection")
+        self.ops, self.history, self.pending = ([self.new_op("add", sel)] if sel is not None else []), [], {}
+        self.comp, self.comp_key = None, None
+        if live:
+            self.select_removal(self.start["removal"] if self.start.get("removal") in live else live[-1])
+        else:
+            self.cur = None
+            self.fill_tiles()
+        self.render_main()
+        self.update_buttons()
+        self.set_idle_status(_n("From the panel: {n} removal — change it or add more",
+                                "From the panel: {n} removals — change them or add more", len(live)) if live else
+                             _("Click what you want to remove"))
+        self.root.bind_all("<MouseWheel>", self.on_wheel)
+        if X11:
+            self.root.bind_all("<Button-4>", lambda e: self.on_wheel(e, 120))
+            self.root.bind_all("<Button-5>", lambda e: self.on_wheel(e, -120))
+        self.root.deiconify()
+        try:
+            self.root.state("zoomed")
+        except tk.TclError:
+            pass
+        bring_to_front(self.root)
+
+    def destroy(self):
+        """Gone for good (the panel on another photo, or closed): its workers end."""
+        self.closed = True
+        self.jobs.put(("exit",))
+        self.clicks.put(("exit",))
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
     def quit(self):
-        if self.on_close is not None:  # opened from the panel: back to it, with the Session and its models
-            self.closed = True
-            self.jobs.put(("exit",))
-            self.clicks.put(("exit",))
+        if self.on_close is not None:  # opened from the panel: back to it, with the Session and its models; the window
+            # is kept, hidden, and reopens at once the next time (reopen)
             self.picker.close()
             for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):  # bind_all: the panel's widgets too
                 self.root.unbind_all(seq)
             try:
-                self.on_close(self)  # while its fields can still be read
+                self.on_close(self)
             finally:
-                self.root.destroy()
+                self.root.withdraw()
             return
         try:
             self.s.close()
