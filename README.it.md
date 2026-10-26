@@ -78,6 +78,9 @@ Come una rimozione resti non distruttiva su un RAW lo decide poi l'app.
   - Il suo adattatore rifiuta un'immagine di risposta oltre i 32 MiB. Un PNG li supera intorno ai 30 megapixel, quindi
     per le foto più grandi l'app dovrebbe chiedere `output_format` `webp` o `jpeg`. In alternativa, l'adattatore
     potrebbe consegnare i risultati grandi come file, come fa il suo adattatore per ComfyUI.
+- **Il riempimento generativo non chiede modifiche al livello:** `flux-fill`, dichiarato come inpainting di immagini,
+  prende quello che manda il suo strumento *Generative fill* (un'immagine, una maschera e un prompt). Anche questo non
+  è ancora provato dentro un'app Craft.
 
 ## Avviare il server
 
@@ -105,7 +108,7 @@ Nella configurazione di craft-ai-integrations aggiungi una **connessione persona
 | Indirizzo del server | `http://127.0.0.1:7990/v1` (l'HTTP semplice è accettato per l'indirizzo di questo computer) |
 | Identificativo del fornitore | `ai-remove` |
 | Chiave | quella del tuo file della chiave, o nessuna |
-| Modelli | `lama`, `rorem`, `flux` e `qwen`, dichiarati come **inpainting di immagini**; `dai-50`, `dai-75`, `dai-100` e `dai-125`, dichiarati come **modifica di immagini** |
+| Modelli | `lama`, `rorem`, `flux`, `qwen` e `flux-fill`, dichiarati come **inpainting di immagini**; `dai-50`, `dai-75`, `dai-100` e `dai-125`, dichiarati come **modifica di immagini** |
 
 Il **Test** della connessione elenca i modelli: `GET /v1/models` risponde con quelli installati che possono girare su
 questo computer. Con una chiave, il Test chiede una volta anche senza, e il rifiuto del server conferma che la chiave
@@ -117,7 +120,7 @@ viene controllata.
 |---|---|---|---|---|---|
 | **LaMa** | `lama` | Oggetti piccoli e medi su sfondi semplici (muro, cielo, prato, asfalto). Gira sul processore, un solo risultato in pochi secondi. | Aree grandi e strutture (porte, finestre): le sfoca | 0,2 GB | Apache-2.0 |
 | **RORem** (con i file di SDXL Inpainting) | `rorem` | Persone e oggetti, il modello predefinito: SDXL riaddestrato solo per togliere; dove SDXL ridisegna una persona o un oggetto strano nel buco, disegna lo sfondo. Circa 7 s a variante con una GPU. | Buchi lunghi e sottili (un palo): può lasciare una giuntura, LaMa o FLUX sono più puliti | 11,6 GB (SDXL 6,8 + RORem 4,8) | Apache-2.0, su CreativeML Open RAIL++-M di SDXL |
-| **FLUX Fill + Turbo** | `flux` | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. | Le persone: in una strada o tra la folla ridisegna persone dove c'erano | 16,4 GB | FLUX.1 [dev] Non-Commercial |
+| **FLUX Fill + Turbo** | `flux`: per togliere; `flux-fill`: per disegnare quello che il prompt descrive (Riempimento generativo) | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. Quando disegna: quello che descrivi, con la luce e la messa a fuoco della foto. | Le persone: in una strada o tra la folla ridisegna persone dove c'erano. Quando disegna: niente ombra a terra; le selezioni grandi vengono morbide | 16,4 GB | FLUX.1 [dev] Non-Commercial |
 | **Qwen-Image 2.1 Turbo** (facoltativo) | `qwen` | Persone e oggetti su sfondi complessi (una persona davanti a una scalinata, un palo davanti alle colonne): riconosce cosa c'è da togliere e lo toglie chiamandolo per nome. Circa 30 s a variante a 1024 px. Serve una GPU NVIDIA o AMD da 16 GB. | Quando hai fretta: circa un minuto per la prima variante di una rimozione | 14,4 GB | Qwen Research License (non commerciale); il suo encoder del testo Qwen3-VL: Apache-2.0 |
 | **DAI** (facoltativo) | `dai-50`, `dai-75`, `dai-100`, `dai-125`: quanto del riflesso trovato viene tolto | I riflessi nel vetro: su tutta l'immagine o su un'area con la maschera, in pochi secondi con una GPU; il riflesso si toglie dai valori dei pixel, niente viene ridisegnato | Riempire qualcosa; un riflesso nitido e luminoso (alberi specchiati in una vetrina, il cielo in una pozzanghera) si toglie solo in parte | 5,7 GB | Apache-2.0, ritocco di Stable Diffusion 2 (CreativeML Open RAIL++-M) |
 | **SAM 3** | (la finestra) | La selezione con un clic, o descrivendo cosa selezionare ("people"). Senza, si usa il pennello. | | 3,2 GB, oppure 0 GB se è già in LightCraft o in Chromaforge | SAM License (Meta) |
@@ -125,9 +128,11 @@ viene controllata.
 
 **Il prompt.**
 - **Attraverso il server,** il prompt della richiesta va a FLUX ("old plaster wall", "dark doorway"). LaMa, RORem e
-  Qwen-Image lo ignorano: Qwen-Image dà da solo il nome a ciò che toglie.
+  Qwen-Image lo ignorano: Qwen-Image dà da solo il nome a ciò che toglie. Per `flux-fill` è obbligatorio: cosa
+  disegnare.
 - **Nella finestra,** il testo facoltativo **in inglese** guida FLUX. Con Qwen-Image dice cosa togliere, se il modello
-  lo ha riconosciuto male ("the lamp post").
+  lo ha riconosciuto male ("the lamp post"). Con il Riempimento generativo è obbligatorio: cosa disegnare ("a wooden
+  bench").
 
 **Modelli tolti.**
 - **SDXL Inpainting** non è più nel menu: ridisegnava una persona o un oggetto strano dove RORem non ne ridisegnava
@@ -177,8 +182,8 @@ Gli indirizzi funzionano anche senza `/v1`.
   Altrimenti bianco = l'area. Una maschera di altre dimensioni viene adattata all'immagine. I modelli che riempiono
   ne vogliono una; DAI senza maschera lavora su tutta l'immagine.
 - **Gli errori** hanno la forma di quelli di OpenAI, `{"error": {"message", "type", "param", "code"}}`. I codici sono
-  `missing_mask`, `invalid_mask`, `model_not_found` e `invalid_api_key`, e lo stato HTTP dice il resto (403, 404, 411,
-  413).
+  `missing_mask`, `missing_prompt` (`flux-fill`), `invalid_mask`, `model_not_found` e `invalid_api_key`, e lo stato
+  HTTP dice il resto (403, 404, 411, 413).
 - **Limiti:**
   - immagini fino a 100 megapixel, a 8 bit per canale;
   - richieste fino a 256 MiB;
@@ -324,6 +329,17 @@ sfumando intorno. Come "Rimuovi riflessi" di Lightroom, toglie la luce che il ve
 vetrina, il velo su ciò che sta dietro). La toglie dai valori del RAW stesso: niente viene ridisegnato, e restano ogni
 dettaglio e il rumore del sensore. **Intensità**, sotto il risultato, dice quanto toglierne (da 0 a 150 %, 75 %
 all'inizio), e la foto segue mentre trascini.
+
+**Disegnare qualcosa di nuovo (riempimento generativo).** Scegli **Riempimento generativo** sotto *Disegna qualcosa di
+nuovo* nel menu dei modelli, seleziona dove va, scrivi cosa disegnare in inglese ("a wooden bench", "a lemon tree in a
+terracotta pot", "white clouds") e premi **Disegna nella selezione**.
+- **Il modello:** FLUX Fill lo disegna con la luce e la messa a fuoco della foto.
+- **Il risultato:** viene scritto nel RAW come il riempimento di una rimozione, in un DNG che si sviluppa come
+  l'originale.
+- **La selezione è la forma che riempie:** per qualcosa che sta in piedi, seleziona fino a terra, altrimenti galleggia.
+- **Non disegna l'ombra a terra.**
+- **Le selezioni grandi:** una selezione grande viene disegnata più piccola della foto e al 100 % risulta morbida. La
+  nota sotto la variante dice di quanto; una selezione più piccola la disegna più nitida.
 
 Ogni rimozione resta modificabile: la puoi rigenerare, cambiare variante o eliminare in qualsiasi momento. Tutto è
 salvato in un unico file accanto alla foto (`<foto>.airemove`). L'originale non viene mai modificato.

@@ -20,8 +20,10 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                Describe's masks from synthetic SAM 3 output: tools/ci_describe.py, how "Remove
                                selection" splits a selection into removals: tools/ci_split.py, and "Remove
                                reflections" with a stand-in for DAI: tools/ci_reflections.py (the reflection's light
-                               taken off the raw values), and the local OpenAI-compatible server (2.0 beta):
-                               tools/ci_server.py (requests as craft-ai-openai sends them, LaMa, DAI's stand-in)
+                               taken off the raw values), "Draw something new" with a stand-in for FLUX:
+                               tools/ci_fill.py (the prompt alone, the area upright, the fill in the sensor data),
+                               and the local OpenAI-compatible server (2.0 beta): tools/ci_server.py (requests as
+                               craft-ai-openai sends them, LaMa, stand-ins for DAI and FLUX)
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
                                app, its menu entry, its .airemove file type and, on Windows, its Settings > Apps entry
                                are gone; the user's own model folders are still there
@@ -285,6 +287,8 @@ def remove(d):
     expect(r.returncode == 0, f"a selection split into removals: exit status 0 (it was {r.returncode})")
     r = run([py, ROOT / "tools" / "ci_reflections.py", d])
     expect(r.returncode == 0, f"\"Remove reflections\" end to end: exit status 0 (it was {r.returncode})")
+    r = run([py, ROOT / "tools" / "ci_fill.py", d])
+    expect(r.returncode == 0, f"\"Draw something new\" end to end: exit status 0 (it was {r.returncode})")
     r = run([py, ROOT / "tools" / "ci_server.py", d])
     expect(r.returncode == 0, f"the local OpenAI-compatible server: exit status 0 (it was {r.returncode})")
 

@@ -111,6 +111,7 @@ ENGINES = {
     "osor": ModelSpec("OSOR", "FLUX", engines.FLUX_SIZES, 2000),
     "qwen": ModelSpec("Qwen", "Qwen", (engines.QWEN_SIZE,), 4000),
     "dai": ModelSpec("DAI", "DAI", (), 6000),  # no squares: it sees the whole area at engines.DAI_SIZE
+    "fill": ModelSpec("Fill", "FLUX", engines.FLUX_SIZES, 3000),  # "Draw something new": FLUX drawing its prompt
 }
 # "Remove reflections": what these take away is a reflection's light, subtracted from the photo where the selection is
 # (or everywhere), not a hole filled — no blend, no squares, the raw's own values kept (RawDNG.subtract_region). The
@@ -121,6 +122,18 @@ REFLECTION_MODELS = ("dai",)
 # becomes the removal's strength
 OLD_REFLECTION_STRENGTHS = (0.75, 1.0, 0.5, 1.25)
 REFLECTION_FEATHER = 0.01  # a selection's reflection fades out over this share of its area's long side, both ways
+# "Draw something new" (generative fill): what the prompt describes, drawn into the selection by FLUX Fill and written
+# into the RAW like a removal's fill. Measured on 6 fills of the user's photos (a bench, an amphora, a tram out of
+# focus, clouds, a man walking a dog, a lemon tree in a pot), after the RAW write-back:
+# - the prompt alone: none of the words that keep a removal's hole empty (engines.FLUX.fill draw=True);
+# - the area square and seen upright, as the photo is seen: on its side, as removals show it to FLUX, a lemon tree in
+#   a pot came out as broken pots in 2 variants of 2, upright it was drawn in 2 of 2;
+# - in one pass (no squares), blended without texture transfer: the ring's texture is the surroundings', not the new
+#   object's;
+# - no "Full detail": its squares declined wide holes and drew an artifact under a bench.
+# A removal of this kind gets only Fill variants (Removal.kind), one removal per selection (never split in parts).
+DRAW_MODELS = ("fill",)
+DRAW_SOFT = 2.0  # drawn more than this many times smaller than the photo: the window says it may look soft
 SRGB16 = (RawDNG.oetf(np.arange(65536) / 65535) * 255).round().astype(np.uint8)  # 16-bit linear -> 8-bit sRGB
 # the Session attribute each engine lives in: sdxl, rorem, flux, qwen (one loaded at a time)
 ENGINE_ATTRS = {}
@@ -951,6 +964,7 @@ def unique_path(p):
 # ------------------------------------------------------------------------------------------------ timings
 TIMINGS = ROOT / "work" / "timings.json"
 DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20, "flux_variant": 90,
+                 "fill_load": 20, "fill_variant": 90,
                  "rorem_load": 20, "rorem_variant": 7,
                  "osor_load": 25, "osor_variant": 8, "shadow": 12,
                  "qwen_load": 15, "qwen_variant": 35, "dai_load": 15, "dai_variant": 8,
@@ -1071,6 +1085,7 @@ class Removal:
         self.shape = None  # (width, length) of its hole (tiles.shape), once
         self.scale = {}  # label -> how enlarged that variant's fill is (Session.enlarged), for those made here
         self.reflection = False  # made by "Remove reflections" (REFLECTION_MODELS); reopened: its labels say it
+        self.fill = False  # made by "Draw something new" (DRAW_MODELS): stored in the project
         # its reflection's light as the model found it (engines.reflection_light: float16, at the model's size,
         # upright): the project keeps it instead of a picture, and how much of it is taken away is its strength
         self.light = None
@@ -1108,6 +1123,19 @@ class Removal:
     def reflects(self):
         """Whether it takes a reflection away ("Remove reflections") rather than filling a hole."""
         return self.reflection or any(reflection_variant(label) for label, __ in self.candidates)
+
+    def draws(self):
+        """Whether it draws something new where the selection is ("Draw something new") rather than removing it."""
+        return self.fill or any(LABEL_MODELS.get(label.split()[0]) in DRAW_MODELS for label, __ in self.candidates)
+
+    def kind(self):
+        """What it does, as model_kind says of a model: only models of its kind make its variants."""
+        return "reflect" if self.reflects() else "draw" if self.draws() else "remove"
+
+
+def model_kind(model):
+    """What a model's variants do: "reflect" (Remove reflections), "draw" (Draw something new) or "remove"."""
+    return "reflect" if model in REFLECTION_MODELS else "draw" if model in DRAW_MODELS else "remove"
 
 
 def feathered(mask, sigma):
@@ -1225,6 +1253,7 @@ class Session:
             r.hints = [str(h) for h in e.get("hints") or []]
             r.gain = e.get("gain") or self.gain
             r.light, r.reflection = light, light is not None
+            r.fill = bool(e.get("fill"))
             for label, im, data, hole in variants:
                 r.candidates.append((label, im))
                 if data is not None:
@@ -1510,17 +1539,18 @@ class Session:
             f" ({len(old_cands)} variants kept)")
         return True
 
-    def new_removal(self, mask_e, hints=None, reflection=False):
+    def new_removal(self, mask_e, hints=None, reflection=False, draw=False):
         """A removal for mask_e (bool, base.png frame): its area, rendered from the photo as it is now (earlier
         removals applied). hints: what Describe found in it (Removal.hints). reflection: one that takes a reflection
-        away ("Remove reflections"), the whole photo when mask_e is all of it."""
+        away ("Remove reflections"), the whole photo when mask_e is all of it. draw: one that draws something new
+        ("Draw something new", DRAW_MODELS), in a square area: drawn in one pass, never in squares."""
         self.working_cfa()  # a reopened project's areas are rendered once, first: not part of this one's time
         t0 = time.time()
         r = Removal(self.next_id, mask_e)
         r.hints = list(hints or [])
-        r.reflection = reflection
+        r.reflection, r.fill = reflection, draw
         self.next_id += 1
-        _, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t, square=False)
+        _, r.box, r.reg_mask = plan_region(self.raw, mask_e, self.lum_e, self.t, square=draw)
         self._init_area(r)
         self.removals.append(r)
         measured("reflection_area" if reflection else "area", time.time() - t0)  # a reflection's: half size
@@ -1695,7 +1725,8 @@ class Session:
     def engine_loaded(self, model):
         if model == "osor":
             return self.flux is not None and self.flux.osor_loaded()
-        return getattr(self, model, None) is not None
+        spec = ENGINES.get(model)  # "fill" runs on FLUX's engine, kept in self.flux
+        return getattr(self, ENGINE_ATTRS[spec.engine] if spec and spec.engine else model, None) is not None
 
     def get_engine(self, model):
         """SDXL, RORem, FLUX or Qwen-Image on the GPU — one at a time (16 GB): switching unloads the
@@ -1765,11 +1796,17 @@ class Session:
             return self._reflection_variant(r, model, eng, progress)
         if model == "qwen":
             eng.hint = ", ".join(r.hints)
+        if model in DRAW_MODELS:
+            prompt = prompt.strip()
+            if not prompt:
+                raise Fail(_("Describe what to draw, in English (e.g. a wooden bench)."))
         k = r.counts.get(model, 0) + 1
         r.counts[model] = k
         seed = self.seed + 97 * r.id + ENGINES[model].seed + k
         if model == "flux":  # the text is encoded once per prompt (CPU, slow): not part of a variant's time
             eng.embeddings(f"{prompt}, {engines.DEFAULT_PROMPT}" if prompt else engines.DEFAULT_PROMPT, log)
+        elif model in DRAW_MODELS:
+            eng.embeddings(prompt, log)
         elif model == "osor":
             eng.embeddings(engines.OSOR_PROMPT, log, tokens=512)
         t0 = time.time()
@@ -1791,6 +1828,9 @@ class Session:
             hold = None if flat is None else (up(Image.fromarray(flat[1])), up(flat[0]))
             raw_fill = down(eng.fill(up(r.src), up(r.mask_img), prompt, seed, strength=SDXL_STRENGTH,
                                      progress=progress, hold=hold))
+        elif model in DRAW_MODELS:  # upright, the prompt alone, in one pass (DRAW_MODELS)
+            raw_fill = self._down(eng.fill(self._up(r.src), self._up(r.mask_img), prompt, seed, progress=progress,
+                                           log=log, draw=True))
         elif model == "flux":
             # FLUX sees the area as the sensor stores it (a portrait photo on its side), unlike SDXL: sideways it keeps
             # skies clean, and upright it fills a standing, person-shaped hole with something standing — a signboard
@@ -1820,7 +1860,7 @@ class Session:
         log(f"#{r.id} {label} in {time.time() - t0:.0f}s"
             + (f" ({len(plan[1])} squares of {plan[1].T} px at {plan[0]})" if plan is not None else "")
             + (" (one pass at {}x{})".format(*eng.drawn) if oblong else "")
-            + (f" (prompt: {prompt or 'default'})" if model in ("sdxl", "flux") else "")
+            + (f" (prompt: {prompt or 'default'})" if model in ("sdxl", "flux") + DRAW_MODELS else "")
             + (f" (removing: {eng.what})" if model == "qwen" and eng.what else "")
             + (f" | shadow/reflection: +{int((hole & ~r.reg_mask).sum())} px" if hole is not None else ""))
         return label, im
@@ -1963,10 +2003,11 @@ class Session:
         pass would enlarge the fill more than TILE_FROM times, in squares as small as TILE_BUDGET allows. For a
         refinement ("Full detail"): any hole, as near the engine's size as REFINE_BUDGET allows. An area longer than
         a square (plan_region square=False) is always filled in squares, by every engine: at worst squares of its
-        short side, each as one pass would be; by Qwen-Image only beyond QWEN_ONE_PASS."""
+        short side, each as one pass would be; by Qwen-Image only beyond QWEN_ONE_PASS. Something new drawn
+        (DRAW_MODELS): always one pass, in its square area."""
         sizes = TILE_SIZES.get(model)
         oblong = r.reg_mask.shape[0] != r.reg_mask.shape[1]
-        if not sizes or (not refine and not oblong and model not in TILED_VARIANTS):
+        if not sizes or model in DRAW_MODELS or (not refine and not oblong and model not in TILED_VARIANTS):
             return None
         if model == "qwen" and not refine and self.qwen_one_pass(r):
             return None
@@ -2092,8 +2133,9 @@ class Session:
         """Whether the blend adds texture copied from around the hole (blend.texture_field): only to a fill made in
         one pass, as before. Along a long removal the copied patches carry the edges next to it (columns beside a
         plain wall) into the fill as streaks — measured at every square size, 1.25x to 3.5x. Nor to an oblong area
-        drawn by Qwen-Image in one pass (QWEN_ONE_PASS): on steps next to a paved floor it added dark pits."""
-        return plan is None and r.reg_mask.shape[0] == r.reg_mask.shape[1]
+        drawn by Qwen-Image in one pass (QWEN_ONE_PASS): on steps next to a paved floor it added dark pits. Nor to
+        something new drawn (DRAW_MODELS): the ring's texture is the surroundings', not the new object's."""
+        return plan is None and r.reg_mask.shape[0] == r.reg_mask.shape[1] and model not in DRAW_MODELS
 
     def refine_model(self):
         """The engine "Full detail" redraws with: FLUX (the most detail), else SDXL; None without a GPU model."""
@@ -2107,7 +2149,7 @@ class Session:
         if model == "qwen":  # in the area's own shape, QWEN_SIZE on its short side
             return min(r.reg_mask.shape) / engines.QWEN_SIZE
         side = max(r.reg_mask.shape)
-        if model in ("flux", "osor"):
+        if model in ("flux", "osor") + DRAW_MODELS:
             return side / (engines.FLUX_SIZES[0] if side <= sum(engines.FLUX_SIZES) // 2 else engines.FLUX_SIZES[1])
         return side / ENGINES[model].sizes[0]
 
@@ -2115,13 +2157,16 @@ class Session:
         """Whether "Full detail" would redraw r's chosen variant sharper — a long removal's variant drawn smaller than
         the photo (more than 1.6 times), not redrawn already — and why not, for the window: (ok, why) with why one of
         "ok", "none" (no variant chosen), "done" (redrawn already), "model" (no FLUX nor SDXL), "shape" (not a long
-        removal: in squares a person's or a car's hole gets pieces of things drawn in it) or "sharp" (drawn near the
-        photo's resolution already: a reflection removal redraws nothing)."""
+        removal: in squares a person's or a car's hole gets pieces of things drawn in it), "sharp" (drawn near the
+        photo's resolution already: a reflection removal redraws nothing) or "draw" (something new drawn: DRAW_MODELS,
+        never redrawn)."""
         label = r.chosen_label()
         if label is None:
             return False, "none"
         if reflection_variant(label):
             return False, "sharp"
+        if r.draws():
+            return False, "draw"
         if label.endswith(REFINED):
             return False, "done"
         if self.refine_model() is None:
@@ -2388,7 +2433,8 @@ def auto(args):
     result is written and stacked like "Salva in LightCraft". --shadow: the object's shadow and reflection are added to
     the selection first ("Includi l'ombra"). A reflection model (dai) takes the reflection away from the masks as one
     removal, or from the whole photo when it has none; its N is the strength in percent, 0 to 150 (default 75: dai100
-    takes all of what DAI found away). Prints a JSON line."""
+    takes all of what DAI found away). "fill" draws the mask's prompt ("Remove: a wooden bench") into the masks, as one
+    removal ("Draw something new"). Prints a JSON line."""
     m = re.fullmatch(rf"({'|'.join(list(ENGINES) + list(RETIRED))})(\d*)", args.auto.strip().lower())
     if not m:
         raise Fail(_("--auto: {models}, optionally the number of the variant to use (e.g. sdxl2)",
@@ -2403,19 +2449,23 @@ def auto(args):
     s = Session(LC(host=host_for(args)), args)
     try:
         s.prepare()
-        reflection = model in REFLECTION_MODELS
+        reflection, draw = model in REFLECTION_MODELS, model in DRAW_MODELS
         if s.init_mask is None and not reflection:
             raise Fail(_("--auto needs a \"Remove\" mask on the photo in {app} (e.g. an Object mask renamed "
                          "\"Remove\", or \"Remove: old wooden door\" to guide the fill)", app=s.lc.name))
+        if draw and not s.prompt:
+            raise Fail(_("--auto fill draws what the mask's name says: rename it \"Remove: <what to draw, in "
+                         "English>\" (e.g. \"Remove: a wooden bench\")"))
         sel = s.init_mask if s.init_mask is not None else np.ones(s.base_arr.shape[:2], bool)
-        if getattr(args, "shadow", False) and not reflection:
+        if getattr(args, "shadow", False) and not (reflection or draw):
             shadow = s.find_shadow(sel)
             if shadow is not None:
                 sel = sel | shadow
         made = []
-        # far-apart parts: removals of their own, one after another (a reflection's: one, it is light over all of it)
-        for part in [sel] if reflection else split_selection(sel, s.base_scale):
-            r = s.new_removal(part, reflection=reflection)
+        # far-apart parts: removals of their own, one after another (a reflection's: one, it is light over all of it;
+        # something new drawn: one, the selection is its shape)
+        for part in [sel] if reflection or draw else split_selection(sel, s.base_scale):
+            r = s.new_removal(part, reflection=reflection, draw=draw)
             if model == "lama":
                 s.run_lama(r)
                 pick = 1

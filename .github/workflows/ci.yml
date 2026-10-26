@@ -8,7 +8,8 @@
 # (tools/ci_tiles.py), one on each kind of picture (tools/ci_pictures.py: JPEG, PNG, TIFF, WebP, HEIC, AVIF),
 # Describe's masks from synthetic SAM 3 output (tools/ci_describe.py), a selection split into removals
 # (tools/ci_split.py), "Remove reflections" with a stand-in for DAI (tools/ci_reflections.py: a synthetic reflection
-# taken off the raw values), the MCP server over stdio, and the uninstaller
+# taken off the raw values), "Draw something new" with a stand-in for FLUX (tools/ci_fill.py: the prompt alone, the
+# area upright, the fill in the sensor data), the MCP server over stdio, and the uninstaller
 # (tools/ci_smoke.py). Before the install: a program
 # reading install-status.json cannot stop the installer's writes of it (tools/ci_status.py).
 # No secrets, no photos.

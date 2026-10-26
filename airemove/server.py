@@ -5,20 +5,23 @@ image editing), or anything else.
 
   airemove-cli --serve [--port 7990] [--key-file PATH]
 
-- `GET /v1/models`: the models this computer can run: lama, rorem, flux, qwen (inpainting: a picture and a mask) and
-  dai-50, dai-75, dai-100, dai-125 (reflections in glass, at that strength; the mask is optional).
+- `GET /v1/models`: the models this computer can run: lama, rorem, flux, qwen (inpainting: a picture and a mask, what
+  is there removed), flux-fill (inpainting: what the prompt describes drawn in the mask, "Draw something new"; the
+  prompt is required) and dai-50, dai-75, dai-100, dai-125 (reflections in glass, at that strength; the mask is
+  optional).
 - `POST /v1/images/edits` (multipart/form-data, as OpenAI's): `model`, `image` (or `image[]`, the first one), `mask`,
   `prompt`, `n`, `output_format` (png, the default; jpeg; webp) and `output_compression` (0-100, the quality of a JPEG
   or WebP; 100, the default, is a lossless WebP). The answer is `{"created": …, "output_format": …, "data":
   [{"b64_json": …}]}`: the whole picture, the same size, unchanged outside the removal (but for a JPEG's or a lossy
   WebP's own loss). A JPEG or WebP keeps a full-size photo under a client's cap on a reply's image: the Craft layer's
-  is 32 MiB, which a PNG passes at about 30 megapixels. The work is AI Remove's own: the picture opened on its own (Session, as the window
-  does), its removal planned, filled in squares when it is long, blended into the picture.
+  is 32 MiB, which a PNG passes at about 30 megapixels. The work is AI Remove's own: the picture opened on its own
+  (Session, as the window does), its removal planned, filled in squares when it is long, blended into the picture.
 - `GET /health`: `{"ok": true, "version": …}`.
 
 The mask: OpenAI's convention when it has transparency (transparent = the area to change), else white = the area
-(the Craft layer's selection masks are white where selected). The prompt is what FLUX Fill puts there; LaMa and RORem
-take none, and Qwen-Image names what it removes by itself (its words are a name, not a description of the fill).
+(the Craft layer's selection masks are white where selected). The prompt is what FLUX Fill puts there, and for
+flux-fill what it draws (alone, the area seen upright: airemove.DRAW_MODELS); LaMa and RORem take none, and Qwen-Image
+names what it removes by itself (its words are a name, not a description of the fill).
 
 Only this computer can reach it: it listens on 127.0.0.1, answers only requests addressed to that host and port (a
 web page cannot use it through DNS rebinding) and none that carry an Origin (a browser), and with --key-file it wants
@@ -45,6 +48,7 @@ import system
 
 PORT = 7990  # beside the Craft apps' control ports (7979-7989)
 FILL_MODELS = ("lama", "rorem", "flux", "qwen")  # what AI Remove's menu offers for a hole
+DRAW = {"flux-fill": "fill"}  # what draws the prompt in the mask ("Draw something new"): its id here -> AI Remove's
 DAI_STRENGTHS = (50, 75, 100, 125)  # dai-75: 75 % of the reflection's light taken away (the window's default)
 MAX_BODY = 256 * 1024 * 1024  # a request's bytes
 MAX_PIXELS = 100_000_000  # a picture's
@@ -65,6 +69,7 @@ def available():
     FLUX and Qwen-Image)."""
     dev = engines.device()
     ids = [m for m in FILL_MODELS if m == "lama" or engines.usable(m, dev)]
+    ids += [m for m, model in DRAW.items() if engines.usable(model, dev)]
     if engines.usable("dai", dev):
         ids += [f"dai-{s}" for s in DAI_STRENGTHS]
     return ids
@@ -176,6 +181,8 @@ class Worker:
         reflection = model.startswith("dai-")
         if mask_data is None and not reflection:
             raise Bad(400, f"'{model}' needs a mask: the area to change", code="missing_mask")
+        if model in DRAW and not prompt.strip():
+            raise Bad(400, f"'{model}' draws what the prompt describes: a prompt is needed", code="missing_prompt")
         if reflection or model == "lama":
             n = 1  # one result: DAI's strength is the model id, LaMa always gives the same fill
         with self.lock:
@@ -199,12 +206,15 @@ class Worker:
             sel = np.asarray(Image.fromarray(area.astype(np.uint8) * 255).resize(s.base.size, Image.NEAREST)) > 127
             if not sel.any():
                 raise Bad(400, "the mask marks an area too small to change", code="invalid_mask")
-            r = s.new_removal(sel, reflection=reflection)
+            r = s.new_removal(sel, reflection=reflection, draw=model in DRAW)
             if model == "lama":
                 s.run_lama(r)
             elif reflection:  # its strength first: the log of the run says it
                 s.set_strength(r, int(model.split("-", 1)[1]) / 100)
                 s.run_model(r, "dai", "")
+            elif model in DRAW:
+                for __ in range(n):
+                    s.run_model(r, DRAW[model], prompt)
             else:
                 for __ in range(n):  # Qwen-Image names what it removes itself: the prompt is FLUX's
                     s.run_model(r, model, prompt if model == "flux" else "")

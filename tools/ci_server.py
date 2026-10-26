@@ -13,8 +13,9 @@ Origin, and the key when there is one; the disc gone with OpenAI's mask (transpa
 with and without a prompt, the picture the same size and unchanged away from the removal; a PNG by default, a JPEG or
 a WebP (lossless at output_compression 100) when output_format asks; the refusals (no mask, an unknown model, an empty
 mask, links instead of b64_json, too many variants, an unknown output_format or compression, another path) in
-OpenAI's error shape; DAI
-on the whole picture or only where the mask is, more at 100 % than at 50 %, its engine loaded once for every job.
+OpenAI's error shape; DAI on the whole picture or only where the mask is, more at 100 % than at 50 %, its engine
+loaded once for every job; flux-fill (a stand-in for FLUX) refused without a prompt, given the prompt alone to draw,
+its two variants drawn where the mask is and nowhere else.
 Exit status 1 at the first check that fails.
 
   ci_server.py DIR
@@ -135,9 +136,29 @@ def run(d, out):
         def unload(self):
             pass
 
-    engines.DAI = StandInDAI
+    drawn = []
+
+    class StandInFLUX:
+        """engines.FLUX as "Draw something new" uses it: what it is asked recorded, the hole painted a plain colour."""
+
+        def __init__(self, log=print):
+            pass
+
+        def embeddings(self, prompt, log=print, tokens=256):
+            pass
+
+        def fill(self, src, mask, prompt, seed, progress=None, log=print, draw=False, **kw):
+            drawn.append((prompt, draw))
+            a = np.asarray(src.convert("RGB")).copy()
+            a[np.asarray(mask.convert("L")) > 127] = (40, 140, 60)
+            return Image.fromarray(a)
+
+        def unload(self):
+            pass
+
+    engines.DAI, engines.FLUX = StandInDAI, StandInFLUX
     usable = engines.usable
-    engines.usable = lambda m, dev=None: True if m == "dai" else usable(m, dev)
+    engines.usable = lambda m, dev=None: True if m in ("dai", "fill") else usable(m, dev)
 
     srv = server.make_server(0, log=lambda *a: print("  info", *a, flush=True))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -148,8 +169,8 @@ def run(d, out):
     expect(status == 200 and body.get("ok"), f"listening on 127.0.0.1:{port} ({body})")
     status, body = c.ask("GET", "/v1/models")
     ids = [m["id"] for m in body["data"]] if status == 200 else []
-    expect("lama" in ids and {f"dai-{s}" for s in (50, 75, 100, 125)} <= set(ids)
-           and set(ids) <= set(server.FILL_MODELS) | {f"dai-{s}" for s in server.DAI_STRENGTHS},
+    expect("lama" in ids and "flux-fill" in ids and {f"dai-{s}" for s in (50, 75, 100, 125)} <= set(ids)
+           and set(ids) <= set(server.FILL_MODELS) | set(server.DRAW) | {f"dai-{s}" for s in server.DAI_STRENGTHS},
            f"GET /v1/models lists what this computer runs: {ids}")
 
     # only this computer, no web page, the key when there is one
@@ -246,6 +267,19 @@ def run(d, out):
            and np.abs(base - res)[away].max() == 0,
            "dai-100 with a mask: the reflection taken away there, the rest untouched")
     expect(len(made) == 1, f"DAI's engine loaded once for {3} jobs ({len(made)})")
+
+    # flux-fill: what the prompt describes drawn in the mask ("Draw something new"); the prompt is needed
+    status, body = c.edit("flux-fill", png(pic), png(rgba, "RGBA"))
+    expect(refused(status, body, 400, "missing_prompt") and not drawn,
+           f"flux-fill without a prompt: 400 missing_prompt, nothing drawn ({status})")
+    status, body = c.edit("flux-fill", png(pic), png(rgba, "RGBA"), "a wooden bench", n=2)
+    expect(status == 200 and len(body.get("data", [])) == 2 and drawn == [("a wooden bench", True)] * 2,
+           f"flux-fill: 200, two variants, FLUX asked to draw the prompt alone ({status}, {drawn})")
+    res = result(body).astype(np.float64) if status == 200 else None
+    o = pic.astype(np.float64)
+    expect(res is not None and res.shape == o.shape and np.abs(res[disc].mean(0) - (40, 140, 60)).max() < 30
+           and np.array_equal(res[far], o[far]),
+           "  drawn where the mask is, the picture the same size and unchanged away from it")
     srv.shutdown()
 
 

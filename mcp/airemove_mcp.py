@@ -116,6 +116,10 @@ people and objects on complex backgrounds, removes them by name. "Remove selecti
 Reflections in glass (a shop window, a display case): choose "DAI" under "Remove reflections" in the model menu and
 press "Remove reflections": with nothing selected the whole photo, else the selection. It takes away the light the
 glass reflects and keeps every detail; its slider says how much of it (75 % at first, 0 to 150 %).
+Something new instead (generative fill): choose "Generative fill" under "Draw something new", select where it goes,
+write what to draw in English ("a wooden bench") and press "Draw in the selection". FLUX draws it with the photo's
+light and focus, into the RAW. Select down to the ground for things that stand (or they float); no shadow on the
+ground is drawn; a large selection comes out soft (the note under the variant says how much).
 Each removal is separate (regenerate, choose another variant, delete it). "Save to LightCraft" (or "Save to
 Chromaforge") writes/updates the result (the DNG, or the picture's copy).
 Zoom: Ctrl/Cmd+wheel or + / -, 0 = fit; pan: wheel, middle button or Space+drag; hold "Originale" (or \\) to compare.
@@ -131,7 +135,8 @@ Start: <install>/venv/Scripts/airemove-cli.exe --serve (Windows; venv/bin/airemo
 (serving, models, key, version) and serves until Ctrl+C; the models stay loaded on the GPU, one job at a time. It is
 GPU work: not next to the user's AI Remove window.
 In craft-ai-integrations: a custom OpenAI-compatible connection, address http://127.0.0.1:7990/v1, the key if any,
-models lama, rorem, flux, qwen declared as image inpainting and dai-50, dai-75, dai-100, dai-125 as image editing.
+models lama, rorem, flux, qwen and flux-fill (draws the prompt: required) declared as image inpainting and dai-50,
+dai-75, dai-100, dai-125 as image editing.
 API: GET /v1/models; POST /v1/images/edits (multipart: model, image, mask, prompt, n, output_format png|jpeg|webp,
 output_compression 0-100 = their quality, a WebP at 100 lossless) -> {"data": [{"b64_json": …}]}, the whole picture at
 its size (a PNG by default; above ~30 MP a PNG passes the Craft layer's 32 MiB cap: ask webp or jpeg). Pixels in,

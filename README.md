@@ -78,6 +78,8 @@ How a removal stays non-destructive over a RAW is then up to the app.
   - Its adapter refuses a returned image over 32 MiB. A PNG passes that at about 30 megapixels, so for larger photos
     the app should ask for `output_format` `webp` or `jpeg`. Alternatively, the adapter could hand large results over
     as files, as its ComfyUI adapter does.
+- **Generative fill needs no change upstream:** `flux-fill`, declared as image inpainting, takes what the layer's
+  *Generative fill* tool sends (a picture, a mask and a prompt). Not tried inside a Craft app yet either.
 
 ## Start the server
 
@@ -105,7 +107,7 @@ In craft-ai-integrations' setup, add a **custom OpenAI-compatible connection**:
 | Server address | `http://127.0.0.1:7990/v1` (plain HTTP is accepted for this computer's own address) |
 | Provider identifier | `ai-remove` |
 | Key | the one in your key file, or none |
-| Models | `lama`, `rorem`, `flux` and `qwen`, declared as **image inpainting**; `dai-50`, `dai-75`, `dai-100` and `dai-125`, declared as **image editing** |
+| Models | `lama`, `rorem`, `flux`, `qwen` and `flux-fill`, declared as **image inpainting**; `dai-50`, `dai-75`, `dai-100` and `dai-125`, declared as **image editing** |
 
 The connection's **Test** lists the models: `GET /v1/models` answers with the ones that are installed and can run on
 this computer. With a key, Test also asks once without it, and the server's refusal confirms that the key is
@@ -117,7 +119,7 @@ enforced.
 |---|---|---|---|---|---|
 | LaMa | `lama` | Small and medium objects on plain backgrounds; runs on the processor in seconds | Large areas and structures (doors, windows): it blurs them | 0.2 GB | Apache-2.0 |
 | RORem (with SDXL Inpainting's files) | `rorem` | People and objects, the default: SDXL Inpainting retrained only to remove, no person or odd object drawn back where SDXL draws one; ~7 s per variant on a GPU | Long thin holes (a pole): it can leave a seam, LaMa or FLUX are cleaner | 11.6 GB (SDXL 6.8 + RORem 4.8) | Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M |
-| FLUX.1 Fill [dev] + Turbo | `flux` | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | People: in a street or a crowd it draws people back where they were | 16.4 GB | FLUX.1 [dev] Non-Commercial |
+| FLUX.1 Fill [dev] + Turbo | `flux`: removing; `flux-fill`: drawing what the prompt describes (Generative fill) | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU. Drawing: what you describe, with the photo's light and focus | People: in a street or a crowd it draws people back where they were. Drawing: no shadow on the ground; large selections come out soft | 16.4 GB | FLUX.1 [dev] Non-Commercial |
 | Qwen-Image 2.1 Turbo (optional) | `qwen` | People and objects on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~30 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | When in a hurry: about a minute for a removal's first variant | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
 | DAI (optional) | `dai-50`, `dai-75`, `dai-100`, `dai-125`: how much of the reflection it found is taken away | Reflections in glass: the whole picture or a masked area, a few seconds on a GPU; the reflection is taken off the pixel values, nothing is redrawn | Filling anything; a sharp, bright reflection (trees mirrored in a window, the sky in a puddle) is only partly taken away | 5.7 GB | Apache-2.0, a fine-tune of Stable Diffusion 2 (CreativeML Open RAIL++-M) |
 | SAM 3 | (the window) | One-click selection, and selecting by describing ("people"); without it: the brush | | 3.2 GB (0 if LightCraft or Chromaforge has it) | SAM License (Meta) |
@@ -127,9 +129,9 @@ The installer shows the same descriptions, sizes and licences (from `airemove/mo
 
 **The prompt.**
 - **Through the server,** the request's prompt goes to FLUX ("old plaster wall", "dark doorway"). LaMa, RORem and
-  Qwen-Image ignore it: Qwen-Image names what it removes by itself.
+  Qwen-Image ignore it: Qwen-Image names what it removes by itself. For `flux-fill` it is required: what to draw.
 - **In the window,** an optional prompt **in English** guides FLUX. For Qwen-Image it names what to remove, when the
-  model recognised it wrongly ("the lamp post").
+  model recognised it wrongly ("the lamp post"). For Generative fill it is required: what to draw ("a wooden bench").
 
 **Retired models.**
 - **SDXL Inpainting** is no longer in the menu: it drew a person or an odd object back where RORem drew none (11 of 12
@@ -177,7 +179,8 @@ The paths also work without `/v1`.
   = the area. A mask of another size is scaled to the picture. The fill models need one; DAI works on the whole
   picture without one.
 - **Errors** come in OpenAI's shape, `{"error": {"message", "type", "param", "code"}}`. The codes are `missing_mask`,
-  `invalid_mask`, `model_not_found` and `invalid_api_key`, and the HTTP status says the rest (403, 404, 411, 413).
+  `missing_prompt` (`flux-fill`), `invalid_mask`, `model_not_found` and `invalid_api_key`, and the HTTP status says the
+  rest (403, 404, 411, 413).
 - **Limits:**
   - pictures up to 100 megapixels, in 8 bits per channel;
   - requests up to 256 MiB;
@@ -327,6 +330,16 @@ glass reflects (the street seen in the window, the veil over what is behind it).
 themselves: nothing is redrawn, and every detail and the sensor's own noise stay. **Strength**, under the result, sets
 how much of it goes (0 to 150 %, 75 % at first), and the photo follows as you drag it.
 
+**Draw something new (generative fill).** Choose **Generative fill** under *Draw something new* in the model menu,
+select where it goes, write what to draw in English ("a wooden bench", "a lemon tree in a terracotta pot", "white
+clouds") and press **Draw in the selection**.
+- **The model:** FLUX Fill draws it with the photo's light and focus.
+- **The result:** it is written into the RAW like a removal's fill: a DNG that develops like the original.
+- **The selection is the shape it fills:** for something that stands, select down to the ground, or it floats.
+- **It draws no shadow on the ground.**
+- **Large selections:** a large selection is drawn smaller than the photo and looks soft at 100 %. The note under the
+  variant says how much; a smaller selection draws it sharper.
+
 Every removal stays editable: regenerate it, pick another variant or delete it whenever you like. Everything lives in
 one project file next to the photo (`<photo>.airemove`). The original is never modified.
 
@@ -369,6 +382,11 @@ embedded preview, which would still show what was removed.
     follows as you drag it.
   - It starts at 75 %, which came closest to Lightroom's own result on a shop window. That was measured against the
     reflection Lightroom took away, which it stores in its `.acr` file.
+- **Generative fill,** like Photoshop's, but into the RAW: FLUX Fill draws what you describe where you select.
+  - **How FLUX sees the area:** upright, as the photo is seen, with your prompt alone, in one pass. On its side, as
+    removals show it, a lemon tree in a pot came out as broken pots in 2 variants of 2. Upright it was drawn in 2 of 2.
+  - **On your photos:** a man walking a dog, a pot with a plant, clouds and a tram out of focus all took the photo's
+    light and blur.
 - **Shadows and reflections.** "Include the shadow" adds the selected objects' shadows to the selection, so every
   model removes them. SAM 3 finds the shadows that touch them (a long shadow at a low sun). OSOR, if installed, finds
   what goes with each object (its shadow, its reflection), part by part.
@@ -424,6 +442,8 @@ Chromaforge, is the starting selection.
   `--app lightcraft|chromaforge` picks the app when both are open.
 - `airemove-cli --auto dai` removes the reflections from it, or from the whole photo when it has no such mask, at
   75 %. `dai100` takes away all of what DAI found, `dai40` 40 % (0 to 150).
+- `airemove-cli --auto fill` draws what the mask's name says (`Remove: a wooden bench`) into the mask, as one
+  removal.
 
 ### Files it writes
 
@@ -555,6 +575,7 @@ Uninstalling turns the channels off.
 - `build_dist.py`: release packages; `check_dist.py` checks them;
 - `i18n_check.py`: translation catalogs;
 - `ci_smoke.py` and `ci_removal.py`: CI, a real install, then one removal end to end;
+- `ci_fill.py`: CI, Generative fill with a stand-in FLUX;
 - `ci_server.py`: CI, the server, asked as craft-ai-integrations' OpenAI adapter asks it;
 - `ci_status.py`: CI, the install's status file read while it is written.
 

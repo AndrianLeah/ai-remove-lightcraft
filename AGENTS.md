@@ -88,6 +88,8 @@ Setup of the server: `mcp/README.md`.
      Reflections in glass: `airemove-cli --auto dai` (needs the `dai` model) takes them off the masks as one removal,
      or off the whole photo when it has no such mask, at 75 %; `daiN` takes N % of what DAI found away (0 to 150:
      `dai100` all of it). The MCP tool for it is `remove_reflections` (`strength`, in %).
+     Generative fill: `airemove-cli --auto fill` (needs FLUX) draws what the mask's name says, in English, into the
+     masks as one removal (name the mask `Remove: a wooden bench`). Without a prompt in the name it refuses.
   3. It prints one JSON line with the result's path (`dng`, and `file`: the same, also for a picture), the app it
      worked in (`app`) and the photo id there.
 - **Projects:** `<photo>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each
@@ -100,6 +102,8 @@ Setup of the server: `mcp/README.md`.
   - **Models:**
     - `lama`, `rorem`, `flux` and `qwen` need a mask: transparent (OpenAI's convention) or white = the area. The
       prompt goes to `flux` only.
+    - `flux-fill` draws what the prompt describes in the mask (Generative fill): a mask and a prompt are needed
+      (`missing_prompt` without one).
     - `dai-50`, `dai-75`, `dai-100` and `dai-125` take the mask as optional.
   - **The answer:** a PNG by default. `output_format` `jpeg` or `webp`, with `output_compression` 0 to 100 as the
     quality (a WebP at 100 is lossless), keeps a large photo under the Craft layer's 32 MiB cap.
@@ -107,7 +111,7 @@ Setup of the server: `mcp/README.md`.
     `--auto`'s.
   - **The connection** in craft-ai-integrations is a custom OpenAI-compatible one:
     - address `http://127.0.0.1:7990/v1`;
-    - the fill models declared as image inpainting, `dai-…` as image editing;
+    - the fill models and `flux-fill` declared as image inpainting, `dai-…` as image editing;
     - the key, if any, from the key file.
   - **Keys and GPU:** never put the key on the command line; it goes in the key file. The models stay loaded on the GPU
     while it runs, and one job runs at a time. Don't start it next to the user's AI Remove window.
