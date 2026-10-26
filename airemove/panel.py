@@ -28,14 +28,20 @@ Everything else goes through the app's control channel, as AI Remove's window do
   start): the removals and variants, the removal shown, the tab, the model, the texts; "Back to the panel" brings them
   back, and the window, kept hidden, reopens at once the next time.
 The panel stays open from one photo to the next, and the models stay loaded: only the first variant pays their load.
+The app's Ctrl+Shift+X (its external editor: airemove.shortcut_panel_host) opens it; one panel per app: while it is
+open, the next Ctrl+Shift+X asks it to come forward (airemove.show_panel, Panel.listen: through 127.0.0.1 and a
+token in work/panel-<app>.json) and ends at once.
 Keys, as in the window: Enter the action, Esc Stop, ← → the variants, the backslash (held) the original.
 
 Tests: AIREMOVE_PANEL_TEST runs steps separated by ";": wait:ms · mode:remove|fill|reflect · model:key ·
 mask:<name> · prompt:<text> · variants:n · generate · waitvars:n · pick:i · step:±1 · list:<id> · original:0|1 ·
 info · stop · split · save · waitidle · drag:dx,dy · dock · menu[:close] · discard · full · window[:closed] · wshot:n ·
-wtab:<tab> · wback · shot:n · pshot:n · quit."""
+wtab:<tab> · wback · wmenu · shot:n · pshot:n · quit."""
+import json
 import os
 import queue
+import secrets
+import socket
 import sys
 import threading
 import time
@@ -209,6 +215,7 @@ class Panel:
         threading.Thread(target=self.watcher, daemon=True).start()
         threading.Thread(target=self.worker, daemon=True).start()
         threading.Thread(target=self.overlay_worker, daemon=True).start()
+        threading.Thread(target=self.listen, daemon=True).start()
         r.after(100, self.pump)
         steps = os.environ.get("AIREMOVE_PANEL_TEST")
         if steps:
@@ -683,6 +690,34 @@ class Panel:
                 A.log("panel watcher:", repr(e))
             time.sleep(1.5)
 
+    def listen(self):
+        """The app's Ctrl+Shift+X again while this panel is open: the new launch finds this one through
+        work/panel-<app>.json (airemove.show_panel), asks it to come forward and ends — one panel per app."""
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            srv.bind(("127.0.0.1", 0))
+            srv.listen(4)
+            self.link_token = secrets.token_hex(16)
+            A.panel_link(self.host).write_text(json.dumps({"port": srv.getsockname()[1], "token": self.link_token,
+                                                        "pid": os.getpid()}), encoding="utf-8")
+        except OSError as e:
+            A.log("panel: no link for a second launch:", repr(e))
+            return
+        while not self.closing:
+            try:
+                c, __ = srv.accept()
+            except OSError:
+                return
+            with c:
+                try:
+                    c.settimeout(2)
+                    msg = json.loads(c.makefile(encoding="utf-8").readline() or "{}")
+                    if msg.get("token") == self.link_token and msg.get("do") == "show":
+                        self.events.put(("show", None))
+                        c.sendall(b"ok\n")
+                except (OSError, ValueError):
+                    pass
+
     def whole_view(self):
         """Whether the app shows the photo whole, as cropped, fitted in the view (Detail, Fit, not the crop tool, no
         before/after): its Layout Image then lies on the photo. Zoomed in, it stays fitted to the view instead. The
@@ -740,6 +775,8 @@ class Panel:
                 self.sync_cur()
             elif kind == "window":
                 self.open_window(*data)
+            elif kind == "show":
+                self.come_forward()
             elif kind == "overlay_problem":
                 self.overlay_problem = data
             elif kind == "done":
@@ -1428,8 +1465,30 @@ class Panel:
             self.scroller.pack(fill="both", expand=True)
             self.fold_btn.configure(text="–")
 
+    def come_forward(self):
+        """Ctrl+Shift+X in the app while this panel is open (listen): the full window if it is open, else the panel,
+        unfolded, in front."""
+        if self.window is not None:
+            w = self.window.root
+            w.deiconify()
+            w.lift()
+            w.focus_force()
+        else:
+            if not self.scroller.winfo_manager():
+                self.fold()
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        A.log("panel: brought forward by a second launch")
+
     def close(self):
         self.closing = True
+        try:
+            f = A.panel_link(self.host)
+            if json.loads(f.read_text(encoding="utf-8")).get("pid") == os.getpid():
+                f.unlink()  # a later launch starts a panel again
+        except (OSError, ValueError):
+            pass
         try:
             self.take_layout()  # the app's own Layout Image setting back
         except Exception as e:
@@ -1546,6 +1605,11 @@ class Panel:
             self.window.set_tab(arg)
         elif kind == "wback":  # the window's "Back to the panel"
             self.window.cancel()
+        elif kind == "wmenu":  # the window's header menu (language, what Ctrl+Shift+X opens), its entries logged
+            m = self.window.lang_menu
+            A.log("window menu:", [(m.entrycget(i, "label"), str(m.entrycget(i, "variable")) and
+                                    self.root.getvar(m.entrycget(i, "variable")))
+                                   for i in range(m.index("end") + 1) if m.type(i) != "separator"])
         elif kind == "discard":
             self.discard()
         elif kind == "menu":  # the model menu's list, open or closed

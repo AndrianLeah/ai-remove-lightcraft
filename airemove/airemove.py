@@ -3,7 +3,9 @@
 
 How to use:
   1. In LightCraft select a photo and press Ctrl+Shift+X (Cmd+Shift+X on a Mac) = Photo > Edit In > "Open Original
-     in Other Editor (RAW, no copy)": the installer makes AI Remove LightCraft's external editor.
+     in Other Editor (RAW, no copy)": the installer makes AI Remove LightCraft's external editor. That opens the
+     panel next to LightCraft's window (panel.py: one per app, a second Ctrl+Shift+X brings it forward), whose "Full
+     window" is the window below; with "Ctrl+Shift+X opens the panel" turned off in the window's menu, the window.
      It also works on its own, on a photo file (open_session): started from the Start menu / Applications / app menu
      (LightCraft's active photo when LightCraft answers, else a file to pick), on a file given to it (a path; on a
      Mac, dropped on its icon; a double-clicked .airemove project: its photo), or with "Open photo…" in its window.
@@ -33,6 +35,7 @@ Chromaforge (LightCraft Classic, a fork of LightCraft: system.Host) works the sa
 selected is the one used, --app picks one.
 
 usage: airemove.py [PHOTO…] [--app A] [--id PHOTO_ID] [--variants N]   a photo no app has selected opens on its own
+       airemove.py --panel [--app A]                         the panel next to the app's window
        airemove.py --auto lama|rorem|flux|qwen|sdxl|osor[N] [--shadow] [--app A] [--id PHOTO_ID]
                                                              no window: the "Rimuovi" masks removed with that
                                                              model (far-apart parts each in a removal of its own),
@@ -842,6 +845,44 @@ def open_session(args):
         log(f"{len(paths)} files given, none selected in an app that answers: the first one opens")
     log(f"on its own: {path} (answering: {', '.join(h.name for h in hosts) or 'neither LightCraft nor Chromaforge'})")
     return Session(None, args, path)
+
+
+def shortcut_panel_host(args):
+    """The app that started AI Remove on its selection (its external editor: Ctrl+Shift+X), whose panel opens next to
+    it — unless "Ctrl+Shift+X opens the panel" was turned off in the window's menu. None for a file opened on its own
+    (no app has it selected) or without a file (the Start menu): the window, as before."""
+    if not args.files or not setting("shortcut_panel", True):
+        return None
+    paths = [project_photo(p) for p in args.files]
+    for h in answering_hosts(args):
+        lc = LC(host=h)
+        try:
+            if selected_file(lc, paths) is not None:
+                return h
+        except Fail as e:
+            log(f"{h.name}: {e}")
+        finally:
+            lc.close()
+    return None
+
+
+def panel_link(host):
+    """Where the panel open next to that app says how to reach it: its port and token (panel.Panel.listen)."""
+    return ROOT / "work" / f"panel-{host.key}.json"
+
+
+def show_panel(host):
+    """The panel already open next to that app, asked to come forward: True when it said yes (this launch then ends,
+    and the models stay loaded once), else False (none open, or one that went away without removing its file)."""
+    try:
+        d = json.loads(panel_link(host).read_text(encoding="utf-8"))
+        # a panel that is open accepts at once; a refused port takes Windows 2 s to say so (a panel that went away)
+        with socket.create_connection(("127.0.0.1", int(d["port"])), timeout=0.5) as c:
+            c.settimeout(2)
+            c.sendall((json.dumps({"token": d["token"], "do": "show"}) + "\n").encode())
+            return c.makefile(encoding="utf-8").readline().strip() == "ok"
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def reopen(path):
@@ -2625,17 +2666,31 @@ def main():
     ap.add_argument("--shadow", action="store_true", help="--auto: remove the object's shadow and reflection too")
     ap.add_argument("--check", action="store_true", help="print a JSON report and exit")
     ap.add_argument("--panel", action="store_true",
-                    help="prototype: a small panel next to LightCraft's window, on its active photo and its masks")
+                    help="the panel next to the app's window, on its active photo and its masks (what the app's "
+                         f"{SHORTCUT} opens, unless turned off in the window's menu); one per app: a second one "
+                         "brings the open one forward")
     args = ap.parse_args()
     args.raw = args.files[0] if args.files else None
     if args.check:
         return check()
+    # the panel: --panel, or the app's Ctrl+Shift+X on its selection. One per app: if it is open, it comes forward
+    # and this launch ends — before the log is emptied, which is the open panel's
+    host = None
+    if args.panel:
+        host = host_for(args)
+    elif not args.auto and args.id is None:
+        host = shortcut_panel_host(args)
+    if host is not None:
+        args.app = host.key
+        if show_panel(host):
+            log(f"a new launch from {host.name}: the panel open next to it comes forward")
+            return 0
     LOG_FILE.write_text("", encoding="utf-8")
     log(f"AI Remove {system.VERSION} started ({system.system()})",
         f"(files: {', '.join(args.files)})" if args.files else "")
     if args.auto:
         return auto(args)
-    if args.panel:
+    if host is not None:
         import panel
         return panel.run(args)
     session = open_session(args)

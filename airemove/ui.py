@@ -1053,6 +1053,12 @@ class App:
                                        command=self.on_language)
         for code, name in i18n.LANGUAGES.items():
             self.lang_menu.add_radiobutton(label=name, value=code, variable=self.lang_code, command=self.on_language)
+        # what the app's Ctrl+Shift+X opens: the panel next to its window (airemove.shortcut_panel_host), or this window
+        self.shortcut_panel = tk.BooleanVar(value=bool(A.setting("shortcut_panel", True)))
+        self.lang_menu.add_separator()
+        self.lang_menu.add_checkbutton(label=_("{key} in {app} opens the panel", key=A.SHORTCUT, app=self.s.app),
+                                       variable=self.shortcut_panel,
+                                       command=lambda: A.remember("shortcut_panel", self.shortcut_panel.get()))
         self.head.bind("<Configure>", lambda e: self.fit_header())
         self.canvas_sel = tk.Canvas(left, bg=CANVAS, highlightthickness=0, cursor="crosshair")
         self.canvas_sel.pack(fill="both", expand=True, pady=(0, int(10 * k)))

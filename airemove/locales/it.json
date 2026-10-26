@@ -337,6 +337,7 @@
   "{file} updated, next to the original": "{file} aggiornato, accanto all'originale",
   "{file}: HEIC pictures need pillow-heif, which this install does not have. Run the AI Remove installer again to add it.": "{file}: per le immagini HEIC serve pillow-heif, che questa installazione non ha. Riesegui l'installer di AI Remove per aggiungerlo.",
   "{file}: its colours are stored as {mode}, which AI Remove cannot work on: save it as RGB and open that.": "{file}: i suoi colori sono salvati come {mode}, che AI Remove non sa usare: salvala in RGB e apri quella.",
+  "{key} in {app} opens the panel": "{key} in {app} apre il pannello",
   "{models}: a licence to accept on Hugging Face:": "{models}: licenza da accettare su Hugging Face:",
   "{model} is no longer used by AI Remove: its folder removed ({gb} GB freed)": "{model} non è più usato da AI Remove: la sua cartella è stata tolta ({gb} GB liberati)",
   "{model} is no longer used: remove {dir} by hand ({error})": "{model} non è più usato: togli {dir} a mano ({error})",
