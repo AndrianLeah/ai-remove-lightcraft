@@ -105,6 +105,14 @@ FILL_MENU = ("lama", "rorem", "flux", "qwen")
 MENU_MODELS = FILL_MENU + A.DRAW_MODELS + A.REFLECTION_MODELS
 MODEL_GROUPS = ((N_("Fill the selection"), FILL_MENU), (N_("Draw something new"), A.DRAW_MODELS),
                 (N_("Remove reflections"), A.REFLECTION_MODELS))
+# what to do, the window's and the panel's tabs (panel.py): each with its models, the menu only where there is a choice
+TABS = {"remove": (N_("Remove"), FILL_MENU), "fill": (N_("Fill"), A.DRAW_MODELS),
+        "reflect": (N_("Reflections"), A.REFLECTION_MODELS)}
+
+
+def tab_of(kind):
+    """The tab of a model's or a removal's kind (airemove.model_kind, Removal.kind)."""
+    return {"draw": "fill", "reflect": "reflect"}.get(kind, "remove")
 # what the text field is for: what to put there (SDXL, FLUX Fill), the name of what to remove (Qwen-Image: it names
 # the selection itself, a name corrects it), what to draw (Generative fill: required) or nothing (LaMa and OSOR read
 # no text; RORem works with its authors' fixed prompt and no guidance, which a text would hardly steer; DAI has its
@@ -401,6 +409,87 @@ class HintEntry(tk.Entry):
         self.configure(state=st)
 
 
+def model_meta():
+    """model -> (name, what it is for, what one variant takes on this PC from the last runs): the model menu's lines,
+    in the window and in the panel (panel.py)."""
+    def each(key):
+        return _("~{time} each", time=App.fmt_s(A.expected(key)))
+    return {
+        "lama": ("LaMa", _("Quick fill · plain backgrounds"), "~" + App.fmt_s(A.expected("lama"))),
+        "rorem": ("RORem", _("People and objects · draws no one back"), each("rorem_variant")),
+        "flux": ("FLUX Fill", _("Architecture · large areas"), each("flux_variant")),
+        "qwen": ("Qwen-Image", _("People and objects · complex backgrounds"), each("qwen_variant")),
+        "dai": ("DAI", _("Reflections in glass · whole photo or selection"),
+                "~" + App.fmt_s(A.expected("dai_variant"))),
+        "fill": (_(MODEL_NAMES["fill"]), _("What you describe, drawn in the selection"), each("fill_variant"))}
+
+
+def model_infos():
+    """What each model is good at, a few lines each: the window's and the panel's "What it does"."""
+    flux = A.expected("flux_variant")
+    info = {
+        "lama": _("LaMa — on the processor, a single result in ~{time}. It continues what is around (wall, sky, "
+                  "lawn, tarmac): very good for small and medium objects on plain or repetitive backgrounds. On "
+                  "large areas or structures (doors, windows, people in front of buildings) it tends to blur.",
+                  time=App.fmt_s(A.expected("lama"))),
+        "flux": _("FLUX Fill — the most realistic: it respects light, perspective and the lines of architecture; "
+                  "best for large or difficult areas. ~{time} per variant (Turbo, 8 steps). It takes almost the "
+                  "whole GPU: switching to FLUX unloads RORem and SAM (~15 s the first time; SAM reloads by itself "
+                  "at the next click). Non-commercial licence (FLUX.1 [dev]).",
+                  time=App.fmt_s(flux)),
+        "qwen": _("Qwen-Image — it first recognises what you selected (the progress bar says what), then removes "
+                  "it and redraws the scene behind it: steps, columns, railings carry on. For large areas on "
+                  "complex backgrounds, where FLUX invents a bush or a blob. ~{time} per variant, ~1 min more for "
+                  "the first one of a removal. Select the whole object (a bag, a shadow): what is left outside "
+                  "stays. If it names the object wrongly, write its name in English (e.g. \"the lamp post\"). It "
+                  "takes almost the whole GPU. Non-commercial licence (Qwen Research).",
+                  time=App.fmt_s(A.expected("qwen_variant"))),
+        "rorem": _("RORem — SDXL retrained only to remove, ~{time} per variant, each one different. Where SDXL "
+                   "draws a person or an odd object back into the hole (the other one of two people, the owner of a "
+                   "bag left outside the selection), RORem draws what is behind. On a long thin hole (a pole) or up a "
+                   "path it can leave a seam or a rock face: there LaMa or FLUX Fill. It uses SDXL's files. "
+                   "Licence Apache-2.0 (commercial use allowed).",
+                   time=App.fmt_s(A.expected("rorem_variant"))),
+        "dai": _("DAI (Dereflection Any Image) — it finds the light the glass reflects over the photo (the "
+                 "street in a shop window, a veil over what is behind it) and takes it away from the RAW itself: "
+                 "every detail stays, nothing is redrawn. With nothing selected, the whole photo; with a "
+                 "selection, there, fading out around it. ~{time}; then Strength, under the result, says how much "
+                 "of it goes, 0 to 150 % (75 % at first: the closest to Lightroom's Remove Reflections). Licence "
+                 "Apache-2.0.",
+                 time=App.fmt_s(A.expected("dai_variant"))),
+        "fill": _("Generative fill — FLUX Fill draws what you describe (in English) in the selection, with the "
+                  "photo's light and focus, and it is written into the RAW like a removal. The selection is the "
+                  "shape it fills: for something that stands, select down to the ground. It draws no shadow on "
+                  "the ground. A large selection is drawn smaller than the photo and looks soft (the variant says "
+                  "how much). ~{time} per variant. Non-commercial licence (FLUX.1 [dev]).",
+                  time=App.fmt_s(A.expected("fill_variant")))}
+    return info
+
+
+def tile_image(s, r, idx, size):
+    """Candidate idx of r on the photo around what it filled (base.png look), as a square thumbnail: the whole
+    hole for an object, a piece of it a few times its width for a pole or a cord (all of a long one would be a
+    thin line, and the variants would all look the same)."""
+    patch, al = s.variant_view(r, idx)
+    Y0, Y1, X0, X1 = r.base_rect
+    base = s.base_arr[Y0:Y1, X0:X1].astype(np.float32)
+    ph, pw = base.shape[:2]
+    im = base * (1 - al[:ph, :pw, None]) + patch[:ph, :pw].astype(np.float32) * al[:ph, :pw, None]
+    out = Image.fromarray(np.clip(im, 0, 255).astype(np.uint8))
+    ys, xs = np.nonzero(al[:ph, :pw] > 0.02)
+    if len(ys):
+        hh, ww = ys.max() - ys.min() + 1, xs.max() - xs.min() + 1
+        side = int(min(np.clip(3 * min(hh, ww) + 48, 160, max(hh, ww) + 48), ph, pw))
+        cy, cx = (int(ys.mean()), int(xs.mean())) if max(hh, ww) > 4 * min(hh, ww) else \
+            ((ys.min() + ys.max()) // 2, (xs.min() + xs.max()) // 2)
+        y0, x0 = int(np.clip(cy - side // 2, 0, ph - side)), int(np.clip(cx - side // 2, 0, pw - side))
+        out = out.crop((x0, y0, x0 + side, y0 + side))
+    else:
+        s = min(out.size)
+        out = out.crop(((out.width - s) // 2, (out.height - s) // 2, (out.width + s) // 2, (out.height + s) // 2))
+    return out.resize((size, size), Image.LANCZOS)
+
+
 class ModelPicker(tk.Frame):
     """The model menu: a button with the chosen model's name, what it is for and its time on this PC; a click opens
     the list, in two groups, each model with what it is best for (a Combobox line was too short to say it)."""
@@ -542,8 +631,12 @@ class ModelPicker(tk.Frame):
 
 
 class App:
-    def __init__(self, session, args):
+    def __init__(self, session, args, master=None, on_close=None, start=None):
+        """master, on_close: opened from the panel (panel.py), as a second window of its process on the panel's
+        Session (prepared already, its models loaded): closing it goes back to the panel (on_close(app)), with what was
+        done here. start: where to begin, as the panel was — {"removal", "selection", "model", "prompts", "variants"}."""
         self.s, self.args = session, args
+        self.on_close, self.start, self.closed = on_close, start or {}, False
         self.events = queue.Queue()  # workers -> window
         self.jobs = queue.Queue()  # window -> main worker (new removal / more variants / save)
         self.clicks = queue.Queue()  # window -> SAM worker
@@ -571,7 +664,8 @@ class App:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
             pass
-        r = self.root = tk.Tk(className="airemove")  # WM_CLASS "Airemove": the Linux menu entry matches it
+        # WM_CLASS "Airemove": the Linux menu entry matches it
+        r = self.root = tk.Toplevel(master, class_="airemove") if master is not None else tk.Tk(className="airemove")
         k = self.k = max(1.0, r.winfo_fpixels("1i") / 96.0)
         self.side_w = int(min(372 * k, max(300 * k, 0.34 * r.winfo_screenwidth())))  # narrower on a narrow screen
         self.THUMB, self.ROWTHUMB = (self.side_w - int(96 * k)) // 2, int(52 * k)
@@ -579,6 +673,7 @@ class App:
         r.configure(bg=BG)
         r.protocol("WM_DELETE_WINDOW", self.cancel)
         self._build()
+        self.apply_start()
         self.set_tool("sam")
         try:
             self._icon = tk.PhotoImage(file=str(ICON))
@@ -595,6 +690,17 @@ class App:
         bring_to_front(r)
         threading.Thread(target=self.worker, daemon=True).start()
         r.after(100, self.poll)
+
+    def apply_start(self):
+        """Opened from the panel: its model (and so its tab), its texts and its number of variants."""
+        st = self.start
+        self.prompt_text.update(st.get("prompts") or {})
+        if self.prompt_mode:  # in the field first: changing the model keeps the field's text for its kind
+            self.prompt.set_text(self.prompt_text.get(self.prompt_mode, ""))
+        if st.get("variants"):
+            self.count.set(st["variants"])
+        if st.get("model") in self.model_labels:
+            self.model_var.set(self.model_labels[st["model"]])
 
     # ------------------------------------------------------------------------------------------ layout
     def button(self, parent, text, cmd, kind="grey", small=False, **kw):
@@ -740,6 +846,16 @@ class App:
         sp = tk.Frame(self.panel.inner, bg=SIDE)
         sp.pack(fill="both", expand=True, padx=int(14 * k))
 
+        # Remove, Fill or Reflections, on top as in the panel: each tab its models (TABS); a tab with one model shows
+        # it on the model's line, with no menu
+        tabs = tk.Frame(sp, bg=LINE)
+        tabs.pack(fill="x", pady=(int(14 * k), 0))
+        self.tab, self.tab_btns = None, {}
+        for i, (tab, (title, __)) in enumerate(TABS.items()):
+            b = self.button(tabs, _(title), lambda t=tab: self.set_tab(t))
+            b.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 1, 0))
+            tabs.columnconfigure(i, weight=1)
+            self.tab_btns[tab] = b
         _hdr, sel = self.section(sp, _("Selection"))
         seg = tk.Frame(sel, bg=LINE)
         seg.pack(fill="x")
@@ -784,9 +900,10 @@ class App:
             self.shadow_btn.pack(fill="x", pady=(int(6 * k), 0))
 
         _hdr, gen = self.section(sp, _("Generate"))
-        mrow = tk.Frame(gen, bg=CARD)
+        mrow = self.mrow = tk.Frame(gen, bg=CARD)
         mrow.pack(fill="x")
-        tk.Label(mrow, text=_("Model"), font=self.f_small, fg=DIM, bg=CARD).pack(side="left")
+        self.model_lbl = tk.Label(mrow, text=_("Model"), font=self.f_small, fg=DIM, bg=CARD)
+        self.model_lbl.pack(side="left")
         # what the model is good at: one click away (the menu itself says it in a few words)
         self.info_btn = tk.Label(mrow, text="ⓘ  " + _("What it does"), font=self.f_small, fg=DIM, bg=CARD,
                                  cursor="hand2")
@@ -878,7 +995,8 @@ class App:
         self.save_btn = self.button(foot, self.save_label(), self.save, kind="green")
         self.save_btn.configure(state="disabled", font=self.f_bold)
         self.save_btn.pack(fill="x")
-        self.button(foot, _("Close"), self.cancel, kind="ghost", small=True).pack(fill="x", pady=(int(6 * k), 0))
+        self.button(foot, _("Back to the panel") if self.on_close else _("Close"), self.cancel, kind="ghost",
+                    small=True).pack(fill="x", pady=(int(6 * k), 0))
 
         # --- photo (left): header with title and view controls, the zoomable photo
         left = tk.Frame(body, bg=BG)
@@ -935,6 +1053,12 @@ class App:
                                        command=self.on_language)
         for code, name in i18n.LANGUAGES.items():
             self.lang_menu.add_radiobutton(label=name, value=code, variable=self.lang_code, command=self.on_language)
+        # what the app's Ctrl+Shift+X opens: the panel next to its window (airemove.shortcut_panel_host), or this window
+        self.shortcut_panel = tk.BooleanVar(value=A.shortcut_opens_panel())
+        self.lang_menu.add_separator()
+        self.lang_menu.add_checkbutton(label=_("{key} in {app} opens the panel", key=A.SHORTCUT, app=self.s.app),
+                                       variable=self.shortcut_panel,
+                                       command=lambda: A.remember("shortcut_panel", self.shortcut_panel.get()))
         self.head.bind("<Configure>", lambda e: self.fit_header())
         self.canvas_sel = tk.Canvas(left, bg=CANVAS, highlightthickness=0, cursor="crosshair")
         self.canvas_sel.pack(fill="both", expand=True, pady=(0, int(10 * k)))
@@ -1008,22 +1132,38 @@ class App:
         first = "rorem" if "rorem" in keys else keys[0]  # people and objects, none drawn back: the default
         cur = self.model_key() if self.model_var.get() else A.setting("model", first)
         cur = cur if cur in keys else first  # also a model no longer in the menu (SDXL, OSOR, ObjectClear)
-
-        def each(key):
-            return _("~{time} each", time=self.fmt_s(A.expected(key)))
-        self.model_meta = {
-            "lama": ("LaMa", _("Quick fill · plain backgrounds"), "~" + self.fmt_s(A.expected("lama"))),
-            "rorem": ("RORem", _("People and objects · draws no one back"), each("rorem_variant")),
-            "flux": ("FLUX Fill", _("Architecture · large areas"), each("flux_variant")),
-            "qwen": ("Qwen-Image", _("People and objects · complex backgrounds"), each("qwen_variant")),
-            "dai": ("DAI", _("Reflections in glass · whole photo or selection"),
-                    "~" + self.fmt_s(A.expected("dai_variant"))),
-            "fill": (_(MODEL_NAMES["fill"]), _("What you describe, drawn in the selection"), each("fill_variant"))}
+        self.model_meta = model_meta()
         # one line per model (tests and the saved setting go by it): its name first
         self.model_labels = {m: f"{n} · {u} · {t}" for m, (n, u, t) in self.model_meta.items()}
-        self.picker.set_models(self.model_meta, keys)
-        self.model_var.set(self.model_labels[cur])
+        self.set_tab(tab_of(A.model_kind(cur)), cur)
         self.show_model_info()
+
+    def set_tab(self, tab, model=None):
+        """Remove, Fill or Reflections (TABS): the menu with the tab's models, or its one model on the model's line.
+        model: the one to choose, else the one chosen last in that tab (RORem in Remove at first)."""
+        keys = [m for m in self.model_keys() if m in TABS[tab][1]]
+        if not keys:  # its model is not installed
+            return
+        if model not in keys:
+            last = A.setting("model_remove", A.setting("model"))  # the Remove tab's, also the panel's
+            model = last if last in keys else ("rorem" if "rorem" in keys else keys[0])
+        self.tab = tab
+        for t, b in self.tab_btns.items():
+            on = t == tab
+            b._bg, b._hi = (ACCENT, ACCENT_HI) if on else (BTN, BTN_HI)
+            b.configure(bg=b._bg, fg="#1b1b1b" if on else FG, activebackground=b._hi,
+                        state="normal" if any(m in self.model_keys() for m in TABS[t][1]) else "disabled")
+        self.picker.set_models(self.model_meta, keys)
+        if len(keys) > 1:
+            self.model_lbl.configure(text=_("Model"), fg=DIM)
+            if not self.picker.winfo_manager():
+                self.picker.pack(fill="x", pady=(int(3 * self.k), 0), after=self.mrow)
+        else:
+            name, __, t = self.model_meta[model]
+            self.model_lbl.configure(text=f"{name} · {t}", fg=FG)
+            self.picker.pack_forget()
+        self.place_model_info()
+        self.model_var.set(self.model_labels[model])  # on_model_change
 
     def model_best(self, m):
         """When to choose the model, in the menu's list (short: the details are under the menu, "What it does")."""
@@ -1063,45 +1203,8 @@ class App:
 
     def show_model_info(self):
         """What the selected model is good at, in one or two lines under the menu."""
-        flux = A.expected("flux_variant")
-        info = {
-            "lama": _("LaMa — on the processor, a single result in ~{time}. It continues what is around (wall, sky, "
-                      "lawn, tarmac): very good for small and medium objects on plain or repetitive backgrounds. On "
-                      "large areas or structures (doors, windows, people in front of buildings) it tends to blur.",
-                      time=self.fmt_s(A.expected("lama"))),
-            "flux": _("FLUX Fill — the most realistic: it respects light, perspective and the lines of architecture; "
-                      "best for large or difficult areas. ~{time} per variant (Turbo, 8 steps). It takes almost the "
-                      "whole GPU: switching to FLUX unloads RORem and SAM (~15 s the first time; SAM reloads by itself "
-                      "at the next click). Non-commercial licence (FLUX.1 [dev]).",
-                      time=self.fmt_s(flux)),
-            "qwen": _("Qwen-Image — it first recognises what you selected (the progress bar says what), then removes "
-                      "it and redraws the scene behind it: steps, columns, railings carry on. For large areas on "
-                      "complex backgrounds, where FLUX invents a bush or a blob. ~{time} per variant, ~1 min more for "
-                      "the first one of a removal. Select the whole object (a bag, a shadow): what is left outside "
-                      "stays. If it names the object wrongly, write its name in English (e.g. \"the lamp post\"). It "
-                      "takes almost the whole GPU. Non-commercial licence (Qwen Research).",
-                      time=self.fmt_s(A.expected("qwen_variant"))),
-            "rorem": _("RORem — SDXL retrained only to remove, ~{time} per variant, each one different. Where SDXL "
-                       "draws a person or an odd object back into the hole (the other one of two people, the owner of a "
-                       "bag left outside the selection), RORem draws what is behind. On a long thin hole (a pole) or up a "
-                       "path it can leave a seam or a rock face: there LaMa or FLUX Fill. It uses SDXL's files. "
-                       "Licence Apache-2.0 (commercial use allowed).",
-                       time=self.fmt_s(A.expected("rorem_variant"))),
-            "dai": _("DAI (Dereflection Any Image) — it finds the light the glass reflects over the photo (the "
-                     "street in a shop window, a veil over what is behind it) and takes it away from the RAW itself: "
-                     "every detail stays, nothing is redrawn. With nothing selected, the whole photo; with a "
-                     "selection, there, fading out around it. ~{time}; then Strength, under the result, says how much "
-                     "of it goes, 0 to 150 % (75 % at first: the closest to Lightroom's Remove Reflections). Licence "
-                     "Apache-2.0.",
-                     time=self.fmt_s(A.expected("dai_variant"))),
-            "fill": _("Generative fill — FLUX Fill draws what you describe (in English) in the selection, with the "
-                      "photo's light and focus, and it is written into the RAW like a removal. The selection is the "
-                      "shape it fills: for something that stands, select down to the ground. It draws no shadow on "
-                      "the ground. A large selection is drawn smaller than the photo and looks soft (the variant says "
-                      "how much). ~{time} per variant. Non-commercial licence (FLUX.1 [dev]).",
-                      time=self.fmt_s(A.expected("fill_variant")))}
         if hasattr(self, "model_info"):
-            self.model_info.configure(text=info[self.model_key()])
+            self.model_info.configure(text=model_infos()[self.model_key()])
 
     def model_key(self):
         v = self.model_var.get()
@@ -1200,12 +1303,14 @@ class App:
             b.configure(text=text, state="normal" if on else "disabled", bg=b._bg, activebackground=b._hi,
                         fg="#1b1b1b" if accent else FG, font=self.f_bold if accent else self.f_small)
             if not b.winfo_manager():
-                b.pack(fill="x", pady=(int(6 * self.k), 0), after=self.split_btn)
+                b.pack(fill="x", pady=(int(6 * self.k), 0),
+                       after=self.split_btn if self.split_btn.winfo_manager() else self.gen_btn)
         rest = self.waiting_for(m)
         if len(rest) >= 2 and not self.writing:
             self.all_btn.configure(text="▶▶  " + _("Generate all {n} waiting with {model}", n=len(rest),
                                                    model=_(MODEL_NAMES[m])))
-            self.all_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=b if b.winfo_manager() else self.split_btn)
+            self.all_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=b if b.winfo_manager() else
+                              self.split_btn if self.split_btn.winfo_manager() else self.gen_btn)
         else:
             self.all_btn.pack_forget()
 
@@ -1296,6 +1401,10 @@ class App:
                                text=(_("Remove reflections") if reflect else _("Draw in the selection") if draw
                                      else _("Remove selection")) + "  ⏎")
         self.split_btn.configure(state="normal" if (has and ready and not reflect and not draw) else "disabled")
+        if reflect or draw:  # parts are for removing only: not in Fill nor Reflections
+            self.split_btn.pack_forget()
+        elif not self.split_btn.winfo_manager():
+            self.split_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=self.gen_btn)
         self.undo_btn.configure(state="normal" if self.history else "disabled")
         self.clear_btn.configure(state="normal" if self.ops else "disabled")
         live = [r for r in self.s.removals if not r.deleted]
@@ -1318,19 +1427,23 @@ class App:
     def worker(self):
         s = self.s
         try:
-            self.post("task", _("Reading the photo") if s.standalone else _("Reading the photo from {app}", app=s.app))
-            s.find()
+            if s.info is None:  # (the panel's Session is found and prepared already)
+                self.post("task", _("Reading the photo") if s.standalone else
+                          _("Reading the photo from {app}", app=s.app))
+                s.find()
             self.post("found")
             threading.Thread(target=self.sam_worker, daemon=True).start()
-            self.post("task", _("Preparing the photo"))
-            self.extracting = True
-            try:
-                s.prepare()
-            finally:
-                self.extracting = False
+            if getattr(s, "base", None) is None:
+                self.post("task", _("Preparing the photo"))
+                self.extracting = True
+                try:
+                    s.prepare()
+                finally:
+                    self.extracting = False
             self.base_ready.set()
             self.post("base")
-            threading.Thread(target=lambda: self.post("update", A.update_available()), daemon=True).start()
+            if self.on_close is None:  # opened from the panel: it asked already
+                threading.Thread(target=lambda: self.post("update", A.update_available()), daemon=True).start()
         except A.Fail as e:
             A.log("ERROR:", e)
             self.base_ready.set()
@@ -1343,6 +1456,8 @@ class App:
             return
         while True:
             job = self.jobs.get()
+            if job[0] == "exit":  # back to the panel: the Session is its again
+                return
             if job[0] != "save":
                 s.stop.clear()  # a Stop pressed before this job was for the one before
             try:
@@ -1545,6 +1660,8 @@ class App:
             return
         while True:
             job = self.clicks.get()
+            if job[0] == "exit":  # back to the panel
+                return
             try:
                 sam = self.s.get_sam()  # reloaded if FLUX pushed it off the GPU
                 t0 = time.time()
@@ -1590,6 +1707,8 @@ class App:
 
     # ------------------------------------------------------------------------------------------ events
     def poll(self):
+        if self.closed:  # back to the panel: this window is gone
+            return
         try:
             while True:
                 kind, data = self.events.get_nowait()
@@ -1729,9 +1848,10 @@ class App:
                               if self.s.out_format == "DNG" else
                               _("on its own · the edited copy goes next to the original"))
         self.fit_header()
-        self.prompt_text["fill"] = self.s.prompt or ""  # "Remove: <text>" on a LightCraft mask: what to put there
-        if self.prompt_mode == "fill":
-            self.prompt.set_text(self.prompt_text["fill"])
+        if self.s.prompt:  # "Remove: <text>" on a LightCraft mask: what to put there
+            self.prompt_text["fill"] = self.s.prompt
+            if self.prompt_mode == "fill":
+                self.prompt.set_text(self.prompt_text["fill"])
 
     def on_base(self, _data):
         b = self.s.base
@@ -1747,19 +1867,25 @@ class App:
         self.comp, self.comp_key = None, None
         self.canvas_sel.delete("msg")
         self.canvas_sel.update_idletasks()
-        if self.s.init_mask is not None:  # "Rimuovi" masks made in LightCraft
+        if self.on_close is not None:  # from the panel: its mask, when nothing was made of it yet
+            if self.start.get("selection") is not None:
+                self.ops = [self.new_op("add", self.start["selection"])]
+        elif self.s.init_mask is not None:  # "Rimuovi" masks made in LightCraft
             self.ops = [self.new_op("add", self.s.init_mask)]
-        for rem in self.s.removals:  # reopened project: every removal as it was left
+        live = [rem for rem in self.s.removals if not rem.deleted]
+        for rem in live:  # reopened project (or the panel's removals): every removal as it was left
             ys, xs = np.nonzero(outline(rem.mask_e, 2))
             self.outlines[rem.id] = (ys, xs)
             self.add_row(rem)
-        if self.s.removals:
-            self.select_removal(self.s.removals[-1])
+        if live:
+            self.select_removal(self.start["removal"] if self.start.get("removal") in live else live[-1])
         self.render_main()
-        n = len(self.s.removals)
+        n = len(live)
         self.set_idle_status(
-            _n("Project reopened: {n} removal — change it or add more",
-               "Project reopened: {n} removals — change them or add more", n)
+            (_n("From the panel: {n} removal — change it or add more",
+                "From the panel: {n} removals — change them or add more", n) if self.on_close else
+             _n("Project reopened: {n} removal — change it or add more",
+                "Project reopened: {n} removals — change them or add more", n))
             if n else (_("Click what you want to remove") if self.sam_ready else
                        _("SAM 3 is getting ready: you can click already")))
         self.update_buttons()
@@ -1991,7 +2117,8 @@ class App:
         f, th, t1, t2 = self.row_widgets[r.id]
         n = len(r.candidates)
         t1.configure(text=f"#{r.id}" + (f"  ·  {A.variant_text(r, r.chosen_label())}" if r.chosen is not None else ""))
-        t2.configure(text=_n("{n} variant", "{n} variants", n) if n else
+        named = r.mask_name + "  ·  " if r.mask_name else ""  # the mask it was made from, in the panel
+        t2.configure(text=named + _n("{n} variant", "{n} variants", n) if n else
                      _("waiting: choose a model, then Generate") if self.waiting(r) else
                      (_("generating…") if self.busy else _("no variants")))
         if r.chosen is not None:
@@ -2003,30 +2130,12 @@ class App:
         f.configure(highlightbackground=ACCENT if r is self.cur else CARD)
 
     def tile_image(self, r, idx, size, square=False):
-        """Candidate idx of r on the photo around what it filled (base.png look), as a square thumbnail: the whole
-        hole for an object, a piece of it a few times its width for a pole or a cord (all of a long one would be a
-        thin line, and the variants would all look the same)."""
-        patch, al = self.s.preview(r, idx)
-        Y0, Y1, X0, X1 = r.base_rect
-        base = self.s.base_arr[Y0:Y1, X0:X1].astype(np.float32)
-        ph, pw = base.shape[:2]
-        im = base * (1 - al[:ph, :pw, None]) + patch[:ph, :pw].astype(np.float32) * al[:ph, :pw, None]
-        out = Image.fromarray(np.clip(im, 0, 255).astype(np.uint8))
-        ys, xs = np.nonzero(al[:ph, :pw] > 0.02)
-        if len(ys):
-            hh, ww = ys.max() - ys.min() + 1, xs.max() - xs.min() + 1
-            side = int(min(np.clip(3 * min(hh, ww) + 48, 160, max(hh, ww) + 48), ph, pw))
-            cy, cx = (int(ys.mean()), int(xs.mean())) if max(hh, ww) > 4 * min(hh, ww) else \
-                ((ys.min() + ys.max()) // 2, (xs.min() + xs.max()) // 2)
-            y0, x0 = int(np.clip(cy - side // 2, 0, ph - side)), int(np.clip(cx - side // 2, 0, pw - side))
-            out = out.crop((x0, y0, x0 + side, y0 + side))
-        else:
-            s = min(out.size)
-            out = out.crop(((out.width - s) // 2, (out.height - s) // 2, (out.width + s) // 2, (out.height + s) // 2))
-        return out.resize((size, size), Image.LANCZOS)
+        return tile_image(self.s, r, idx, size)
 
     def select_removal(self, r):
         self.cur = r
+        if tab_of(r.kind()) != self.tab:  # its tab, for more variants of its kind
+            self.set_tab(tab_of(r.kind()))
         for rid, (f, *_rest) in self.row_widgets.items():
             f.configure(highlightbackground=ACCENT if rid == r.id else CARD)
         self.var_title.configure(text=_("Variants of #{id}", id=r.id).upper())
@@ -2185,12 +2294,13 @@ class App:
             self.choose(i)
 
     def place_model_info(self):
+        above = self.picker if self.picker.winfo_manager() else self.mrow  # a tab with one model has no menu
         if self.show_info:
             self.info_pad.pack_forget()
-            self.model_info.pack(after=self.picker, fill="x", pady=(int(6 * self.k), int(10 * self.k)))
+            self.model_info.pack(after=above, fill="x", pady=(int(6 * self.k), int(10 * self.k)))
         else:
             self.model_info.pack_forget()
-            self.info_pad.pack(after=self.picker, fill="x")
+            self.info_pad.pack(after=above, fill="x")
         self.info_btn.configure(text="ⓘ  " + (_("Hide") if self.show_info else _("What it does")))
 
     def toggle_model_info(self):
@@ -2300,9 +2410,14 @@ class App:
         return n
 
     def on_model_change(self):
+        if self.tab is not None and tab_of(A.model_kind(self.model_key())) != self.tab:  # chosen from code: its tab
+            self.set_tab(tab_of(A.model_kind(self.model_key())), self.model_key())
+            return
         self.show_model_info()
         if getattr(self, "model_labels", None):
             A.remember("model", self.model_key())
+            if self.tab == "remove":
+                A.remember("model_remove", self.model_key())
             self.picker.show()
             # DAI makes one result per removal (its strength is a slider): no number of variants
             if self.model_key() in A.REFLECTION_MODELS:
@@ -2813,6 +2928,13 @@ class App:
             self.status.configure(text=_("Waiting for {app} to restore the development…", app=self.s.app))
             self.root.after(300, self.cancel)
             return
+        if self.on_close is not None:  # back to the panel, which saves as this window does: no question
+            if self.busy or self.shadow_wait or self.describing:  # the panel takes the Session back once it is idle
+                self.stop_jobs()
+                self.root.after(300, self.cancel)
+                return
+            self.quit()
+            return
         live = any(not r.deleted and r.chosen is not None for r in self.s.removals)
         if self.dng_dirty and live:
             ask = (_("Save the {format} file with the latest changes?\n\n(The removals and variants stay saved in the "
@@ -2831,7 +2953,70 @@ class App:
         A.log("closed")
         self.quit()
 
+    def reopen(self, start):
+        """Opened again from the panel, after it was kept hidden: as the panel is now — the removals it made or deleted
+        since, the selection, the tab, the model, the texts, the number of variants."""
+        self.start = start or {}
+        live = [r for r in self.s.removals if not r.deleted]
+        for rid in [rid for rid in self.row_widgets if not any(x.id == rid for x in live)]:
+            self.row_widgets.pop(rid)[0].destroy()
+            self.outlines.pop(rid, None)
+        for r in live:
+            if r.id in self.row_widgets:
+                self.update_row(r)
+            else:
+                ys, xs = np.nonzero(outline(r.mask_e, 2))
+                self.outlines[r.id] = (ys, xs)
+                self.add_row(r)
+        if not live:
+            self.rows_empty.pack(anchor="w", pady=6)
+        self.fit_rows()
+        self.apply_start()
+        sel = self.start.get("selection")
+        self.ops, self.history, self.pending = ([self.new_op("add", sel)] if sel is not None else []), [], {}
+        self.comp, self.comp_key = None, None
+        if live:
+            self.select_removal(self.start["removal"] if self.start.get("removal") in live else live[-1])
+        else:
+            self.cur = None
+            self.fill_tiles()
+        self.render_main()
+        self.update_buttons()
+        self.set_idle_status(_n("From the panel: {n} removal — change it or add more",
+                                "From the panel: {n} removals — change them or add more", len(live)) if live else
+                             _("Click what you want to remove"))
+        self.root.bind_all("<MouseWheel>", self.on_wheel)
+        if X11:
+            self.root.bind_all("<Button-4>", lambda e: self.on_wheel(e, 120))
+            self.root.bind_all("<Button-5>", lambda e: self.on_wheel(e, -120))
+        self.root.deiconify()
+        try:
+            self.root.state("zoomed")
+        except tk.TclError:
+            pass
+        bring_to_front(self.root)
+
+    def destroy(self):
+        """Gone for good (the panel on another photo, or closed): its workers end."""
+        self.closed = True
+        self.jobs.put(("exit",))
+        self.clicks.put(("exit",))
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
     def quit(self):
+        if self.on_close is not None:  # opened from the panel: back to it, with the Session and its models; the window
+            # is kept, hidden, and reopens at once the next time (reopen)
+            self.picker.close()
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):  # bind_all: the panel's widgets too
+                self.root.unbind_all(seq)
+            try:
+                self.on_close(self)
+            finally:
+                self.root.withdraw()
+            return
         try:
             self.s.close()
         finally:

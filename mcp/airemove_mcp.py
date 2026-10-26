@@ -98,7 +98,9 @@ Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended 
    never opened yet, to open it once and close it), then call configure_lightcraft (with the same apps). Chromaforge
    installed later: configure_lightcraft(apps=chromaforge).
 5. Usage: in LightCraft or Chromaforge select a photo, press Ctrl+Shift+X (Cmd+Shift+X on Mac), or open "AI Remove"
-   from the Start menu / Applications / app menu (it works on the app's active photo, else asks for a photo file).""",
+   from the Start menu / Applications / app menu (it works on the app's active photo, else asks for a photo file).
+   On Windows Ctrl+Shift+X opens the panel beside the app's window: the mask selected in the app is the selection,
+   and its "Full window" opens the window described below.""",
     "use": """In the AI Remove window: click an object (SAM 3 selects it whole); Alt/Option+click removes a part,
 Shift+click adds one; Brush (B) / Eraser (E) for manual touch-ups; or describe it ("person", then "bag"): SAM 3
 selects every instance. "Include the shadow" adds their shadows (SAM 3, and OSOR when installed) to the selection.

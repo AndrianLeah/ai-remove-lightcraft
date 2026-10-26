@@ -19,7 +19,10 @@ It works the same way in both apps, in one of them or in both at once: the insta
 
 ## How it works
 
-1. In LightCraft or Chromaforge, select a photo and press **Ctrl+Shift+X** (**Cmd+Shift+X** on a Mac).
+1. In LightCraft or Chromaforge, select a photo and press **Ctrl+Shift+X** (**Cmd+Shift+X** on a Mac). On Windows the
+   **AI Remove panel** opens beside the app's window and works on the mask you select in the app (see
+   [The panel](#the-panel)). Its **Full window** button opens AI Remove's window, where the steps below happen. On
+   macOS and Linux the window opens directly.
 2. Click what should go: SAM 3 selects the whole object. Alt/Option+click takes a part out, Shift+click adds one, and
    the brush and eraser handle the rest. Or **describe** it: type "people" (in English) and SAM 3 selects every
    person in the photo, each on its own, so a right-click drops one you want to keep.
@@ -73,6 +76,46 @@ embedded preview, which would still show what was removed.
 - **PNG, TIFF and lossless WebP** are saved losslessly; 16-bit TIFFs stay 16-bit.
 - **HEIC** loses its depth map and other extra images.
 - A 16-bit colour PNG, a CMYK picture or an animated one does not open (the message says what to do).
+
+## The panel
+
+On Windows, Ctrl+Shift+X opens a small panel attached to LightCraft's or Chromaforge's window. It removes, fills and
+takes reflections away using the app's own masks, without leaving the app.
+
+- **Where it sits:** docked at the app's right edge. It stays above the app, and only above it, and moves and minimizes
+  with it. Drag it by its header to put it elsewhere: it opens there the next time. A double-click on the header docks
+  it again, and **–** folds it. Ctrl+Shift+X again brings it forward.
+- **The selection is the app's mask.** Select a mask in the app and the panel takes it. It can be an Object mask made
+  with one click of the app's SAM 3, a brush, a gradient… In *Reflections* the panel works on the whole photo, as
+  Lightroom's Remove Reflections does.
+- **The window's tabs:**
+  - **Remove** has the model menu, with ⓘ *What it does*;
+  - **Fill** asks what to draw (required);
+  - **Reflections** runs DAI, then *Strength* under the result.
+
+  Enter generates, Esc stops, and ← → go through the variants.
+- **The result shows on the photo in the app.** The chosen variant is drawn over the photo in the app's own view, as
+  its Layout Image. This works while the photo is shown whole (Detail view, Fit, not cropping). Hold **Original**, or
+  `\`, to compare.
+- **One removal per mask.** Each mask keeps its variants while the panel is open, and *On this photo* lists them.
+  **Save to LightCraft** (or Chromaforge) writes every chosen variant into one DNG, stacked on the original, and the
+  next save updates it. The masks used as selections are not carried into the DNG.
+- **Split into masks.** It turns a mask of several pieces, or of several Object clicks, into one mask per part in the
+  app ("Distractions 1", "Distractions 2"…). Each part is then a selection with its own model. Objects close together
+  stay in one mask, because each would show in the other's fill. One Undo in the app takes it back.
+- **Full window** opens AI Remove's window on the same photo. It has the same removals and variants, and the models
+  are already loaded. Use it for what the panel doesn't do: SAM 3 clicks, the brush, Describe, *Include the shadow*,
+  *Split into parts*. **Back to the panel** returns with what you did there.
+- **Prefer the window?** In the window, the language button at the top right (`EN ▾`) has *Ctrl+Shift+X in
+  LightCraft opens the panel*: untick it. On macOS and Linux it starts unticked. Tick it there and the panel opens
+  as an ordinary window beside the app.
+
+The apps have no plug-in panels, so the panel is a window of its own over the app. It reads the app's state about
+every second and a half. The preview on the photo is not drawn in these cases, and the panel says so:
+- zoomed in, or while cropping;
+- with a Geometry transform (Upright, perspective).
+
+Save is not affected. The first time the panel reads a photo, the photo's crop disappears for a moment.
 
 ## Features
 

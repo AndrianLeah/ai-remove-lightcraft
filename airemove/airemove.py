@@ -3,7 +3,9 @@
 
 How to use:
   1. In LightCraft select a photo and press Ctrl+Shift+X (Cmd+Shift+X on a Mac) = Photo > Edit In > "Open Original
-     in Other Editor (RAW, no copy)": the installer makes AI Remove LightCraft's external editor.
+     in Other Editor (RAW, no copy)": the installer makes AI Remove LightCraft's external editor. That opens the
+     panel next to LightCraft's window (panel.py: one per app, a second Ctrl+Shift+X brings it forward), whose "Full
+     window" is the window below; with "Ctrl+Shift+X opens the panel" turned off in the window's menu, the window.
      It also works on its own, on a photo file (open_session): started from the Start menu / Applications / app menu
      (LightCraft's active photo when LightCraft answers, else a file to pick), on a file given to it (a path; on a
      Mac, dropped on its icon; a double-clicked .airemove project: its photo), or with "Open photo…" in its window.
@@ -33,6 +35,7 @@ Chromaforge (LightCraft Classic, a fork of LightCraft: system.Host) works the sa
 selected is the one used, --app picks one.
 
 usage: airemove.py [PHOTO…] [--app A] [--id PHOTO_ID] [--variants N]   a photo no app has selected opens on its own
+       airemove.py --panel [--app A]                         the panel next to the app's window
        airemove.py --auto lama|rorem|flux|qwen|sdxl|osor[N] [--shadow] [--app A] [--id PHOTO_ID]
                                                              no window: the "Rimuovi" masks removed with that
                                                              model (far-apart parts each in a removal of its own),
@@ -282,6 +285,14 @@ class LC:
     def state(self):
         return self.one("library.state")
 
+    def call(self, method, params=None):
+        """A method of the control channel other than engine.execute (ui.inspect, ui.set): its result."""
+        with self._lock:
+            r = self._request(method, params or {})
+        if not r.get("ok"):
+            raise Fail(f"{method}: {r.get('error')}")
+        return r.get("result")
+
 
 # ------------------------------------------------------------------------------------------------ geometry helpers
 def transforms():
@@ -431,6 +442,71 @@ def sam_mask(targets, w, h):
     return total
 
 
+SEG_SIDE = 1024  # a segmentation written for the app (seg_of): its own SAM 3 ones are 288; at 1024 it reads back exact
+
+
+def seg_of(mask):
+    """A selection (bool, base.png's frame: the uncropped photo) as the stored SAM 3 segmentation an Object mask of the
+    app takes (mask.add {kind: object, seg}), _seg_logits's format: int8 logits, SEG_SIDE x SEG_SIDE over the whole
+    photo, raw-deflated, base64. Logits from the distance to the edge, so the edge comes back where it was (read back:
+    IoU 1.0 on test shapes; the app draws it, as its own SAM 3 masks, a pixel or two softer)."""
+    h, w = mask.shape
+    sd = np.where(mask, ndi.distance_transform_edt(mask), -ndi.distance_transform_edt(~mask)).astype(np.float32)
+    small = np.asarray(Image.fromarray(sd, mode="F").resize((SEG_SIDE, SEG_SIDE), Image.BILINEAR))
+    lg = np.clip(np.round(small * (SEG_SIDE / w) * 16), -127, 127).astype(np.int8)
+    z = zlib.compressobj(9, zlib.DEFLATED, -15)
+    return {"side": SEG_SIDE, "data": base64.b64encode(z.compress(lg.tobytes()) + z.flush()).decode()}
+
+
+def mask_units(mask, w, h):
+    """The pieces an app mask was made of, at w x h: each of its added SAM 3 components (an Object click, a Describe
+    instance), for split_selection as the window's units; None when it is made of anything else (a brush, a
+    gradient) or of one piece only."""
+    comps = mask.get("components") or []
+    if len(comps) < 2 or mask.get("invert"):
+        return None
+    units = []
+    for c in comps:
+        sh = c.get("shape", {})
+        if sh.get("kind") not in ("object", "prompt") or not isinstance(sh.get("seg"), dict) or c.get("invert"):
+            return None
+        if c.get("op", "add") == "add":
+            units.append(sam_mask([{"components": [dict(c, op="add")]}], w, h))
+    return units if len(units) > 1 else None
+
+
+def split_into_masks(lc, pid, mask, parts):
+    """The app's mask replaced by one Object mask per part (the panel's "Split into masks"): "<name> 1", "<name> 2"…,
+    each with the mask's adjustments; the mask itself deleted, the first part selected in the app. All of it one step
+    of the app's history (an interaction), so one Undo takes it back; on a failure the interaction is cancelled.
+    Returns the new masks' ids."""
+    name = mask.get("name") or _("Mask {id}", id=mask["id"])
+    segs = [seg_of(part) for part in parts]  # before the interaction opens: it stays open as briefly as it can
+
+    def check(r):
+        bad = [x for x in r if not x.get("ok")]
+        if bad:
+            raise Fail(f"{lc.name}: " + str(bad[0].get("error")))
+        return r
+
+    check(lc.run([{"command": "library.select", "params": {"ids": [pid], "active": pid}},
+                  {"command": "develop.beginInteraction", "params": {"label": _("AI Remove: split into masks")}}]))
+    try:
+        ids = [check(lc.run([{"command": "mask.add", "params": {"kind": "object", "seg": seg,
+                                                                "name": f"{name} {i}"}}]))[0]["result"]["activeMask"]
+               for i, seg in enumerate(segs, 1)]
+        adjust = mask.get("adjust") or {}
+        steps = [{"command": "mask.adjust", "params": {"id": i, "values": adjust}} for i in ids] if adjust else []
+        check(lc.run(steps + [{"command": "mask.delete", "params": {"id": mask["id"]}},
+                              {"command": "mask.select", "params": {"id": ids[0]}}]))
+    except BaseException:
+        lc.run([{"command": "develop.cancelInteraction", "params": {}}])
+        raise
+    check(lc.run([{"command": "develop.endInteraction", "params": {}}]))
+    log(f"{name}: split into {len(parts)} masks in {lc.name} ({', '.join(map(str, ids))})")
+    return ids
+
+
 def harmonize(cand, src, mask, sigma=None):
     """Remove the low-frequency colour/brightness offset between a fill and the photo around the mask edge
     (SDXL's VAE shifts tones a little), so the patch does not show as a lighter/darker block."""
@@ -510,22 +586,20 @@ def wait_sam(lc):
         time.sleep(2)
 
 
-def extract(lc, pid, info, targets, work):
-    """base.png = the whole uncropped photo as developed (selection happens on it; it is also the frame LightCraft's
-    masks live in), the raw DNG export (an ordinary picture: its own file), and — if there are Rimuovi masks — their
-    union in that frame (else None)."""
+def render_neutral(lc, pid, info, base_png, targets=(), mask_png=None):
+    """base_png: the whole uncropped photo as developed, without lens corrections and geometry, 2400 px long; with
+    targets, mask_png too: the same with those masks 4 stops darker (mask_from_renders tells them apart). The photo's
+    crop, lens, geometry and masks are put back afterwards."""
     dev = info["develop"]
     saved = {"crop": dev["crop"], "optics": dev["optics"], "geometry": dev["geometry"]}
     sel = {"command": "library.select", "params": {"ids": [pid], "active": pid}}
-    base_png, mask_png, dng = str(work / "base.png"), str(work / "masked.png"), str(work / "source.dng")
-    use_sam = not targets or sam_mask(targets, 4, 4) is not None  # SAM 3 selections are read, not rendered
     try:
         r = lc.run([sel,
                     {"command": "crop.set", "params": {"rect": [0, 0, 1, 1], "angle": 0}},
                     {"command": "develop.merge", "params": {"settings": {"optics": {"lens_profile": False, "distortion": 0},
                                                                         "geometry": NEUTRAL_GEOMETRY}, "label": "AI Remove (temporaneo)"}},
                     {"command": "app.export", "params": {"path": base_png, "longEdge": 2400}}]
-                   + ([] if use_sam else
+                   + ([] if not targets else
                       [{"command": "mask.adjust", "params": {"id": m["id"], "values": {"exposure": -4}}} for m in targets]
                       + [{"command": "app.export", "params": {"path": mask_png, "longEdge": 2400}}]))
         bad = [x for x in r if not x.get("ok")]
@@ -537,6 +611,33 @@ def extract(lc, pid, info, targets, work):
         restore += [{"command": "develop.merge", "params": {"settings": saved, "label": "AI Remove (ripristino)"}},
                     {"command": "mask.select", "params": {"id": None}}]
         lc.run(restore)
+
+
+def mask_selection(lc, pid, mask, work, size):
+    """One LightCraft mask of photo pid as a selection in base.png's frame (size: base.png's), or None if it selects
+    nothing: a SAM 3 mask read from its segmentation, another rendered as extract does. For a selection after the
+    Session's first (the panel: one Session per photo, a removal per mask)."""
+    w, h = size
+    m = sam_mask([mask], w, h)
+    if m is None:
+        info = lc.one("photo.inspect", {"id": pid})
+        mask = next((x for x in info["develop"]["masks"] if x["id"] == mask["id"]), mask)  # its settings now
+        base_png, mask_png = str(work / f"mask{mask['id']}-base.png"), str(work / f"mask{mask['id']}.png")
+        render_neutral(lc, pid, info, base_png, [mask], mask_png)
+        m = mask_from_renders(base_png, mask_png)
+        if m is not None and m.shape != (h, w):  # the same frame: another size only if the export rounded otherwise
+            m = np.asarray(Image.fromarray(m.astype(np.uint8) * 255).resize((w, h), Image.NEAREST)) > 127
+    return m if m is not None and m.sum() >= 20 else None
+
+
+def extract(lc, pid, info, targets, work):
+    """base.png = the whole uncropped photo as developed (selection happens on it; it is also the frame LightCraft's
+    masks live in), the raw DNG export (an ordinary picture: its own file), and — if there are Rimuovi masks — their
+    union in that frame (else None)."""
+    sel = {"command": "library.select", "params": {"ids": [pid], "active": pid}}
+    base_png, mask_png, dng = str(work / "base.png"), str(work / "masked.png"), str(work / "source.dng")
+    use_sam = not targets or sam_mask(targets, 4, 4) is not None  # SAM 3 selections are read, not rendered
+    render_neutral(lc, pid, info, base_png, () if use_sam else targets, mask_png)
     if info.get("kind") == "image":  # its pixels are the file's: nothing to export
         dng = info["source"]["path"]
     else:
@@ -746,6 +847,51 @@ def open_session(args):
     return Session(None, args, path)
 
 
+def shortcut_opens_panel():
+    """Whether the app's Ctrl+Shift+X opens the panel, else the window: "Ctrl+Shift+X opens the panel" in the window's
+    menu. On by default on Windows, where the panel is attached to the app's window; elsewhere it is an ordinary
+    window beside it, so the window stays the default there."""
+    return bool(setting("shortcut_panel", system.system() == "windows"))
+
+
+def shortcut_panel_host(args):
+    """The app that started AI Remove on its selection (its external editor: Ctrl+Shift+X), whose panel opens next to
+    it — when shortcut_opens_panel. None for a file opened on its own (no app has it selected) or without a file (the
+    Start menu): the window, as before."""
+    if not args.files or not shortcut_opens_panel():
+        return None
+    paths = [project_photo(p) for p in args.files]
+    for h in answering_hosts(args):
+        lc = LC(host=h)
+        try:
+            if selected_file(lc, paths) is not None:
+                return h
+        except Fail as e:
+            log(f"{h.name}: {e}")
+        finally:
+            lc.close()
+    return None
+
+
+def panel_link(host):
+    """Where the panel open next to that app says how to reach it: its port and token (panel.Panel.listen)."""
+    return ROOT / "work" / f"panel-{host.key}.json"
+
+
+def show_panel(host):
+    """The panel already open next to that app, asked to come forward: True when it said yes (this launch then ends,
+    and the models stay loaded once), else False (none open, or one that went away without removing its file)."""
+    try:
+        d = json.loads(panel_link(host).read_text(encoding="utf-8"))
+        # a panel that is open accepts at once; a refused port takes Windows 2 s to say so (a panel that went away)
+        with socket.create_connection(("127.0.0.1", int(d["port"])), timeout=0.5) as c:
+            c.settimeout(2)
+            c.sendall((json.dumps({"token": d["token"], "do": "show"}) + "\n").encode())
+            return c.makefile(encoding="utf-8").readline().strip() == "ok"
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def reopen(path):
     """AI Remove again, on another photo (the window's "Open photo…"): a new process, so the models and the GPU
     memory of this one go with it."""
@@ -920,7 +1066,9 @@ def shadows_touching(found, mask, scale, most=4.0):
 
 
 # ------------------------------------------------------------------------------------------------ import into LightCraft
-def import_stacked(lc, pid, info, out_path):
+def import_stacked(lc, pid, info, out_path, drop=()):
+    """The result imported, stacked on the original with its development; the masks that were only the selection
+    ("Remove…", and `drop`: the names of the masks the panel used) are deleted from the new photo."""
     res = lc.one("library.import", {"paths": [str(out_path)], "mode": "add"})
     # a file at a path that was deleted from the library before comes back from Recently Deleted as "restored"
     ids = (res.get("imported") or []) + (res.get("restored") or []) + (res.get("duplicates") or [])
@@ -936,7 +1084,7 @@ def import_stacked(lc, pid, info, out_path):
     lc.run(steps)
     new = lc.one("photo.inspect", {"id": nid})
     dels = [{"command": "mask.delete", "params": {"id": m["id"]}} for m in new["develop"]["masks"]
-            if m.get("name", "").strip().lower().startswith(MASK_PREFIXES)]
+            if m.get("name", "").strip().lower().startswith(MASK_PREFIXES) or m.get("name") in drop]
     # same albums as the original, so the new version shows up where the user is looking (smart albums refuse
     # additions and fill themselves; --keep-going lets those fail quietly)
     meta = [{"command": "album.addPhotos", "params": {"id": a, "ids": [nid]}} for a in info.get("albums") or []]
@@ -968,7 +1116,7 @@ DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20
                  "rorem_load": 20, "rorem_variant": 7,
                  "osor_load": 25, "osor_variant": 8, "shadow": 12,
                  "qwen_load": 15, "qwen_variant": 35, "dai_load": 15, "dai_variant": 8,
-                 "area": 3, "reflection_area": 1, "save": 6,
+                 "area": 3, "reflection_area": 1, "save": 6, "panel_read": 8, "panel_mask": 4,
                  # one square of a tiled fill (tiles.py), one redrawn by "Full detail", the blend of the area after
                  "flux_tile512": 13, "flux_tile768": 22, "sdxl_tile1024": 7.5, "lama_tile512": 2,
                  "rorem_tile1024": 6.5,
@@ -1074,6 +1222,7 @@ class Removal:
         self.deleted = False
         self.preview = {}  # label -> (patch uint8 HxWx3, alpha float HxW) in base.png's look and frame
         self.png = {}  # encoded images for the project file (label / "selection" / "area" -> PNG bytes)
+        self.mask_name = None  # the app's mask it was made from (the panel): not carried to the result
         self.gain = None  # render gain of this area (set once, stored in the project: variants depend on it)
         # label -> bool hole of a variant that also removed the object's shadow/reflection (OSOR; ObjectClear's in
         # projects made before 1.5):
@@ -1254,6 +1403,7 @@ class Session:
             r.gain = e.get("gain") or self.gain
             r.light, r.reflection = light, light is not None
             r.fill = bool(e.get("fill"))
+            r.mask_name = e.get("mask_name")
             for label, im, data, hole in variants:
                 r.candidates.append((label, im))
                 if data is not None:
@@ -1675,8 +1825,26 @@ class Session:
             Y0, Y1, X0, X1 = r.base_rect
             sub = out[Y0:Y1, X0:X1]
             ph, pw = sub.shape[:2]
-            sub[:] = sub * (1 - al[:ph, :pw, None]) + patch[:ph, :pw].astype(np.float32) * al[:ph, :pw, None]
+            a = al[:ph, :pw, None]
+            if r.reflects():  # light taken away: its change goes on what the removals before it made (its preview is
+                # base.png with only its own change, computed from the photo with them: drawn over, it hid them)
+                sub += (patch[:ph, :pw].astype(np.float32) - self.base_arr[Y0:Y0 + ph, X0:X0 + pw]) * a
+            else:
+                sub[:] = sub * (1 - a) + patch[:ph, :pw].astype(np.float32) * a
         return np.clip(out, 0, 255).astype(np.uint8)
+
+    def variant_view(self, r, idx=None):
+        """(patch, alpha) of candidate idx as the photo shows it (the window's tiles, the panel's thumbnails): a
+        reflection removal's change on what the removals before it made, as composite draws it; a fill as it is."""
+        patch, al = self.preview(r, idx)
+        before = [x for x in self.removals[:self.removals.index(r)] if not x.deleted and x.chosen is not None]
+        if not r.reflects() or not before:
+            return patch, al
+        Y0, Y1, X0, X1 = r.base_rect
+        h, w = patch.shape[:2]
+        under = self.composite(only=before)[Y0:Y0 + h, X0:X0 + w].astype(np.int16)
+        return np.clip(under + patch.astype(np.int16) - self.base_arr[Y0:Y0 + h, X0:X0 + w], 0, 255).astype(
+            np.uint8), al
 
     def add_candidate(self, r, label, im):
         r.candidates.append((label, im))
@@ -2357,14 +2525,15 @@ class Session:
             nid = self.dng_id
             log("saved next to the original (opened on its own: not imported into an app)")
         else:
-            nid = self._to_lightcraft(out, update)
+            nid = self._to_lightcraft(out, update, [r.mask_name for r in rs if r.mask_name])
         self.dng_path, self.dng_id = out, nid
         self.save_project()
         measured("save", time.time() - t0)
         return out, nid, update
 
-    def _to_lightcraft(self, out, update):
-        """The result just written, in LightCraft: reloaded where it already is, else imported and stacked. Its id."""
+    def _to_lightcraft(self, out, update, drop=()):
+        """The result just written, in LightCraft: reloaded where it already is, else imported and stacked (without
+        the masks named in drop: the panel's selections). Its id."""
         nid = None
         if update and self.dng_id:
             try:
@@ -2378,7 +2547,7 @@ class Session:
                          {"command": "library.select", "params": {"ids": [nid], "active": nid}}])
             log(f"reloaded in {self.lc.name} (id {nid})")
         else:
-            nid = import_stacked(self.lc, self.pid, self.info, out)
+            nid = import_stacked(self.lc, self.pid, self.info, out, drop=drop)
             log(f"imported into {self.lc.name} (id {nid}), stacked with the original, same development")
         return nid
 
@@ -2503,15 +2672,34 @@ def main():
     ap.add_argument("--auto", help=f"no window: {' | '.join(ENGINES)}[N] on the photo's Rimuovi masks")
     ap.add_argument("--shadow", action="store_true", help="--auto: remove the object's shadow and reflection too")
     ap.add_argument("--check", action="store_true", help="print a JSON report and exit")
+    ap.add_argument("--panel", action="store_true",
+                    help="the panel next to the app's window, on its active photo and its masks (what the app's "
+                         f"{SHORTCUT} opens, unless turned off in the window's menu); one per app: a second one "
+                         "brings the open one forward")
     args = ap.parse_args()
     args.raw = args.files[0] if args.files else None
     if args.check:
         return check()
+    # the panel: --panel, or the app's Ctrl+Shift+X on its selection. One per app: if it is open, it comes forward
+    # and this launch ends — before the log is emptied, which is the open panel's
+    host = None
+    if args.panel:
+        host = host_for(args)
+    elif not args.auto and args.id is None:
+        host = shortcut_panel_host(args)
+    if host is not None:
+        args.app = host.key
+        if show_panel(host):
+            log(f"a new launch from {host.name}: the panel open next to it comes forward")
+            return 0
     LOG_FILE.write_text("", encoding="utf-8")
     log(f"AI Remove {system.VERSION} started ({system.system()})",
         f"(files: {', '.join(args.files)})" if args.files else "")
     if args.auto:
         return auto(args)
+    if host is not None:
+        import panel
+        return panel.run(args)
     session = open_session(args)
     if session is None:  # no photo chosen
         log("no photo chosen")

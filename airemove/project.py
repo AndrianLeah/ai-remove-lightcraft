@@ -68,6 +68,8 @@ def save(s):
             e["hints"] = list(r.hints)
         if r.fill:  # "Draw something new": only Fill variants are made for it
             e["fill"] = True
+        if r.mask_name:  # the app's mask it was made from (the panel finds it again by it)
+            e["mask_name"] = r.mask_name
         if "selection" not in r.png:
             r.png["selection"] = mask_png(r.mask_e)
             r.png["area"] = mask_png(r.reg_mask)
