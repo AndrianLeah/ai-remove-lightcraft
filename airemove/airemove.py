@@ -439,6 +439,63 @@ def sam_mask(targets, w, h):
     return total
 
 
+SEG_SIDE = 1024  # a segmentation written for the app (seg_of): its own SAM 3 ones are 288; at 1024 it reads back exact
+
+
+def seg_of(mask):
+    """A selection (bool, base.png's frame: the uncropped photo) as the stored SAM 3 segmentation an Object mask of the
+    app takes (mask.add {kind: object, seg}), _seg_logits's format: int8 logits, SEG_SIDE x SEG_SIDE over the whole
+    photo, raw-deflated, base64. Logits from the distance to the edge, so the edge comes back where it was (read back:
+    IoU 1.0 on test shapes; the app draws it, as its own SAM 3 masks, a pixel or two softer)."""
+    h, w = mask.shape
+    sd = np.where(mask, ndi.distance_transform_edt(mask), -ndi.distance_transform_edt(~mask)).astype(np.float32)
+    small = np.asarray(Image.fromarray(sd, mode="F").resize((SEG_SIDE, SEG_SIDE), Image.BILINEAR))
+    lg = np.clip(np.round(small * (SEG_SIDE / w) * 16), -127, 127).astype(np.int8)
+    z = zlib.compressobj(9, zlib.DEFLATED, -15)
+    return {"side": SEG_SIDE, "data": base64.b64encode(z.compress(lg.tobytes()) + z.flush()).decode()}
+
+
+def mask_units(mask, w, h):
+    """The pieces an app mask was made of, at w x h: each of its added SAM 3 components (an Object click, a Describe
+    instance), for split_selection as the window's units; None when it is made of anything else (a brush, a
+    gradient) or of one piece only."""
+    comps = mask.get("components") or []
+    if len(comps) < 2 or mask.get("invert"):
+        return None
+    units = []
+    for c in comps:
+        sh = c.get("shape", {})
+        if sh.get("kind") not in ("object", "prompt") or not isinstance(sh.get("seg"), dict) or c.get("invert"):
+            return None
+        if c.get("op", "add") == "add":
+            units.append(sam_mask([{"components": [dict(c, op="add")]}], w, h))
+    return units if len(units) > 1 else None
+
+
+def split_into_masks(lc, pid, mask, parts):
+    """The app's mask replaced by one Object mask per part (the panel's "Split into masks"): "<name> 1", "<name> 2"…,
+    each with the mask's adjustments; the mask itself deleted, the first part selected in the app. The app's own
+    Undo takes it back. Returns the new masks' ids."""
+    name = mask.get("name") or _("Mask {id}", id=mask["id"])
+    sel = {"command": "library.select", "params": {"ids": [pid], "active": pid}}
+    ids = []
+    for i, part in enumerate(parts, 1):
+        r = lc.run([sel, {"command": "mask.add", "params": {"kind": "object", "seg": seg_of(part),
+                                                             "name": f"{name} {i}"}}])
+        if not r[-1].get("ok"):
+            raise Fail(f"{lc.name}: mask.add: {r[-1].get('error')}")
+        ids.append(r[-1]["result"]["activeMask"])
+    adjust = mask.get("adjust") or {}
+    steps = [sel] + ([{"command": "mask.adjust", "params": {"id": i, "values": adjust}} for i in ids] if adjust else [])
+    steps += [{"command": "mask.delete", "params": {"id": mask["id"]}},
+              {"command": "mask.select", "params": {"id": ids[0]}}]
+    bad = [x for x in lc.run(steps) if not x.get("ok")]
+    if bad:
+        raise Fail(f"{lc.name}: " + str(bad[0].get("error")))
+    log(f"{name}: split into {len(parts)} masks in {lc.name} ({', '.join(map(str, ids))})")
+    return ids
+
+
 def harmonize(cand, src, mask, sigma=None):
     """Remove the low-frequency colour/brightness offset between a fill and the photo around the mask edge
     (SDXL's VAE shifts tones a little), so the patch does not show as a lighter/darker block."""

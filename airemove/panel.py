@@ -32,7 +32,7 @@ Keys, as in the window: Enter the action, Esc Stop, ← → the variants, the ba
 
 Tests: AIREMOVE_PANEL_TEST runs steps separated by ";": wait:ms · mode:remove|fill|reflect · model:key ·
 mask:<name> · prompt:<text> · variants:n · generate · waitvars:n · pick:i · step:±1 · list:<id> · original:0|1 ·
-info · stop · save · waitidle · drag:dx,dy · dock · menu[:close] · discard · full · window[:closed] · wshot:n ·
+info · stop · split · save · waitidle · drag:dx,dy · dock · menu[:close] · discard · full · window[:closed] · wshot:n ·
 wtab:<tab> · wback · shot:n · pshot:n · quit."""
 import os
 import queue
@@ -328,8 +328,11 @@ class Panel:
                              on_change=lambda: (A.remember("variants", int(self.count.get())), self.update_buttons()))
         self.count.configure(bg=CARD)
         self.count.pack(side="right")
-        # 6 · the action
+        # 6 · the action; in Remove, a mask with nothing made of it yet can first be split, in the app, into one mask
+        # per part (the window's "Split into parts", for the app's masks): each a selection here, with its own model
         self.gen_btn = self.button(body, "", self.generate, accent=True)
+        self.split_btn = self.button(body, "✂  " + _("Split into masks in {app}: one per part", app=self.host.name),
+                                     self.split_masks, small=True)
         # 7 · progress: one bar for the whole job, what it does, Stop (Esc)
         self.prog_box = tk.Frame(body, bg=CARD)
         self.bar = ttk.Progressbar(self.prog_box, mode="determinate", maximum=1000, value=0,
@@ -390,6 +393,7 @@ class Panel:
         self.full_btn.pack(side="left", padx=(int(4 * k), 0))
         self.parts = [(self.tabs, {}), (self.sel_box, {}), (self.whole_box, {}), (self.model_box, {}),
                       (self.prompt_box, {}), (self.n_box, {}), (self.gen_btn, {"pady": (int(12 * k), 0)}),
+                      (self.split_btn, {"pady": (int(5 * k), 0)}),
                       (self.prog_box, {"pady": (int(6 * k), 0)}), (self.var_box, {}), (self.photo_box, {}),
                       (self.list_box, {}), (self.bottom, {"pady": (int(12 * k), 0)})]
         self.model_var.trace_add("write", lambda *a: self.on_model_change())  # also when set by code
@@ -417,9 +421,10 @@ class Panel:
         r = self.cur[2] if self.cur else None
         s = self.session_for(self.photo[0])[1] if self.photo else None
         working = self.job is not None or bool(self.status.cget("text"))  # the bar, or something to say
+        splits = self.mode == "remove" and self.chosen_mask() is not None and r is None
         shown = (True, self.mode != "reflect", self.mode == "reflect", True, self.prompt_mode is not None,
-                 self.model_key() not in ("lama", "dai"), True, working, r is not None, bool(self.chosen_removals(s)),
-                 bool(s and any(not x.deleted for x in s.removals)), True)
+                 self.model_key() not in ("lama", "dai"), True, splits, working, r is not None,
+                 bool(self.chosen_removals(s)), bool(s and any(not x.deleted for x in s.removals)), True)
         if shown == self._shown:
             return
         self._shown = shown
@@ -586,6 +591,7 @@ class Panel:
                                 text=_("Update in {app}", app=self.host.name) if s and s.dng_path else
                                 _("Save to {app}", app=self.host.name))
         self.del_btn.configure(state="normal" if self.cur is not None and ready else "disabled")
+        self.split_btn.configure(state="normal" if ready else "disabled")
         self.full_btn.configure(state="normal" if ready else "disabled")
         self.status_dot.configure(fg=ACCENT if self.busy else ("#4a9c63" if self.photo else DIM))
         if self.busy and not self.stop_btn.winfo_manager():
@@ -764,6 +770,41 @@ class Panel:
                        self.n_variants(), target))
         self.update_buttons()
 
+    def split_masks(self):
+        """"Split into masks": the mask chosen, replaced in the app by one Object mask per part (run_split)."""
+        mask = self.chosen_mask_dict()
+        if self.busy or not self.photo or mask is None:
+            return
+        self.busy = True
+        self.jobs.put(("split", self.photo[0], mask))
+        self.update_buttons()
+
+    def run_split(self, pid, mask):
+        """The worker's part: the mask's selection (the photo read first if it was not), its parts as the window splits
+        a selection (airemove.split_selection; a mask of several Object clicks: along them), then the app's masks
+        (airemove.split_into_masks). One part: nothing changes, and the panel says so."""
+        base, s = self.session_for(pid)
+        label = _("Splitting the selection")
+        self.events.put(("job_start", (label, 2.0 + (A.expected("panel_read") if s is None else
+                                                      A.expected("panel_mask")))))
+        self.events.put(("job_part", (label, 0.0, 2.0)))
+        if s is None:
+            s = self.sessions[base] = self.read(pid, mask["id"])
+            sel = s.init_mask
+        else:
+            sel = A.mask_selection(self.lc, pid, mask, s.work, s.base.size)
+        if sel is None:
+            raise A.Fail(_("The mask selects nothing AI Remove can read: choose another, or make an Object mask."))
+        h, w = sel.shape
+        parts = A.split_selection(sel, s.base_scale, units=A.mask_units(mask, w, h))
+        name = mask.get("name") or _("Mask {id}", id=mask["id"])
+        if len(parts) < 2:
+            self.events.put(("progress", _("{name} is one part: nothing to split", name=name)))
+            return
+        A.split_into_masks(self.lc, pid, mask, parts)
+        self.events.put(("progress", _("{name} split into {n} masks in {app}: each one a selection here, with its own "
+                                       "model", name=name, n=len(parts), app=self.host.name)))
+
     def stop_jobs(self):
         """Stop (Esc), as in the window: what runs ends at its next step, the variants made stay; what waits goes
         (but a save)."""
@@ -826,6 +867,8 @@ class Panel:
                                                     file=out.name, app=self.host.name)) + " ✓"))
                 elif job[0] == "window":
                     self.prepare_window(*job[1:])
+                elif job[0] == "split":
+                    self.run_split(*job[1:])
             except A.Stopped:
                 self.events.put(("progress", _("Stopped: the variants already made are kept")))
             except A.Fail as e:
@@ -1456,6 +1499,8 @@ class Panel:
             self.toggle_info()
         elif kind == "stop":
             self.stop_jobs()
+        elif kind == "split":
+            self.split_masks()
         elif kind == "save":
             self.save()
         elif kind == "drag":  # as dragging the header by dx,dy pixels and letting go
