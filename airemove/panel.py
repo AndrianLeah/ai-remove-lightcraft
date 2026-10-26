@@ -40,7 +40,7 @@ from pathlib import Path
 from tkinter import ttk
 
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image, ImageOps, ImageTk
 
 import airemove as A
 import engines
@@ -162,6 +162,7 @@ class Panel:
         self.overlays = queue.Queue()
         self.layout_before, self.overlay_files, self.overlay_n = None, [], 0
         self.overlay_shown = None  # (removal, variant) on the photo now
+        self.overlay_problem = None  # why the variants cannot be drawn on this photo (overlay_png), said under them
         self.closing = False
         self.mode, self.mask_id = "remove", None
         # where it was dragged to: its top-left from the app window's top-left (it moves with the app); None: docked at
@@ -314,9 +315,8 @@ class Panel:
                                            variable=self.on_photo, command=self.on_photo_toggled, font=self.f_small,
                                            bg=CARD, fg=FG, activebackground=CARD, activeforeground=FG,
                                            selectcolor=BTN, highlightthickness=0, bd=0, anchor="w", cursor="hand2")
-        self.on_photo_note = tk.Label(body, text=_("It shows when {app} fits the whole photo in the view (not zoomed "
-                                                   "in, not cropping).", app=self.host.name),
-                                      font=self.f_small, fg=DIM, bg=CARD, anchor="w", justify="left",
+        # why it is not drawn there now: the app's view (update_buttons), or the photo itself (overlay_png)
+        self.on_photo_note = tk.Label(body, text="", font=self.f_small, fg=DIM, bg=CARD, anchor="w", justify="left",
                                       wraplength=self.width - 2 * pad)
         bottom = self.bottom = tk.Frame(body, bg=CARD)
         bottom.pack(fill="x", pady=(8, 0))
@@ -471,10 +471,13 @@ class Panel:
         self.status_dot.configure(fg=ACCENT if self.busy else ("#4a9c63" if self.photo else DIM))
         # under the variants: the checkbox for the photo in the app, why it is not drawn there now, what Save writes
         n = len(live)
-        below = (bool(live), bool(live) and self.on_photo.get() and not self.photo[4],
-                 bool(n) and (self.cur is None or n > 1), n)
+        not_drawn = self.overlay_problem or (None if self.photo is None or self.photo[4] else _(
+            "It shows when {app} fits the whole photo in the view (not zoomed in, not cropping).", app=self.host.name))
+        below = (bool(live), bool(live) and self.on_photo.get() and bool(not_drawn),
+                 bool(n) and (self.cur is None or n > 1), n, not_drawn)
         if below != self._below:
             self._below = below
+            self.on_photo_note.configure(text=not_drawn or "")
             self.save_note.configure(text=_n("Save writes {n} removal on this photo (the full window lists it).",
                                              "Save writes {n} removals on this photo (the full window lists them).",
                                              n))
@@ -606,6 +609,8 @@ class Panel:
                     self.sync_cur()
             elif kind == "window":
                 self.open_window(*data)
+            elif kind == "overlay_problem":
+                self.overlay_problem = data
             elif kind == "done":
                 self.busy, self.job = False, None
                 self.bar.pack_forget()
@@ -895,29 +900,31 @@ class Panel:
             if shown is not None and shown == self.overlay_shown and self.layout_before is not None:
                 continue  # already on the photo (another mask clicked in the app, the same variants)
             try:
-                path = self.overlay_png(*want) if want else None
+                path, problem = self.overlay_png(*want) if want else (None, None)
                 if path and not self.closing:
                     self.put_layout(path)
                     self.overlay_shown = shown
                 else:
                     self.take_layout()
                     self.overlay_shown = None
+                if problem != self.overlay_problem:
+                    self.events.put(("overlay_problem", problem))
             except Exception as e:
                 A.log("panel on the photo:", repr(e))
 
     def overlay_png(self, s, rs, pid):
         """The removals' chosen variants as the app shows photo pid: transparent but where they change it (their
-        blends, one over the other as Session.composite), cut to the app's crop, as a PNG in the Session's folder.
-        None where the app's view cannot be matched: a rotated or flipped crop, Upright or a transform (base.png is
-        without them). A lens profile is not undone in base.png either: near the edges of a wide lens a variant may
-        sit a pixel or two off."""
+        blends, one over the other as Session.composite), as the app crops it, as a PNG in the Session's folder:
+        (path, None), or (None, why) where the app's view cannot be matched — its Geometry (Upright, perspective,
+        scale, offsets), which base.png is without. A lens profile is not undone in base.png either: near the edges of
+        a wide lens a variant may sit a pixel or two off."""
         dev = self.lc.one("photo.inspect", {"id": pid})["develop"]
         crop, geo = dev["crop"], dev.get("geometry") or {}
         g = crop["geometry"]
-        if (g.get("angle") or crop.get("flip_h") or crop.get("flip_v")
-                or any(geo.get(k, v) != v for k, v in A.NEUTRAL_GEOMETRY.items())):
-            A.log("panel: not shown on the photo (a rotated or flipped crop, or a geometry transform)")
-            return None
+        if any(geo.get(k, v) != v for k, v in A.NEUTRAL_GEOMETRY.items()):
+            A.log("panel: not shown on the photo (its Geometry)")
+            return None, _("Not shown on this photo: its Geometry (Upright, perspective…) moves it in {app}. Save "
+                           "shows the result.", app=self.host.name)
         h, w = s.base_arr.shape[:2]
         rgb, alpha = np.zeros((h, w, 3), np.float32), np.zeros((h, w), np.float32)  # premultiplied
         for r in rs:
@@ -931,14 +938,22 @@ class Panel:
         rgba = np.zeros((h, w, 4), np.uint8)
         rgba[..., :3] = np.clip(rgb / np.maximum(alpha, 1e-6)[..., None], 0, 255).astype(np.uint8)
         rgba[..., 3] = np.clip(alpha * 255, 0, 255).astype(np.uint8)
+        # the app's crop, as lightcraft-cli renders it (measured): the whole photo turned about its centre by the angle
+        # (clockwise when positive) on the same canvas, the rect cut from that, then the flips
+        im = Image.fromarray(rgba, "RGBA")
+        if g.get("angle"):
+            im = im.rotate(-g["angle"], resample=Image.BICUBIC)
         c = g["rect"]
-        im = Image.fromarray(rgba, "RGBA").crop((round(c["x0"] * w), round(c["y0"] * h), round(c["x1"] * w),
-                                                 round(c["y1"] * h)))
+        im = im.crop((round(c["x0"] * w), round(c["y0"] * h), round(c["x1"] * w), round(c["y1"] * h)))
+        if crop.get("flip_h"):
+            im = ImageOps.mirror(im)
+        if crop.get("flip_v"):
+            im = ImageOps.flip(im)
         self.overlay_n += 1
         path = s.work / f"on-photo-{self.overlay_n}.png"  # a new name each time: the app reads it again
         im.save(path)
         self.overlay_files.append(path)
-        return path
+        return path, None
 
     def put_layout(self, path):
         if self.layout_before is None:  # the app's own setting, put back by take_layout

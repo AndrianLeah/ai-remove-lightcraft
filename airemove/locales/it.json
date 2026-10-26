@@ -167,6 +167,7 @@
   "not installed yet, nothing set up: once it is (and has been opened once), run the configuration again (install --configure-lightcraft)": "non ancora installato, non configuro niente: quando lo sarà (e l'avrai aperto una volta), riesegui la configurazione (install --configure-lightcraft)",
   "Not made yet: choose a model above, then \"Generate #{id}\"": "Non ancora fatta: scegli un modello qui sopra, poi \"Genera #{id}\"",
   "not reachable now": "non raggiungibile adesso",
+  "Not shown on this photo: its Geometry (Upright, perspective…) moves it in {app}. Save shows the result.": "Non si vede su questa foto: la sua Geometria (Upright, prospettiva…) la sposta in {app}. Salva mostra il risultato.",
   "Nothing found for \"{what}\": a plain name in English works best (person, car, sign)": "Non trovo \"{what}\": funziona meglio un nome semplice in inglese (person, car, sign)",
   "Object": "Oggetto",
   "On a long thin hole (a pole) it can leave a seam: there LaMa or FLUX Fill.": "Su un buco lungo e sottile (un palo) può lasciare una giuntura: lì LaMa o FLUX Fill.",
