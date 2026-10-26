@@ -518,22 +518,20 @@ def wait_sam(lc):
         time.sleep(2)
 
 
-def extract(lc, pid, info, targets, work):
-    """base.png = the whole uncropped photo as developed (selection happens on it; it is also the frame LightCraft's
-    masks live in), the raw DNG export (an ordinary picture: its own file), and — if there are Rimuovi masks — their
-    union in that frame (else None)."""
+def render_neutral(lc, pid, info, base_png, targets=(), mask_png=None):
+    """base_png: the whole uncropped photo as developed, without lens corrections and geometry, 2400 px long; with
+    targets, mask_png too: the same with those masks 4 stops darker (mask_from_renders tells them apart). The photo's
+    crop, lens, geometry and masks are put back afterwards."""
     dev = info["develop"]
     saved = {"crop": dev["crop"], "optics": dev["optics"], "geometry": dev["geometry"]}
     sel = {"command": "library.select", "params": {"ids": [pid], "active": pid}}
-    base_png, mask_png, dng = str(work / "base.png"), str(work / "masked.png"), str(work / "source.dng")
-    use_sam = not targets or sam_mask(targets, 4, 4) is not None  # SAM 3 selections are read, not rendered
     try:
         r = lc.run([sel,
                     {"command": "crop.set", "params": {"rect": [0, 0, 1, 1], "angle": 0}},
                     {"command": "develop.merge", "params": {"settings": {"optics": {"lens_profile": False, "distortion": 0},
                                                                         "geometry": NEUTRAL_GEOMETRY}, "label": "AI Remove (temporaneo)"}},
                     {"command": "app.export", "params": {"path": base_png, "longEdge": 2400}}]
-                   + ([] if use_sam else
+                   + ([] if not targets else
                       [{"command": "mask.adjust", "params": {"id": m["id"], "values": {"exposure": -4}}} for m in targets]
                       + [{"command": "app.export", "params": {"path": mask_png, "longEdge": 2400}}]))
         bad = [x for x in r if not x.get("ok")]
@@ -545,6 +543,33 @@ def extract(lc, pid, info, targets, work):
         restore += [{"command": "develop.merge", "params": {"settings": saved, "label": "AI Remove (ripristino)"}},
                     {"command": "mask.select", "params": {"id": None}}]
         lc.run(restore)
+
+
+def mask_selection(lc, pid, mask, work, size):
+    """One LightCraft mask of photo pid as a selection in base.png's frame (size: base.png's), or None if it selects
+    nothing: a SAM 3 mask read from its segmentation, another rendered as extract does. For a selection after the
+    Session's first (the panel: one Session per photo, a removal per mask)."""
+    w, h = size
+    m = sam_mask([mask], w, h)
+    if m is None:
+        info = lc.one("photo.inspect", {"id": pid})
+        mask = next((x for x in info["develop"]["masks"] if x["id"] == mask["id"]), mask)  # its settings now
+        base_png, mask_png = str(work / f"mask{mask['id']}-base.png"), str(work / f"mask{mask['id']}.png")
+        render_neutral(lc, pid, info, base_png, [mask], mask_png)
+        m = mask_from_renders(base_png, mask_png)
+        if m is not None and m.shape != (h, w):  # the same frame: another size only if the export rounded otherwise
+            m = np.asarray(Image.fromarray(m.astype(np.uint8) * 255).resize((w, h), Image.NEAREST)) > 127
+    return m if m is not None and m.sum() >= 20 else None
+
+
+def extract(lc, pid, info, targets, work):
+    """base.png = the whole uncropped photo as developed (selection happens on it; it is also the frame LightCraft's
+    masks live in), the raw DNG export (an ordinary picture: its own file), and — if there are Rimuovi masks — their
+    union in that frame (else None)."""
+    sel = {"command": "library.select", "params": {"ids": [pid], "active": pid}}
+    base_png, mask_png, dng = str(work / "base.png"), str(work / "masked.png"), str(work / "source.dng")
+    use_sam = not targets or sam_mask(targets, 4, 4) is not None  # SAM 3 selections are read, not rendered
+    render_neutral(lc, pid, info, base_png, () if use_sam else targets, mask_png)
     if info.get("kind") == "image":  # its pixels are the file's: nothing to export
         dng = info["source"]["path"]
     else:
@@ -978,7 +1003,7 @@ DEFAULT_TIMES = {"lama": 16, "sdxl_load": 25, "sdxl_variant": 8, "flux_load": 20
                  "rorem_load": 20, "rorem_variant": 7,
                  "osor_load": 25, "osor_variant": 8, "shadow": 12,
                  "qwen_load": 15, "qwen_variant": 35, "dai_load": 15, "dai_variant": 8,
-                 "area": 3, "reflection_area": 1, "save": 6, "panel_read": 8,
+                 "area": 3, "reflection_area": 1, "save": 6, "panel_read": 8, "panel_mask": 4,
                  # one square of a tiled fill (tiles.py), one redrawn by "Full detail", the blend of the area after
                  "flux_tile512": 13, "flux_tile768": 22, "sdxl_tile1024": 7.5, "lama_tile512": 2,
                  "rorem_tile1024": 6.5,
@@ -1084,6 +1109,7 @@ class Removal:
         self.deleted = False
         self.preview = {}  # label -> (patch uint8 HxWx3, alpha float HxW) in base.png's look and frame
         self.png = {}  # encoded images for the project file (label / "selection" / "area" -> PNG bytes)
+        self.mask_name = None  # the app's mask it was made from (the panel): not carried to the result
         self.gain = None  # render gain of this area (set once, stored in the project: variants depend on it)
         # label -> bool hole of a variant that also removed the object's shadow/reflection (OSOR; ObjectClear's in
         # projects made before 1.5):
@@ -1206,7 +1232,6 @@ class Session:
         self._area_lock = threading.RLock()  # the working sensor data and the areas rendered from it
         self._work_cfa, self._work_key = None, None
         self.dng_path, self.dng_id, self.restored = None, None, None
-        self.used_masks = []  # names of the app's masks the panel used as the selection: not carried to the result
 
     # -------------------------------------------------------------- photo
     def find(self):
@@ -2368,14 +2393,15 @@ class Session:
             nid = self.dng_id
             log("saved next to the original (opened on its own: not imported into an app)")
         else:
-            nid = self._to_lightcraft(out, update)
+            nid = self._to_lightcraft(out, update, [r.mask_name for r in rs if r.mask_name])
         self.dng_path, self.dng_id = out, nid
         self.save_project()
         measured("save", time.time() - t0)
         return out, nid, update
 
-    def _to_lightcraft(self, out, update):
-        """The result just written, in LightCraft: reloaded where it already is, else imported and stacked. Its id."""
+    def _to_lightcraft(self, out, update, drop=()):
+        """The result just written, in LightCraft: reloaded where it already is, else imported and stacked (without
+        the masks named in drop: the panel's selections). Its id."""
         nid = None
         if update and self.dng_id:
             try:
@@ -2389,7 +2415,7 @@ class Session:
                          {"command": "library.select", "params": {"ids": [nid], "active": nid}}])
             log(f"reloaded in {self.lc.name} (id {nid})")
         else:
-            nid = import_stacked(self.lc, self.pid, self.info, out, drop=self.used_masks)
+            nid = import_stacked(self.lc, self.pid, self.info, out, drop=drop)
             log(f"imported into {self.lc.name} (id {nid}), stacked with the original, same development")
         return nid
 

@@ -27,7 +27,6 @@ mask:<name> · prompt:<text> · variants:n · generate · waitvars:n · pick:i �
 menu[:close] · shot:n · quit."""
 import os
 import queue
-import subprocess
 import sys
 import threading
 import time
@@ -43,9 +42,9 @@ import airemove as A
 import engines
 import system
 import ui
-from i18n import N_, _
-from ui import (ACCENT, BG, BTN, BTN_HI, CARD, CARD_HI, DIM, FG, FILL_MENU, LINE, PROMPT_MODE, WARN, HintEntry,
-                ModelPicker, model_meta)
+from i18n import N_, _, _n
+from ui import (ACCENT, BG, BTN, BTN_HI, CARD, CARD_HI, DIM, FG, LINE, PROMPT_MODE, TABS, WARN, HintEntry, ModelPicker,
+                model_meta, tab_of)
 
 # the text field's label and grey hint for each kind of text (PROMPT_MODE): the window's own texts
 PROMPT_TEXTS = {"fill": (N_("What to put there (optional)"), N_("in English, e.g. dark doorway, old plaster wall")),
@@ -55,12 +54,6 @@ PROMPT_TEXTS = {"fill": (N_("What to put there (optional)"), N_("in English, e.g
                          N_("in English, e.g. a wooden bench, a lemon tree in a terracotta pot"))}
 
 WIDTH = 330  # the panel's width, at 96 dpi
-MODES = ("remove", "fill", "reflect")
-
-
-def mode_title(mode):
-    return {"remove": _("Remove"), "fill": _("Fill"), "reflect": _("Reflections")}[mode]
-
 
 # ------------------------------------------------------------------------------------------------ the tether (Windows)
 class Tether:
@@ -147,10 +140,14 @@ class Panel:
         self.lc = A.LC(host=self.host)
         self.events, self.jobs = queue.Queue(), queue.Queue()
         self.photo = None  # (pid, file name, masks) of the app's active photo
-        # each selection's variants, (photo, mask, tab) -> (Session, Removal), kept until the panel is closed; the ones
-        # shown are the selection's now (sync_cur), and Save writes those into the photo's new version
-        self.gens = {}
+        # one Session per photo, as in the window: the photo's removals (its project, its DNG), one per selection made
+        # here — (photo, mask, tab) -> Removal — kept until the panel is closed. The ones shown are the selection's now
+        # (sync_cur); Save writes every removal with a chosen variant, as the photo in the app shows them
+        self.sessions, self.gens = {}, {}
         self.cur = None  # (key, Session, Removal) of the selection now, if it has variants
+        self.saved = {}  # Session -> what its last save wrote, {Removal: (variant, strength)}: its DNG has those
+        self.window = None  # AI Remove's window while it is open, in this process (full_window)
+        self._below = None  # which of the lines under the variants are shown (update_buttons)
         self.engines = {}  # Session attribute -> engine, kept loaded from one photo's Session to the next
         self.busy = False
         self.job, self.task = None, ""  # the generation's progress plan (the window's update_progress)
@@ -239,20 +236,23 @@ class Panel:
         self.photo_lbl = tk.Label(body, text=_("Waiting for {app}…", app=self.host.name), font=self.f_small, fg=DIM,
                                   bg=CARD, anchor="w", justify="left", wraplength=self.width - 2 * pad)
         self.photo_lbl.pack(fill="x", pady=(0, 8))
-        tabs = tk.Frame(body, bg=BTN)
+        tabs = self.tabs = tk.Frame(body, bg=BTN)
         tabs.pack(fill="x")
         self.tab_btns = {}
-        for mode in MODES:
-            b = self.button(tabs, mode_title(mode), lambda m=mode: self.set_mode(m))
+        for mode, (title, __) in TABS.items():  # the window's tabs (ui.TABS)
+            b = self.button(tabs, _(title), lambda m=mode: self.set_mode(m))
             b.pack(side="left", fill="x", expand=True)
             self.tab_btns[mode] = b
-        # the selection: one of the photo's masks in the app
-        self.label(body, _("Selection: a mask of the photo in {app}", app=self.host.name))
+        # the selection: one of the photo's masks in the app (none in Reflections: the whole photo, as Lightroom's
+        # Remove Reflections)
+        self.sel_box = tk.Frame(body, bg=CARD)
+        self.sel_box.pack(fill="x")
+        self.label(self.sel_box, _("Selection: a mask of the photo in {app}", app=self.host.name))
         self.mask_var = tk.StringVar(value="")
-        self.mask_menu = tk.OptionMenu(body, self.mask_var, "")
+        self.mask_menu = tk.OptionMenu(self.sel_box, self.mask_var, "")
         self.style_menu(self.mask_menu)
         self.mask_menu.pack(fill="x")
-        self.mask_note = tk.Label(body, text="", font=self.f_small, fg=WARN, bg=CARD, anchor="w", justify="left",
+        self.mask_note = tk.Label(self.sel_box, text="", font=self.f_small, fg=WARN, bg=CARD, anchor="w", justify="left",
                                   wraplength=self.width - 2 * pad)
         # between the selection and the button, the parts that make sense for the mode and model (layout_boxes): the
         # model, the text, the number of variants, the reflection's strength
@@ -288,6 +288,8 @@ class Panel:
                                  troughcolor=BTN, highlightthickness=0, bd=0, font=self.f_small)
         self.strength.pack(fill="x")
         self.strength.set(75)
+        # Lightroom's Amount: also after the reflection was found, nothing runs again (strength_done)
+        self.strength.bind("<ButtonRelease-1>", lambda e: self.strength_done())
         self.gen_btn = self.button(body, "", self.generate, accent=True)
         self.gen_btn.pack(fill="x", pady=(10, 0))
         # while it works, as in the window: a bar, then what it is doing, how far it is and the time still to go
@@ -314,8 +316,14 @@ class Panel:
                                       wraplength=self.width - 2 * pad)
         bottom = self.bottom = tk.Frame(body, bg=CARD)
         bottom.pack(fill="x", pady=(8, 0))
+        # what Save writes when it is more than the selection shown: the photo's other removals (made for another
+        # mask, in the window, or in an earlier session: its project)
+        self.save_note = tk.Label(body, text="", font=self.f_small, fg=DIM, bg=CARD, anchor="w", justify="left",
+                                  wraplength=self.width - 2 * pad)
         self.save_btn = self.button(bottom, _("Save to {app}", app=self.host.name), self.save)
         self.save_btn.pack(side="left", fill="x", expand=True)
+        self.del_btn = self.button(bottom, _("Delete removal"), self.discard, small=True)  # the selection's variants
+        self.del_btn.pack(side="left", padx=(4, 0))
         self.full_btn = self.button(bottom, _("Full window"), self.full_window, small=True)
         self.full_btn.pack(side="left", padx=(4, 0))
         self.model_var.trace_add("write", lambda *a: self.on_model_change())  # also when set by code
@@ -346,11 +354,7 @@ class Panel:
 
     # -------------------------------------------------------------- modes and choices
     def models_for(self, mode):
-        if mode == "remove":
-            return [m for m in FILL_MENU if m == "lama" or engines.usable(m)]
-        if mode == "fill":
-            return ["fill"] if engines.usable("fill") else []
-        return ["dai"] if engines.usable("dai") else []
+        return [m for m in TABS[mode][1] if m == "lama" or engines.usable(m)]
 
     def set_mode(self, mode):
         self.mode = mode
@@ -363,7 +367,7 @@ class Panel:
         for w in (self.model_lbl, self.picker, self.model_note):
             w.pack_forget()
         if len(models) > 1:  # Remove: the menu, on the model chosen last time (RORem at first)
-            last = A.setting("panel_model", "rorem")
+            last = A.setting("model_remove", "rorem")  # the window's too
             cur = last if last in models else ("rorem" if "rorem" in models else models[0])
             self.picker.set_models(meta, models)
             self.model_lbl.pack(fill="x", pady=(8, 2))
@@ -375,6 +379,10 @@ class Panel:
             self.model_note.pack(fill="x", pady=(8, 0))
         self.gen_btn.configure(text={"remove": _("Remove the selection"), "fill": _("Draw in the selection"),
                                      "reflect": _("Remove reflections")}[mode])
+        if mode == "reflect":  # the whole photo: no selection
+            self.sel_box.pack_forget()
+        elif not self.sel_box.winfo_manager():
+            self.sel_box.pack(fill="x", after=self.tabs)
         self.refresh_masks()
         self.model_var.set(self.model_labels[cur] if cur else "")  # on_model_change: the text, the boxes
         self.sync_cur()  # each tab has its own variants
@@ -384,7 +392,7 @@ class Panel:
         if self.picker.winfo_manager():
             self.picker.show()
             if m:
-                A.remember("panel_model", m)
+                A.remember("model_remove", m)
         self.apply_prompt_mode()
         self.layout_boxes()
         self.update_buttons()
@@ -426,10 +434,7 @@ class Panel:
 
     def mask_options(self):
         masks = self.photo[2] if self.photo else []
-        opts = [(f"{m.get('name') or _('Mask {id}', id=m['id'])}  ·  {kind_of(m)}", m["id"]) for m in masks]
-        if self.mode == "reflect":
-            opts.insert(0, (_("The whole photo"), None))
-        return opts
+        return [(f"{m.get('name') or _('Mask {id}', id=m['id'])}  ·  {kind_of(m)}", m["id"]) for m in masks]
 
     def refresh_masks(self):
         opts = self.mask_options()
@@ -443,16 +448,52 @@ class Panel:
             self.mask_note.pack_forget()
 
     def chosen_mask(self):
+        if self.mode == "reflect":  # the whole photo
+            return None
         return dict(self.mask_options()).get(self.mask_var.get())
 
     def update_buttons(self):
         ready = self.photo is not None and not self.busy
         has_mask = bool(self.mask_options())
-        self.gen_btn.configure(state="normal" if ready and has_mask and self.model_key() else "disabled")
-        live = self.cur is not None and self.cur[2].candidates and self.cur[2].chosen is not None
-        self.save_btn.configure(state="normal" if live and not self.busy else "disabled")
-        self.full_btn.configure(state="normal" if self.photo else "disabled")
+        self.gen_btn.configure(state="normal" if ready and (has_mask or self.mode == "reflect") and self.model_key()
+                               else "disabled")
+        s = self.session_for(self.photo[0])[1] if self.photo else None
+        live = self.chosen_removals(s)
+        self.save_btn.configure(state="normal" if live and ready else "disabled",
+                                text=_("Update in {app}", app=self.host.name) if s and s.dng_path else
+                                _("Save to {app}", app=self.host.name))
+        self.del_btn.configure(state="normal" if self.cur is not None and ready else "disabled")
+        self.full_btn.configure(state="normal" if ready else "disabled")
         self.status_dot.configure(fg=ACCENT if self.busy else ("#4a9c63" if self.photo else DIM))
+        # under the variants: the checkbox for the photo in the app, why it is not drawn there now, what Save writes
+        n = len(live)
+        below = (bool(live), bool(live) and self.on_photo.get() and not self.photo[4],
+                 bool(n) and (self.cur is None or n > 1), n)
+        if below != self._below:
+            self._below = below
+            self.save_note.configure(text=_n("Save writes {n} removal on this photo (the full window lists it).",
+                                             "Save writes {n} removals on this photo (the full window lists them).",
+                                             n))
+            for w in (self.on_photo_chk, self.on_photo_note, self.save_note):
+                w.pack_forget()
+            for w, on in zip((self.on_photo_chk, self.on_photo_note, self.save_note), below):
+                if on:
+                    w.pack(fill="x", pady=(6, 0), before=self.bottom)
+
+    @staticmethod
+    def chosen_removals(s):
+        """A Session's removals with a chosen variant: what its save writes, and what the photo in the app shows."""
+        return [r for r in s.removals if not r.deleted and r.chosen is not None] if s is not None else []
+
+    def session_for(self, pid):
+        """(the photo's id here, its Session or None). A result saved from a Session (its DNG, which the app shows
+        after a save) is that Session's photo too: what is made on it goes into the same DNG."""
+        if pid in self.sessions:
+            return pid, self.sessions[pid]
+        for base, s in self.sessions.items():
+            if s.dng_id is not None and s.dng_id == pid:
+                return base, s
+        return pid, None
 
     # -------------------------------------------------------------- following the app
     def follow(self):
@@ -464,7 +505,7 @@ class Panel:
             if t.hwnd:
                 t.own(self.root_hwnd())
         if t.hwnd and self._drag is None:
-            if t.minimized():
+            if t.minimized() or self.window is not None:  # the app minimized, or the full window open
                 self.root.withdraw()
             else:
                 left, top, right, bottom = t.rect()
@@ -559,6 +600,8 @@ class Panel:
             elif kind == "thumbs":  # new variants for a selection: shown if it is the one now
                 if data == self.current_key():
                     self.sync_cur()
+            elif kind == "window":
+                self.open_window(*data)
             elif kind == "done":
                 self.busy, self.job = False, None
                 self.bar.pack_forget()
@@ -580,17 +623,28 @@ class Panel:
             self.prompt.focus_set()
             return
         self.busy = True
-        self.jobs.put(("generate", self.photo[0], self.chosen_mask(), self.mode, model, prompt, self.n_var.get(),
-                       self.strength.get() / 100))
+        self.jobs.put(("generate", self.photo[0], self.chosen_mask_dict(), self.mode, model, prompt,
+                       self.n_var.get(), self.strength.get() / 100))
         self.update_buttons()
 
     def save(self):
-        if self.busy or self.cur is None:
+        s = self.session_for(self.photo[0])[1] if self.photo else None
+        if self.busy or not self.chosen_removals(s):
             return
         self.busy = True
         self.overlays.put(None)  # the DNG shows the result itself
-        self.jobs.put(("save", self.cur[1]))  # this selection's variant only: its Session has no other removal
+        self.jobs.put(("save", s))  # every removal with a chosen variant, as the photo showed them
         self.update_buttons()
+
+    def discard(self):
+        """The selection's variants go, as the window's "Delete removal": off the photo and out of the save."""
+        if self.cur is None or self.busy:
+            return
+        key, s, r = self.cur
+        r.deleted = True
+        self.gens.pop(key, None)
+        threading.Thread(target=s.save_project, daemon=True).start()  # the project follows, as in the window
+        self.sync_cur()
 
     def worker(self):
         while True:
@@ -600,12 +654,17 @@ class Panel:
                     self.run_generate(*job[1:])
                 elif job[0] == "save":
                     s = job[1]
-                    self.events.put(("job_start", (_("Saving the DNG and stacking it in {app}…", app=self.host.name),
-                                                   A.expected("save"))))
-                    s.save_project()
-                    out, nid, __ = s.write_all()
-                    self.events.put(("progress", _("Saved: {file}, stacked on the original in {app}.",
-                                                   file=Path(out).name, app=self.host.name)))
+                    label = _("Saving the DNG and stacking it in {app}…", app=self.host.name)
+                    self.events.put(("job_start", (label, A.expected("save"))))
+                    self.events.put(("job_part", (label, 0.0, A.expected("save"))))
+                    out, nid, updated = s.write_all()
+                    self.saved[s] = {r: (r.chosen, r.strength) for r in self.chosen_removals(s)}
+                    self.events.put(("progress", (_("{file} updated in {app}", file=out.name, app=self.host.name)
+                                                  if updated else
+                                                  _("{file} created and stacked on the original in {app}",
+                                                    file=out.name, app=self.host.name)) + " ✓"))
+                elif job[0] == "window":
+                    self.prepare_window(*job[1:])
             except A.Fail as e:
                 self.events.put(("error", str(e)))
             except Exception as e:
@@ -616,24 +675,29 @@ class Panel:
             finally:
                 self.events.put(("done", None))
 
-    def run_generate(self, pid, mask_id, mode, model, prompt, n, strength):
-        """Variants of `model` for the selection (a new removal, or more for the last one), with the window's progress
-        plan: each part's expected seconds on this PC, the model's steps as they go (ui.App.run_job)."""
-        key = (pid, mask_id, mode)
+    def run_generate(self, pid, mask, mode, model, prompt, n, strength):
+        """Variants of `model` for the selection (a new removal of the photo's Session, or more for the selection's),
+        with the window's progress plan: each part's expected seconds on this PC, the model's steps as they go
+        (ui.App.run_job)."""
+        base, s = self.session_for(pid)
+        key = (base, mask["id"] if mask else None, mode)
         reflect, draw = mode == "reflect", mode == "fill"
-        s, r = self.gens.get(key, (None, None))  # more variants for a selection that has some
+        r = self.gens.get(key)  # more variants for a selection that has some
         if r is not None and r.deleted:
-            s = r = None
+            r = None
 
         def variant_secs():  # a long removal's variants are filled in squares: known once its area is
             if r is not None:
                 return s.variant_seconds(r, model)
             return A.expected("lama" if model == "lama" else f"{model}_variant")
         parts = []
+        if s is None:  # the photo's first selection: its Session, the mask read with it
+            parts.append(("read", _("Reading the photo and its mask from {app}…", app=self.host.name),
+                          A.expected("panel_read")))
+        elif r is None and mask is not None:  # another mask of a photo read already
+            parts.append(("mask", _("Reading the mask from {app}…", app=self.host.name), A.expected("panel_mask")))
         if r is None:
-            parts += [("read", _("Reading the photo and its mask from {app}…", app=self.host.name),
-                       A.expected("panel_read")),
-                      ("area", _("Preparing the area"), A.expected("reflection_area" if reflect else "area"))]
+            parts.append(("area", _("Preparing the area"), A.expected("reflection_area" if reflect else "area")))
         if model == "lama":  # one result
             if r is None or not any(c[0] == "LaMa" for c in r.candidates):
                 parts.append(("lama", "LaMa", variant_secs()))
@@ -643,24 +707,29 @@ class Panel:
             n = 1 if reflect else n  # DAI: one result, at the strength set
             parts += [("variant", f"{A.MODELS[model]} {i + 1}/{n}", variant_secs()) for i in range(n)]
         self.events.put(("job_start", (parts[0][1] if parts else "", sum(p[2] for p in parts))))
-        done, i = 0.0, -1
+        done, i, sel = 0.0, -1, None
         while i + 1 < len(parts):
             i += 1
             kind, label, secs = parts[i]
             self.events.put(("job_part", (label, done, secs)))
             if kind == "read":
                 t0 = time.time()
-                s = self.read(pid, mask_id)
-                A.measured("panel_read", time.time() - t0)
-            elif kind == "area":
+                s = self.sessions[base] = self.read(pid, mask["id"] if mask else None)
                 sel = s.init_mask
+                A.measured("panel_read", time.time() - t0)
+            elif kind == "mask":
+                t0 = time.time()
+                sel = A.mask_selection(self.lc, pid, mask, s.work, s.base.size)
+                A.measured("panel_mask", time.time() - t0)
+            elif kind == "area":
                 if sel is None:
                     if not reflect:
                         raise A.Fail(_("The mask selects nothing AI Remove can read: choose another, or make an "
                                        "Object mask."))
                     sel = np.ones(s.base_arr.shape[:2], bool)
                 r = s.new_removal(sel, reflection=reflect, draw=draw)
-                self.gens[key] = (s, r)
+                r.mask_name = (mask or {}).get("name")  # not carried to the result
+                self.gens[key] = r
                 A.log(f"panel: #{r.id} on {s.info.get('file_name')}")
                 self.events.put(("thumbs", key))
                 parts[i + 1:] = [(k, lb, variant_secs() if k in ("lama", "variant") else sec)
@@ -691,7 +760,6 @@ class Panel:
         s.find()
         chosen = [m for m in s.info["develop"]["masks"] if m["id"] == mask_id]
         s.targets, s.prompt = chosen, ""
-        s.used_masks = [m["name"] for m in chosen if m.get("name")]
         s.prepare()
         for attr, eng in self.engines.items():
             setattr(s, attr, eng)
@@ -704,15 +772,19 @@ class Panel:
 
     # -------------------------------------------------------------- variants
     def current_key(self):
-        """The selection now: the app's active photo, the mask chosen, the tab."""
-        return (self.photo[0], self.chosen_mask(), self.mode) if self.photo else None
+        """The selection now: the app's active photo (its original, for a result saved here), the mask, the tab."""
+        return (self.session_for(self.photo[0])[0], self.chosen_mask(), self.mode) if self.photo else None
+
+    def chosen_mask_dict(self):
+        mid = self.chosen_mask()
+        return next((m for m in (self.photo[2] if self.photo else []) if m["id"] == mid), None)
 
     def sync_cur(self):
         """The variants shown are the selection's now (photo, mask, tab), on the photo in the app too: another
         selection's stay in memory until the panel is closed, and come back with it."""
         key = self.current_key()
-        s, r = self.gens.get(key, (None, None))
-        cur = (key, s, r) if r is not None and not r.deleted else None
+        s, r = (self.sessions.get(key[0]), self.gens.get(key)) if key else (None, None)
+        cur = (key, s, r) if s is not None and r is not None and not r.deleted else None
         choose = _("Choose a variant, then save it to {app}.", app=self.host.name)
         if (cur and cur[0]) != (self.cur and self.cur[0]) and self.job is None:
             if cur is not None:
@@ -721,16 +793,28 @@ class Panel:
                 self.msg = ("", DIM)
             self.status.configure(text=self.msg[0], fg=self.msg[1])
         self.cur = cur
+        if cur is not None and cur[2].reflects():  # its Amount
+            self.strength.set(round(100 * cur[2].strength))
         self.show_thumbs()
         self.show_on_photo()
         self.update_buttons()
+
+    def strength_done(self):
+        """The strength let go: as Lightroom's Amount, how much of the reflection found goes — the variant and the
+        photo in the app follow at once (Session.set_strength: nothing runs again)."""
+        if self.cur is None or not self.cur[2].reflects() or not self.cur[2].candidates or self.busy:
+            return
+        __, s, r = self.cur
+        s.set_strength(r, self.strength.get() / 100)
+        threading.Thread(target=s.save_project, daemon=True).start()
+        self.show_thumbs()
+        self.show_on_photo()
 
     def show_thumbs(self):
         for w in self.grid.winfo_children():
             w.destroy()
         self.thumbs = []
         if self.cur is None:
-            self.on_photo_chk.pack_forget()
             return
         __, s, r = self.cur
         side = (self.width - int(20 * self.k) - 2 - 2 * 8) // 2  # the body's padding, the border, two cells' margins
@@ -754,10 +838,6 @@ class Panel:
             cap.pack(fill="x")
             for w in (cell, img, cap):
                 w.bind("<Button-1>", lambda e, i=i: self.pick(i))
-        if r.candidates and not self.on_photo_chk.winfo_manager():
-            self.on_photo_chk.pack(fill="x", pady=(6, 0), before=self.bottom)
-        elif not r.candidates:
-            self.on_photo_chk.pack_forget()
 
     def pick(self, i):
         if self.cur is None or self.busy:
@@ -771,17 +851,16 @@ class Panel:
 
     # -------------------------------------------------------------- the variant on the photo in the app
     def show_on_photo(self):
-        """The chosen variant onto the photo in the app, while it is the app's active photo (overlay_worker), else
-        away from it."""
-        cur = self.cur
-        wanted = (cur is not None and self.on_photo.get() and cur[2].chosen is not None and self.photo is not None
-                  and self.photo[0] == cur[1].pid)
-        on = wanted and self.photo[4]  # the photo whole in the view (whole_view)
-        self.overlays.put((cur[1], cur[2], cur[2].chosen) if on else None)
-        if wanted and not on and self.on_photo_chk.winfo_manager():
-            self.on_photo_note.pack(fill="x", after=self.on_photo_chk)
-        else:
-            self.on_photo_note.pack_forget()
+        """What Save would write, onto the photo in the app (overlay_worker): every removal of the photo's Session with
+        a chosen variant — on a result saved already (its DNG), only those changed since. Else away from it."""
+        s = self.session_for(self.photo[0])[1] if self.photo else None
+        rs = self.chosen_removals(s)
+        if rs and self.photo[0] == s.dng_id:
+            done = self.saved.get(s, {})
+            rs = [r for r in rs if done.get(r) != (r.chosen, r.strength)]
+        # the photo whole in the view (whole_view), and the panel in sight: the full window shows the photo itself
+        on = bool(rs) and self.on_photo.get() and self.photo[4] and self.window is None
+        self.overlays.put((s, rs, self.photo[0]) if on else None)
 
     def on_photo_toggled(self):
         A.remember("panel_on_photo", self.on_photo.get())
@@ -794,9 +873,9 @@ class Panel:
             want = self.overlays.get()
             while not self.overlays.empty():
                 want = self.overlays.get()
-            shown = (id(want[1]), want[2]) if want else None
+            shown = tuple((id(r), r.chosen, r.strength) for r in want[1]) + (want[2],) if want else None
             if shown is not None and shown == self.overlay_shown and self.layout_before is not None:
-                continue  # already on the photo (another mask clicked in the app, the same variant)
+                continue  # already on the photo (another mask clicked in the app, the same variants)
             try:
                 path = self.overlay_png(*want) if want else None
                 if path and not self.closing:
@@ -808,26 +887,32 @@ class Panel:
             except Exception as e:
                 A.log("panel on the photo:", repr(e))
 
-    def overlay_png(self, s, r, idx):
-        """The variant as the app shows the photo: transparent but where it changes it (its blend, as composite),
-        cut to the app's crop, as a PNG in the Session's folder. None where the app's view cannot be matched: a
-        rotated or flipped crop, Upright or a transform (base.png is without them). A lens profile is not undone in
-        base.png either: near the edges of a wide lens the variant may sit a pixel or two off."""
-        dev = self.lc.one("photo.inspect", {"id": s.pid})["develop"]
+    def overlay_png(self, s, rs, pid):
+        """The removals' chosen variants as the app shows photo pid: transparent but where they change it (their
+        blends, one over the other as Session.composite), cut to the app's crop, as a PNG in the Session's folder.
+        None where the app's view cannot be matched: a rotated or flipped crop, Upright or a transform (base.png is
+        without them). A lens profile is not undone in base.png either: near the edges of a wide lens a variant may
+        sit a pixel or two off."""
+        dev = self.lc.one("photo.inspect", {"id": pid})["develop"]
         crop, geo = dev["crop"], dev.get("geometry") or {}
         g = crop["geometry"]
         if (g.get("angle") or crop.get("flip_h") or crop.get("flip_v")
                 or any(geo.get(k, v) != v for k, v in A.NEUTRAL_GEOMETRY.items())):
             A.log("panel: not shown on the photo (a rotated or flipped crop, or a geometry transform)")
             return None
-        patch, al = s.preview(r, idx)
         h, w = s.base_arr.shape[:2]
-        y0, y1, x0, x1 = r.base_rect
+        rgb, alpha = np.zeros((h, w, 3), np.float32), np.zeros((h, w), np.float32)  # premultiplied
+        for r in rs:
+            patch, al = s.preview(r)
+            y0, y1, x0, x1 = r.base_rect
+            sub, sub_a = rgb[y0:y1, x0:x1], alpha[y0:y1, x0:x1]
+            ph, pw = sub_a.shape
+            a = np.asarray(al, np.float32)[:ph, :pw]
+            sub[:] = sub * (1 - a[..., None]) + patch[:ph, :pw].astype(np.float32) * a[..., None]
+            sub_a[:] = sub_a * (1 - a) + a
         rgba = np.zeros((h, w, 4), np.uint8)
-        sub = rgba[y0:y1, x0:x1]
-        ph, pw = sub.shape[:2]
-        sub[..., :3] = patch[:ph, :pw]
-        sub[..., 3] = np.clip(np.asarray(al)[:ph, :pw] * 255, 0, 255).astype(np.uint8)
+        rgba[..., :3] = np.clip(rgb / np.maximum(alpha, 1e-6)[..., None], 0, 255).astype(np.uint8)
+        rgba[..., 3] = np.clip(alpha * 255, 0, 255).astype(np.uint8)
         c = g["rect"]
         im = Image.fromarray(rgba, "RGBA").crop((round(c["x0"] * w), round(c["y0"] * h), round(c["x1"] * w),
                                                  round(c["y1"] * h)))
@@ -857,14 +942,86 @@ class Panel:
             except OSError:
                 pass
 
-    # -------------------------------------------------------------- the rest
+    # -------------------------------------------------------------- the full window
     def full_window(self):
-        """AI Remove's own window on the same photo (describe, split, the shadow, the brush)."""
-        if not self.photo:
+        """AI Remove's window on this photo, in this process: the panel's Session (the photo's removals and their
+        variants, the models loaded), the selection shown, the tab, the model, its text and the number of variants.
+        The panel steps aside until the window goes back to it (window_closed)."""
+        if self.busy or not self.photo or self.window is not None:
             return
-        main = Path(A.__file__).resolve()
-        subprocess.Popen([sys.executable, str(main), "--id", str(self.photo[0]), "--app", self.host.key],
-                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+        self.busy = True
+        self.jobs.put(("window", self.photo[0], self.chosen_mask_dict(), self.mode))
+        self.update_buttons()
+
+    def prepare_window(self, pid, mask, mode):
+        """The worker's part: the photo's Session (read now if it has none) and, for a mask nothing was made of yet,
+        its selection, which the window starts from."""
+        base, s = self.session_for(pid)
+        r = self.gens.get((base, mask["id"] if mask else None, mode))
+        r = r if r is not None and not r.deleted else None
+        sel, label = None, None
+        if s is None:
+            label, key = _("Reading the photo and its mask from {app}…", app=self.host.name), "panel_read"
+        elif r is None and mask is not None:
+            label, key = _("Reading the mask from {app}…", app=self.host.name), "panel_mask"
+        if label:
+            self.events.put(("job_start", (label, A.expected(key))))
+            self.events.put(("job_part", (label, 0.0, A.expected(key))))
+            t0 = time.time()
+            if s is None:
+                s = self.sessions[base] = self.read(pid, mask["id"] if mask else None)
+                sel = s.init_mask
+            else:
+                sel = A.mask_selection(self.lc, pid, mask, s.work, s.base.size)
+            A.measured(key, time.time() - t0)
+        self.events.put(("window", (s, r, sel)))
+
+    def open_window(self, s, r, sel):
+        prompts = dict(self.prompt_text)
+        if self.prompt_mode:
+            prompts[self.prompt_mode] = self.prompt.get()
+        start = {"removal": r, "selection": sel, "model": self.model_key(), "prompts": prompts,
+                 "variants": self.n_var.get()}
+        self.overlays.put(None)  # the window shows the photo itself
+        self.root.withdraw()
+        A.log(f"panel: the full window on {s.info.get('file_name')}")
+        try:
+            self.window = ui.App(s, s.args, master=self.root, on_close=self.window_closed, start=start)
+        except Exception:
+            import traceback
+            A.log("panel ERROR (full window):", traceback.format_exc())
+            self.window = None
+            self.root.deiconify()
+
+    def window_closed(self, app):
+        """Back from the window: what was done there stays (the Session is the same), and the panel takes its tab, its
+        model, its texts and its number of variants — and the selection it showed, if it is one of the panel's."""
+        self.window = None
+        s = app.s
+        if not app.dng_dirty and s.dng_path:  # saved there and nothing changed since: its DNG has what is chosen
+            self.saved[s] = {r: (r.chosen, r.strength) for r in self.chosen_removals(s)}
+        key = next((k for k, x in self.gens.items() if x is app.cur), None)
+        model = app.model_key()
+        self.set_mode(key[2] if key else tab_of(A.model_kind(model)))
+        if key and key[1] is not None:
+            label = next((lb for lb, mid in self.mask_options() if mid == key[1]), None)
+            if label:
+                self.mask_var.set(label)
+        if model in self.models_for(self.mode):
+            self.model_var.set(self.model_labels[model])
+        prompts = dict(app.prompt_text)
+        if app.prompt_mode:
+            prompts[app.prompt_mode] = app.prompt.get()
+        self.prompt_text.update(prompts)
+        if self.prompt_mode:
+            self.prompt.set_text(self.prompt_text.get(self.prompt_mode, ""))
+        self.set_n(min(4, max(1, int(app.count.get()))))
+        self.engines = {a: getattr(s, a) for a in A.ENGINE_ATTRS.values() if getattr(s, a, None) is not None}
+        A.log("panel: back from the full window")
+        self.root.deiconify()
+        self.sync_cur()
+
+    # -------------------------------------------------------------- the rest
 
     # -------------------------------------------------------------- moving it
     def drag_start(self, e):
@@ -973,6 +1130,30 @@ class Panel:
         elif kind == "dock":
             self.dock()
             delay = 800
+        elif kind == "full":  # "Full window"
+            self.full_window()
+        elif kind == "window":  # until the window shows the photo (or, "window:closed", until it went back)
+            w = self.window
+            if (w is None or not getattr(w, "base_ok", False)) if arg != "closed" else w is not None:
+                self.root.after(500, lambda: self.test(steps))
+                return
+            delay = 1500
+        elif kind == "wshot":  # the window, from the screen
+            from PIL import ImageGrab
+            w = self.window.root
+            w.attributes("-topmost", True)
+            w.update()
+            time.sleep(0.5)
+            x, y = w.winfo_rootx(), w.winfo_rooty()
+            ImageGrab.grab(bbox=(x, y, x + w.winfo_width(), y + w.winfo_height()), all_screens=True).save(
+                system.ROOT / "work" / f"window-shot-{arg}.png")
+            w.attributes("-topmost", False)
+        elif kind == "wtab":  # a tab of the window
+            self.window.set_tab(arg)
+        elif kind == "wback":  # the window's "Back to the panel"
+            self.window.cancel()
+        elif kind == "discard":
+            self.discard()
         elif kind == "menu":  # the model menu's list, open or closed
             self.picker.open() if arg != "close" else self.picker.close()
             delay = 800

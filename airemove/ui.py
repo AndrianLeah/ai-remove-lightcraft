@@ -105,6 +105,14 @@ FILL_MENU = ("lama", "rorem", "flux", "qwen")
 MENU_MODELS = FILL_MENU + A.DRAW_MODELS + A.REFLECTION_MODELS
 MODEL_GROUPS = ((N_("Fill the selection"), FILL_MENU), (N_("Draw something new"), A.DRAW_MODELS),
                 (N_("Remove reflections"), A.REFLECTION_MODELS))
+# what to do, the window's and the panel's tabs (panel.py): each with its models, the menu only where there is a choice
+TABS = {"remove": (N_("Remove"), FILL_MENU), "fill": (N_("Fill"), A.DRAW_MODELS),
+        "reflect": (N_("Reflections"), A.REFLECTION_MODELS)}
+
+
+def tab_of(kind):
+    """The tab of a model's or a removal's kind (airemove.model_kind, Removal.kind)."""
+    return {"draw": "fill", "reflect": "reflect"}.get(kind, "remove")
 # what the text field is for: what to put there (SDXL, FLUX Fill), the name of what to remove (Qwen-Image: it names
 # the selection itself, a name corrects it), what to draw (Generative fill: required) or nothing (LaMa and OSOR read
 # no text; RORem works with its authors' fixed prompt and no guidance, which a text would hardly steer; DAI has its
@@ -557,8 +565,12 @@ class ModelPicker(tk.Frame):
 
 
 class App:
-    def __init__(self, session, args):
+    def __init__(self, session, args, master=None, on_close=None, start=None):
+        """master, on_close: opened from the panel (panel.py), as a second window of its process on the panel's
+        Session (prepared already, its models loaded): closing it goes back to the panel (on_close(app)), with what was
+        done here. start: where to begin, as the panel was — {"removal", "selection", "model", "prompts", "variants"}."""
         self.s, self.args = session, args
+        self.on_close, self.start, self.closed = on_close, start or {}, False
         self.events = queue.Queue()  # workers -> window
         self.jobs = queue.Queue()  # window -> main worker (new removal / more variants / save)
         self.clicks = queue.Queue()  # window -> SAM worker
@@ -586,7 +598,8 @@ class App:
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
             pass
-        r = self.root = tk.Tk(className="airemove")  # WM_CLASS "Airemove": the Linux menu entry matches it
+        # WM_CLASS "Airemove": the Linux menu entry matches it
+        r = self.root = tk.Toplevel(master, class_="airemove") if master is not None else tk.Tk(className="airemove")
         k = self.k = max(1.0, r.winfo_fpixels("1i") / 96.0)
         self.side_w = int(min(372 * k, max(300 * k, 0.34 * r.winfo_screenwidth())))  # narrower on a narrow screen
         self.THUMB, self.ROWTHUMB = (self.side_w - int(96 * k)) // 2, int(52 * k)
@@ -594,6 +607,7 @@ class App:
         r.configure(bg=BG)
         r.protocol("WM_DELETE_WINDOW", self.cancel)
         self._build()
+        self.apply_start()
         self.set_tool("sam")
         try:
             self._icon = tk.PhotoImage(file=str(ICON))
@@ -610,6 +624,17 @@ class App:
         bring_to_front(r)
         threading.Thread(target=self.worker, daemon=True).start()
         r.after(100, self.poll)
+
+    def apply_start(self):
+        """Opened from the panel: its model (and so its tab), its texts and its number of variants."""
+        st = self.start
+        self.prompt_text.update(st.get("prompts") or {})
+        if self.prompt_mode:  # in the field first: changing the model keeps the field's text for its kind
+            self.prompt.set_text(self.prompt_text.get(self.prompt_mode, ""))
+        if st.get("variants"):
+            self.count.set(st["variants"])
+        if st.get("model") in self.model_labels:
+            self.model_var.set(self.model_labels[st["model"]])
 
     # ------------------------------------------------------------------------------------------ layout
     def button(self, parent, text, cmd, kind="grey", small=False, **kw):
@@ -799,9 +824,20 @@ class App:
             self.shadow_btn.pack(fill="x", pady=(int(6 * k), 0))
 
         _hdr, gen = self.section(sp, _("Generate"))
-        mrow = tk.Frame(gen, bg=CARD)
+        # Remove, Fill or Reflections, as in the panel: each tab its models (TABS); a tab with one model shows it on the
+        # model's line, with no menu
+        tabs = tk.Frame(gen, bg=LINE)
+        tabs.pack(fill="x", pady=(0, int(10 * k)))
+        self.tab, self.tab_btns = None, {}
+        for i, (tab, (title, __)) in enumerate(TABS.items()):
+            b = self.button(tabs, _(title), lambda t=tab: self.set_tab(t), small=True)
+            b.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 1, 0))
+            tabs.columnconfigure(i, weight=1)
+            self.tab_btns[tab] = b
+        mrow = self.mrow = tk.Frame(gen, bg=CARD)
         mrow.pack(fill="x")
-        tk.Label(mrow, text=_("Model"), font=self.f_small, fg=DIM, bg=CARD).pack(side="left")
+        self.model_lbl = tk.Label(mrow, text=_("Model"), font=self.f_small, fg=DIM, bg=CARD)
+        self.model_lbl.pack(side="left")
         # what the model is good at: one click away (the menu itself says it in a few words)
         self.info_btn = tk.Label(mrow, text="ⓘ  " + _("What it does"), font=self.f_small, fg=DIM, bg=CARD,
                                  cursor="hand2")
@@ -893,7 +929,8 @@ class App:
         self.save_btn = self.button(foot, self.save_label(), self.save, kind="green")
         self.save_btn.configure(state="disabled", font=self.f_bold)
         self.save_btn.pack(fill="x")
-        self.button(foot, _("Close"), self.cancel, kind="ghost", small=True).pack(fill="x", pady=(int(6 * k), 0))
+        self.button(foot, _("Back to the panel") if self.on_close else _("Close"), self.cancel, kind="ghost",
+                    small=True).pack(fill="x", pady=(int(6 * k), 0))
 
         # --- photo (left): header with title and view controls, the zoomable photo
         left = tk.Frame(body, bg=BG)
@@ -1026,9 +1063,35 @@ class App:
         self.model_meta = model_meta()
         # one line per model (tests and the saved setting go by it): its name first
         self.model_labels = {m: f"{n} · {u} · {t}" for m, (n, u, t) in self.model_meta.items()}
-        self.picker.set_models(self.model_meta, keys)
-        self.model_var.set(self.model_labels[cur])
+        self.set_tab(tab_of(A.model_kind(cur)), cur)
         self.show_model_info()
+
+    def set_tab(self, tab, model=None):
+        """Remove, Fill or Reflections (TABS): the menu with the tab's models, or its one model on the model's line.
+        model: the one to choose, else the one chosen last in that tab (RORem in Remove at first)."""
+        keys = [m for m in self.model_keys() if m in TABS[tab][1]]
+        if not keys:  # its model is not installed
+            return
+        if model not in keys:
+            last = A.setting("model_remove", A.setting("model"))  # the Remove tab's, also the panel's
+            model = last if last in keys else ("rorem" if "rorem" in keys else keys[0])
+        self.tab = tab
+        for t, b in self.tab_btns.items():
+            on = t == tab
+            b._bg, b._hi = (ACCENT, ACCENT_HI) if on else (BTN, BTN_HI)
+            b.configure(bg=b._bg, fg="#1b1b1b" if on else FG, activebackground=b._hi,
+                        state="normal" if any(m in self.model_keys() for m in TABS[t][1]) else "disabled")
+        self.picker.set_models(self.model_meta, keys)
+        if len(keys) > 1:
+            self.model_lbl.configure(text=_("Model"), fg=DIM)
+            if not self.picker.winfo_manager():
+                self.picker.pack(fill="x", pady=(int(3 * self.k), 0), after=self.mrow)
+        else:
+            name, __, t = self.model_meta[model]
+            self.model_lbl.configure(text=f"{name} · {t}", fg=FG)
+            self.picker.pack_forget()
+        self.place_model_info()
+        self.model_var.set(self.model_labels[model])  # on_model_change
 
     def model_best(self, m):
         """When to choose the model, in the menu's list (short: the details are under the menu, "What it does")."""
@@ -1205,12 +1268,14 @@ class App:
             b.configure(text=text, state="normal" if on else "disabled", bg=b._bg, activebackground=b._hi,
                         fg="#1b1b1b" if accent else FG, font=self.f_bold if accent else self.f_small)
             if not b.winfo_manager():
-                b.pack(fill="x", pady=(int(6 * self.k), 0), after=self.split_btn)
+                b.pack(fill="x", pady=(int(6 * self.k), 0),
+                       after=self.split_btn if self.split_btn.winfo_manager() else self.gen_btn)
         rest = self.waiting_for(m)
         if len(rest) >= 2 and not self.writing:
             self.all_btn.configure(text="▶▶  " + _("Generate all {n} waiting with {model}", n=len(rest),
                                                    model=_(MODEL_NAMES[m])))
-            self.all_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=b if b.winfo_manager() else self.split_btn)
+            self.all_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=b if b.winfo_manager() else
+                              self.split_btn if self.split_btn.winfo_manager() else self.gen_btn)
         else:
             self.all_btn.pack_forget()
 
@@ -1301,6 +1366,10 @@ class App:
                                text=(_("Remove reflections") if reflect else _("Draw in the selection") if draw
                                      else _("Remove selection")) + "  ⏎")
         self.split_btn.configure(state="normal" if (has and ready and not reflect and not draw) else "disabled")
+        if reflect or draw:  # parts are for removing only: not in Fill nor Reflections
+            self.split_btn.pack_forget()
+        elif not self.split_btn.winfo_manager():
+            self.split_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=self.gen_btn)
         self.undo_btn.configure(state="normal" if self.history else "disabled")
         self.clear_btn.configure(state="normal" if self.ops else "disabled")
         live = [r for r in self.s.removals if not r.deleted]
@@ -1323,19 +1392,23 @@ class App:
     def worker(self):
         s = self.s
         try:
-            self.post("task", _("Reading the photo") if s.standalone else _("Reading the photo from {app}", app=s.app))
-            s.find()
+            if s.info is None:  # (the panel's Session is found and prepared already)
+                self.post("task", _("Reading the photo") if s.standalone else
+                          _("Reading the photo from {app}", app=s.app))
+                s.find()
             self.post("found")
             threading.Thread(target=self.sam_worker, daemon=True).start()
-            self.post("task", _("Preparing the photo"))
-            self.extracting = True
-            try:
-                s.prepare()
-            finally:
-                self.extracting = False
+            if getattr(s, "base", None) is None:
+                self.post("task", _("Preparing the photo"))
+                self.extracting = True
+                try:
+                    s.prepare()
+                finally:
+                    self.extracting = False
             self.base_ready.set()
             self.post("base")
-            threading.Thread(target=lambda: self.post("update", A.update_available()), daemon=True).start()
+            if self.on_close is None:  # opened from the panel: it asked already
+                threading.Thread(target=lambda: self.post("update", A.update_available()), daemon=True).start()
         except A.Fail as e:
             A.log("ERROR:", e)
             self.base_ready.set()
@@ -1348,6 +1421,8 @@ class App:
             return
         while True:
             job = self.jobs.get()
+            if job[0] == "exit":  # back to the panel: the Session is its again
+                return
             if job[0] != "save":
                 s.stop.clear()  # a Stop pressed before this job was for the one before
             try:
@@ -1550,6 +1625,8 @@ class App:
             return
         while True:
             job = self.clicks.get()
+            if job[0] == "exit":  # back to the panel
+                return
             try:
                 sam = self.s.get_sam()  # reloaded if FLUX pushed it off the GPU
                 t0 = time.time()
@@ -1595,6 +1672,8 @@ class App:
 
     # ------------------------------------------------------------------------------------------ events
     def poll(self):
+        if self.closed:  # back to the panel: this window is gone
+            return
         try:
             while True:
                 kind, data = self.events.get_nowait()
@@ -1734,9 +1813,10 @@ class App:
                               if self.s.out_format == "DNG" else
                               _("on its own · the edited copy goes next to the original"))
         self.fit_header()
-        self.prompt_text["fill"] = self.s.prompt or ""  # "Remove: <text>" on a LightCraft mask: what to put there
-        if self.prompt_mode == "fill":
-            self.prompt.set_text(self.prompt_text["fill"])
+        if self.s.prompt:  # "Remove: <text>" on a LightCraft mask: what to put there
+            self.prompt_text["fill"] = self.s.prompt
+            if self.prompt_mode == "fill":
+                self.prompt.set_text(self.prompt_text["fill"])
 
     def on_base(self, _data):
         b = self.s.base
@@ -1752,16 +1832,20 @@ class App:
         self.comp, self.comp_key = None, None
         self.canvas_sel.delete("msg")
         self.canvas_sel.update_idletasks()
-        if self.s.init_mask is not None:  # "Rimuovi" masks made in LightCraft
+        if self.on_close is not None:  # from the panel: its mask, when nothing was made of it yet
+            if self.start.get("selection") is not None:
+                self.ops = [self.new_op("add", self.start["selection"])]
+        elif self.s.init_mask is not None:  # "Rimuovi" masks made in LightCraft
             self.ops = [self.new_op("add", self.s.init_mask)]
-        for rem in self.s.removals:  # reopened project: every removal as it was left
+        live = [rem for rem in self.s.removals if not rem.deleted]
+        for rem in live:  # reopened project (or the panel's removals): every removal as it was left
             ys, xs = np.nonzero(outline(rem.mask_e, 2))
             self.outlines[rem.id] = (ys, xs)
             self.add_row(rem)
-        if self.s.removals:
-            self.select_removal(self.s.removals[-1])
+        if live:
+            self.select_removal(self.start["removal"] if self.start.get("removal") in live else live[-1])
         self.render_main()
-        n = len(self.s.removals)
+        n = len(live)
         self.set_idle_status(
             _n("Project reopened: {n} removal — change it or add more",
                "Project reopened: {n} removals — change them or add more", n)
@@ -2032,6 +2116,8 @@ class App:
 
     def select_removal(self, r):
         self.cur = r
+        if tab_of(r.kind()) != self.tab:  # its tab, for more variants of its kind
+            self.set_tab(tab_of(r.kind()))
         for rid, (f, *_rest) in self.row_widgets.items():
             f.configure(highlightbackground=ACCENT if rid == r.id else CARD)
         self.var_title.configure(text=_("Variants of #{id}", id=r.id).upper())
@@ -2190,12 +2276,13 @@ class App:
             self.choose(i)
 
     def place_model_info(self):
+        above = self.picker if self.picker.winfo_manager() else self.mrow  # a tab with one model has no menu
         if self.show_info:
             self.info_pad.pack_forget()
-            self.model_info.pack(after=self.picker, fill="x", pady=(int(6 * self.k), int(10 * self.k)))
+            self.model_info.pack(after=above, fill="x", pady=(int(6 * self.k), int(10 * self.k)))
         else:
             self.model_info.pack_forget()
-            self.info_pad.pack(after=self.picker, fill="x")
+            self.info_pad.pack(after=above, fill="x")
         self.info_btn.configure(text="ⓘ  " + (_("Hide") if self.show_info else _("What it does")))
 
     def toggle_model_info(self):
@@ -2305,9 +2392,14 @@ class App:
         return n
 
     def on_model_change(self):
+        if self.tab is not None and tab_of(A.model_kind(self.model_key())) != self.tab:  # chosen from code: its tab
+            self.set_tab(tab_of(A.model_kind(self.model_key())), self.model_key())
+            return
         self.show_model_info()
         if getattr(self, "model_labels", None):
             A.remember("model", self.model_key())
+            if self.tab == "remove":
+                A.remember("model_remove", self.model_key())
             self.picker.show()
             # DAI makes one result per removal (its strength is a slider): no number of variants
             if self.model_key() in A.REFLECTION_MODELS:
@@ -2818,6 +2910,13 @@ class App:
             self.status.configure(text=_("Waiting for {app} to restore the development…", app=self.s.app))
             self.root.after(300, self.cancel)
             return
+        if self.on_close is not None:  # back to the panel, which saves as this window does: no question
+            if self.busy or self.shadow_wait or self.describing:  # the panel takes the Session back once it is idle
+                self.stop_jobs()
+                self.root.after(300, self.cancel)
+                return
+            self.quit()
+            return
         live = any(not r.deleted and r.chosen is not None for r in self.s.removals)
         if self.dng_dirty and live:
             ask = (_("Save the {format} file with the latest changes?\n\n(The removals and variants stay saved in the "
@@ -2837,6 +2936,18 @@ class App:
         self.quit()
 
     def quit(self):
+        if self.on_close is not None:  # opened from the panel: back to it, with the Session and its models
+            self.closed = True
+            self.jobs.put(("exit",))
+            self.clicks.put(("exit",))
+            self.picker.close()
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):  # bind_all: the panel's widgets too
+                self.root.unbind_all(seq)
+            try:
+                self.on_close(self)  # while its fields can still be read
+            finally:
+                self.root.destroy()
+            return
         try:
             self.s.close()
         finally:
