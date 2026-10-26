@@ -10,21 +10,25 @@ Elsewhere it is an ordinary window beside it.
 Everything else goes through the app's control channel, as AI Remove's window does:
 - the app's active photo and its masks are watched; the mask selected in the app (or chosen here) is the selection
   (a SAM 3 Object or Describe mask is read from the develop settings, a brush or gradient one rendered:
-  airemove.extract);
-- Remove (LaMa, RORem, FLUX Fill, Qwen-Image: the window's model menu), Fill (Generative fill: what the prompt
-  describes) or Reflections (DAI, the mask optional) runs in this process, with AI Remove's own Session: its area, its
+  airemove.extract, airemove.mask_selection);
+- the window's tabs (ui.TABS): Remove (LaMa, RORem, FLUX Fill, Qwen-Image: the window's model menu), Fill (Generative
+  fill: what the prompt describes) or Reflections (DAI on the whole photo, as Lightroom's Remove Reflections; its
+  strength is Lightroom's Amount, also afterwards) run in this process, with AI Remove's own Session: its area, its
   tiles, its blend, and the window's progress bar; the text field only for a model that reads text;
-- the variants show here and the chosen one on the photo in the app, as its Layout Image (a PNG it draws over the
-  photo, fitted to it: only while the photo is shown whole, at Fit); each selection (photo, mask, tab) keeps its
-  variants until the panel is closed; Save writes the selection's chosen one into the DNG, stacks it on the original in
-  the app and shows it there — without the mask that was the selection;
-- "Full window" opens AI Remove's window on the same photo, for what the panel does not do (describe, split, the
-  shadow, the brush).
+- one Session per photo, as in the window, with one removal per selection (mask, tab), kept until the panel is
+  closed (and found again in the photo's project, by its mask's name, once saved). The selection's variants show
+  here; every removal with a chosen variant shows on the photo in the app, as its Layout Image (a PNG it draws over the
+  photo, fitted to it: only while the photo is shown whole, at Fit), and that is what Save writes into the DNG,
+  stacked on the original — without the masks that were the selections. After a save the app shows the DNG: it is the
+  same photo here, and the next save updates it;
+- "Full window" opens AI Remove's window in this process on the same Session (ui.App with master / on_close /
+  start): the removals and variants, the selection, the tab, the model, the texts; "Back to the panel" brings them
+  back. For what the panel does not do: describe, split, the shadow, the brush.
 The panel stays open from one photo to the next, and the models stay loaded: only the first variant pays their load.
 
 Tests: AIREMOVE_PANEL_TEST runs steps separated by ";": wait:ms · mode:remove|fill|reflect · model:key ·
 mask:<name> · prompt:<text> · variants:n · generate · waitvars:n · pick:i · save · waitidle · drag:dx,dy · dock ·
-menu[:close] · shot:n · quit."""
+menu[:close] · discard · full · window[:closed] · wshot:n · wtab:<tab> · wback · shot:n · quit."""
 import os
 import queue
 import sys
@@ -643,7 +647,8 @@ class Panel:
         key, s, r = self.cur
         r.deleted = True
         self.gens.pop(key, None)
-        threading.Thread(target=s.save_project, daemon=True).start()  # the project follows, as in the window
+        if s.dng_path:  # a result was saved: its project follows (variants never saved stay in memory only)
+            threading.Thread(target=s.save_project, daemon=True).start()
         self.sync_cur()
 
     def worker(self):
@@ -717,6 +722,14 @@ class Panel:
                 s = self.sessions[base] = self.read(pid, mask["id"] if mask else None)
                 sel = s.init_mask
                 A.measured("panel_read", time.time() - t0)
+                r = self.gens.get(key)  # the photo's project had one for this mask: more variants for it
+                if r is not None:
+                    parts = [p for p in parts if p[0] != "area" and not (
+                        p[0] == "lama" and any(c[0] == "LaMa" for c in r.candidates))]
+                    parts[i + 1:] = [(k, lb, variant_secs() if k in ("lama", "variant") else sec)
+                                     for k, lb, sec in parts[i + 1:]]
+                    self.events.put(("job_total", done + secs + sum(p[2] for p in parts[i + 1:])))
+                    self.events.put(("thumbs", key))
             elif kind == "mask":
                 t0 = time.time()
                 sel = A.mask_selection(self.lc, pid, mask, s.work, s.base.size)
@@ -763,6 +776,11 @@ class Panel:
         s.prepare()
         for attr, eng in self.engines.items():
             setattr(s, attr, eng)
+        # a reopened project: a removal made here from a mask before is that mask's again (its name, in the project)
+        names = {m.get("name"): m["id"] for m in s.info["develop"]["masks"] if m.get("name")}
+        for r in s.removals:
+            if not r.deleted and names.get(r.mask_name) is not None:
+                self.gens.setdefault((pid, names[r.mask_name], tab_of(r.kind())), r)
         return s
 
     def loaded(self, model):
@@ -806,13 +824,13 @@ class Panel:
             return
         __, s, r = self.cur
         s.set_strength(r, self.strength.get() / 100)
-        threading.Thread(target=s.save_project, daemon=True).start()
         self.show_thumbs()
         self.show_on_photo()
 
     def show_thumbs(self):
         for w in self.grid.winfo_children():
             w.destroy()
+        self.grid.configure(height=1)  # emptied, a frame keeps its size: the thumbnails' room goes too
         self.thumbs = []
         if self.cur is None:
             return

@@ -1847,8 +1847,10 @@ class App:
         self.render_main()
         n = len(live)
         self.set_idle_status(
-            _n("Project reopened: {n} removal — change it or add more",
-               "Project reopened: {n} removals — change them or add more", n)
+            (_n("From the panel: {n} removal — change it or add more",
+                "From the panel: {n} removals — change them or add more", n) if self.on_close else
+             _n("Project reopened: {n} removal — change it or add more",
+                "Project reopened: {n} removals — change them or add more", n))
             if n else (_("Click what you want to remove") if self.sam_ready else
                        _("SAM 3 is getting ready: you can click already")))
         self.update_buttons()

@@ -93,6 +93,8 @@
   "folder: {dir}  ·  free space {free} GB  ·  needed ~{need} GB": "cartella: {dir}  ·  spazio libero {free} GB  ·  servono ~{need} GB",
   "For reflections only: it fills nothing. A sharp, bright reflection (trees mirrored in a window, the sky in a puddle) is only partly taken away.": "Solo per i riflessi: non riempie niente. Un riflesso nitido e luminoso (alberi specchiati in una vetrina, il cielo in una pozzanghera) si toglie solo in parte.",
   "found: {part} in {folder}": "trovato: {part} in {folder}",
+  "From the panel: {n} removal — change it or add more": "Dal pannello: {n} rimozione — modificala o aggiungine altre",
+  "From the panel: {n} removals — change them or add more": "Dal pannello: {n} rimozioni — modificale o aggiungine altre",
   "Full detail": "Dettaglio pieno",
   "Full detail is only for long removals (a pole, a cable, a railing): on a person or an object, redrawing in squares invents things.": "Dettaglio pieno è solo per le rimozioni lunghe (un palo, un cavo, una ringhiera): su una persona o un oggetto, ridisegnare a quadrati inventa cose.",
   "Full detail needs FLUX Fill or RORem: install one of them.": "Dettaglio pieno richiede FLUX Fill o RORem: installane uno.",

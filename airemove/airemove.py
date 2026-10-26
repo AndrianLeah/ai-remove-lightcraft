@@ -1290,6 +1290,7 @@ class Session:
             r.gain = e.get("gain") or self.gain
             r.light, r.reflection = light, light is not None
             r.fill = bool(e.get("fill"))
+            r.mask_name = e.get("mask_name")
             for label, im, data, hole in variants:
                 r.candidates.append((label, im))
                 if data is not None:
