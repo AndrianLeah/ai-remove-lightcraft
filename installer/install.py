@@ -939,6 +939,18 @@ def choose_apps(cfg, yes):
             return options[a or dflt]
 
 
+def wait_closed(host, yes):
+    """Whether the app is closed, now or once the user has closed it (asked up to three times; never with --yes):
+    its ui.json can then be written, which it rewrites when it quits."""
+    tries = 0
+    while lc_running(host):
+        if yes or tries >= 3:
+            return False
+        input("  " + _("{app} is open: close it (save your work), then press Enter… ", app=host.name))
+        tries += 1
+    return True
+
+
 def configurable(host):
     """Whether the app can be set up now: LightCraft always (it may be installed after AI Remove, as before
     Chromaforge); Chromaforge once it is installed or has run (one never opened gets only its port: see
@@ -962,22 +974,25 @@ def configure_lightcraft(d, cfg, editor, yes=False, host=system.LIGHTCRAFT):
                               "editor and shortcut", app=host.name)
     if lc_request(port, "engine.execute", {"command": "library.state", "params": {}}, host=host):
         r1 = lc_request(port, "ui.set", {"settings": {"externalEditor": editor}}, host=host)
-        r2 = lc_request(port, "engine.execute", {"command": "app.setShortcut",
-                                                 "params": {"id": EDIT_COMMAND, "shortcut": SHORTCUT}}, host=host)
         if r1 and r1.get("ok"):
+            # the shortcut only once the editor is this AI Remove: else it would start whatever editor the app had
+            r2 = lc_request(port, "engine.execute", {"command": "app.setShortcut",
+                                                     "params": {"id": EDIT_COMMAND, "shortcut": SHORTCUT}}, host=host)
             msg = _("{app} is open: external editor set right away", app=host.name)
             if not (r2 and r2.get("ok")):
                 msg += " " + _("(shortcut not set: {error})", error=(r2 or {}).get("error"))
             cfg[host.key] = "done"
             return "done", msg
-    tries = 0
-    while lc_running(host):
-        if yes or tries >= 3:
-            cfg[host.key] = "pending"
-            return "pending", _("{app} is open: close it, then run the configuration again "
-                                "(install --configure-lightcraft, or the MCP tool configure_lightcraft)", app=host.name)
-        input("  " + _("{app} is open: close it (save your work), then press Enter… ", app=host.name))
-        tries += 1
+        if r1 is not None:
+            # refused: LightCraft lets only the user choose the programs Edit In starts while it runs
+            # (storytold/lightcraft#2638; an update that keeps the same editor is no change, and passes). Its
+            # ui.json, read when it starts, still takes them while it is closed
+            out.write("  " + _("{app} does not let another program change its external editor while it is open",
+                               app=host.name))
+    if not wait_closed(host, yes):
+        cfg[host.key] = "pending"
+        return "pending", _("{app} is open: close it, then run the configuration again "
+                            "(install --configure-lightcraft, or the MCP tool configure_lightcraft)", app=host.name)
     edit_ui_json(editor, host=host)
     cfg[host.key] = "done"
     return "done", _("settings written to {file}", file=ui_json(host))
@@ -1040,31 +1055,36 @@ def status(d):
     print(json.dumps(rep, indent=1, ensure_ascii=False))
 
 
-def unhook(d, cfg, host=system.LIGHTCRAFT):
-    """The app's external editor and shortcut, when they are this install's: cleared live, else in its ui.json."""
+def unhook(d, cfg, host=system.LIGHTCRAFT, yes=False):
+    """The app's external editor and shortcut, when they are this install's: cleared live, else in its ui.json once
+    the app is closed (LightCraft refuses the editor live: see configure_lightcraft)."""
     port = int(cfg.get(host.cfg_key("port")) or host.default_port)
     ours = lambda v: is_ours(v, d, cfg)  # noqa: E731
     live = lc_request(port, "ui.set", {}, host=host)  # no change: replies with the app's current settings
     if live and live.get("ok"):
         st = (live.get("result") or {}).get("settings") or {}
-        if ours(st.get("externalEditor")):
-            lc_request(port, "ui.set", {"settings": {"externalEditor": ""}}, host=host)
-            if (st.get("keymap") or {}).get(EDIT_COMMAND) == SHORTCUT:
-                lc_request(port, "engine.execute", {"command": "app.setShortcut",
-                                                    "params": {"id": EDIT_COMMAND, "shortcut": ""}}, host=host)
-            out.write("  " + _("{app}: external editor removed", app=host.name))
-        else:
+        if not ours(st.get("externalEditor")):
             out.write("  " + _("{app}: its external editor is not this installation, left as it is", app=host.name))
-    elif not lc_running(host):
-        try:
-            done = edit_ui_json("", remove=ours, host=host)
-            out.write("  " + (_("{app}: external editor and shortcut removed", app=host.name) if done else
-                              _("{app}: its external editor is not this installation, left as it is", app=host.name)))
-        except (OSError, ValueError) as e:
-            out.write("  ! " + _("ui.json not changed: {error}", error=e))
-    else:
+            return
+        if (st.get("keymap") or {}).get(EDIT_COMMAND) == SHORTCUT:  # ours in any case: it would start what is gone
+            lc_request(port, "engine.execute", {"command": "app.setShortcut",
+                                                "params": {"id": EDIT_COMMAND, "shortcut": ""}}, host=host)
+        r = lc_request(port, "ui.set", {"settings": {"externalEditor": ""}}, host=host)
+        if r and r.get("ok"):
+            out.write("  " + _("{app}: external editor removed", app=host.name))
+            return
+        out.write("  " + _("{app} does not let another program change its external editor while it is open",
+                           app=host.name))
+    if not wait_closed(host, yes):
         out.write("  ! " + _("{app} is open: remove the external editor yourself in Settings > External Editing",
                              app=host.name))
+        return
+    try:
+        done = edit_ui_json("", remove=ours, host=host)
+        out.write("  " + (_("{app}: external editor and shortcut removed", app=host.name) if done else
+                          _("{app}: its external editor is not this installation, left as it is", app=host.name)))
+    except (OSError, ValueError) as e:
+        out.write("  ! " + _("ui.json not changed: {error}", error=e))
 
 
 def uninstall(d, keep_models, yes):
@@ -1076,7 +1096,7 @@ def uninstall(d, keep_models, yes):
         return
     for host in system.HOSTS:  # LightCraft as before; Chromaforge where this install set it up
         if host is system.LIGHTCRAFT or cfg.get(host.key):
-            unhook(d, cfg, host)
+            unhook(d, cfg, host, yes)
         if cfg.get(host.cfg_key("control_env")):
             unset_control_port(d, cfg, host)
     sc = cfg.get("shortcut")
