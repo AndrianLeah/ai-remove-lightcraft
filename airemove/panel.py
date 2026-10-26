@@ -3,6 +3,8 @@
 LightCraft has no plug-in panels, so, as OpenFill does next to PhotoCraft (beckettharriman/openfill, Apache-2.0:
 photocraft/openfill_photocraft/tether.py), the panel is a window of its own that Windows makes an "owned" window of
 the app's: it stays above the app (and only above it), hides when the app is minimized, and follows it when it moves.
+It starts docked at the app's right edge; dragged by its header it stays where it was let go, from the app window's
+top-left (it moves with the app and opens there next time), and a double-click on the header docks it again.
 Elsewhere it is an ordinary window beside it.
 
 Everything else goes through the app's control channel, as AI Remove's window does:
@@ -18,7 +20,8 @@ Everything else goes through the app's control channel, as AI Remove's window do
 The panel stays open from one photo to the next, and the models stay loaded: only the first variant pays their load.
 
 Tests: AIREMOVE_PANEL_TEST runs steps separated by ";": wait:ms · mode:remove|fill|reflect · model:key ·
-mask:<name> · prompt:<text> · variants:n · generate · waitvars:n · pick:i · save · waitidle · shot:n · quit."""
+mask:<name> · prompt:<text> · variants:n · generate · waitvars:n · pick:i · save · waitidle · drag:dx,dy · dock ·
+shot:n · quit."""
 import os
 import queue
 import subprocess
@@ -130,6 +133,10 @@ class Panel:
         self.busy = False
         self.thumbs = []
         self.mode, self.mask_id = "remove", None
+        # where it was dragged to: its top-left from the app window's top-left (it moves with the app); None: docked at
+        # the app's right edge (a double-click on its header docks it again)
+        self.offset = A.setting("panel_offset")
+        self._drag = None
         if sys.platform == "win32":
             try:
                 import ctypes
@@ -179,11 +186,17 @@ class Panel:
         outer.pack(fill="both", expand=True)
         box = self.box = tk.Frame(outer, bg=CARD)
         box.pack(fill="both", expand=True, padx=1, pady=1)
-        head = tk.Frame(box, bg=CARD)
+        head = tk.Frame(box, bg=CARD, cursor="fleur")
         head.pack(fill="x", padx=pad, pady=(pad, 4))
-        tk.Label(head, text="AI Remove", font=self.f_bold, fg=ACCENT, bg=CARD).pack(side="left")
-        self.status_dot = tk.Label(head, text="●", font=self.f_small, fg=DIM, bg=CARD)
+        title = tk.Label(head, text="AI Remove", font=self.f_bold, fg=ACCENT, bg=CARD, cursor="fleur")
+        title.pack(side="left")
+        self.status_dot = tk.Label(head, text="●", font=self.f_small, fg=DIM, bg=CARD, cursor="fleur")
         self.status_dot.pack(side="left", padx=(6, 0))
+        for w in (head, title, self.status_dot):  # the header moves the panel; a double-click docks it again
+            w.bind("<ButtonPress-1>", self.drag_start)
+            w.bind("<B1-Motion>", self.drag_move)
+            w.bind("<ButtonRelease-1>", self.drag_end)
+            w.bind("<Double-Button-1>", self.dock)
         self.button(head, "×", self.close, small=True).pack(side="right")
         self.fold_btn = self.button(head, "–", self.fold, small=True)
         self.fold_btn.pack(side="right", padx=(0, 4))
@@ -343,20 +356,27 @@ class Panel:
 
     # -------------------------------------------------------------- following the app
     def follow(self):
-        """Docked inside the app's window, at its right edge under its title bar; hidden while it is minimized."""
+        """With the app's window: where it was dragged to (self.offset, from the window's top-left), else docked at its
+        right edge under its title bar; hidden while the app is minimized."""
         t = self.tether
         if t.hwnd and not t.alive():
             t.find()
             if t.hwnd:
                 t.own(self.root_hwnd())
-        if t.hwnd:
+        if t.hwnd and self._drag is None:
             if t.minimized():
                 self.root.withdraw()
             else:
                 left, top, right, bottom = t.rect()
                 h = self.root.winfo_reqheight()
-                x, y = right - self.width - int(24 * self.k), top + int(96 * self.k)
-                geo = f"{self.width}x{min(h, bottom - y - int(40 * self.k))}+{x}+{y}"
+                if self.offset:
+                    # never lost: at least its header stays over the app's window
+                    x = min(max(left + self.offset[0], left - self.width + int(80 * self.k)), right - int(80 * self.k))
+                    y = min(max(top + self.offset[1], top), bottom - int(40 * self.k))
+                    geo = f"{self.width}x{h}+{x}+{y}"
+                else:
+                    x, y = right - self.width - int(24 * self.k), top + int(96 * self.k)
+                    geo = f"{self.width}x{min(h, bottom - y - int(40 * self.k))}+{x}+{y}"
                 if self.root.state() == "withdrawn":
                     self.root.deiconify()
                 if self.root.geometry() != geo:
@@ -553,6 +573,33 @@ class Panel:
         subprocess.Popen([sys.executable, str(main), "--id", str(self.photo[0]), "--app", self.host.key],
                          creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
 
+    # -------------------------------------------------------------- moving it
+    def drag_start(self, e):
+        x, y = self.root.winfo_x(), self.root.winfo_y()
+        self._drag = {"grab": (e.x_root - x, e.y_root - y), "from": (x, y), "to": (x, y)}
+
+    def drag_move(self, e):
+        if self._drag is not None:
+            gx, gy = self._drag["grab"]
+            self._drag["to"] = (e.x_root - gx, e.y_root - gy)
+            self.root.geometry("+%d+%d" % self._drag["to"])
+
+    def drag_end(self, e=None):
+        """Where it was let go, kept from the app window's top-left: it moves with the app, and opens there next
+        time. A click that did not move it leaves it where it was (docked stays docked)."""
+        if self._drag is None:
+            return
+        d, self._drag = self._drag, None
+        if d["to"] != d["from"] and self.tether.hwnd:
+            left, top, __, __ = self.tether.rect()
+            self.offset = [d["to"][0] - left, d["to"][1] - top]
+            A.remember("panel_offset", self.offset)
+
+    def dock(self, e=None):
+        """Back at the app's right edge (a double-click on the header)."""
+        self._drag, self.offset = None, None
+        A.remember("panel_offset", None)
+
     def fold(self):
         if self.body.winfo_manager():
             self.body.pack_forget()
@@ -614,6 +661,18 @@ class Panel:
             self.pick(int(arg))
         elif kind == "save":
             self.save()
+        elif kind == "drag":  # as dragging the header by dx,dy pixels and letting go
+            dx, dy = (int(v) for v in arg.split(","))
+            x0, y0 = self.root.winfo_x(), self.root.winfo_y()
+            e = type("E", (), {"x_root": x0 + 10, "y_root": y0 + 10})()
+            self.drag_start(e)
+            e.x_root, e.y_root = x0 + 10 + dx, y0 + 10 + dy
+            self.drag_move(e)
+            self.drag_end()
+            delay = 800
+        elif kind == "dock":
+            self.dock()
+            delay = 800
         elif kind == "shot":
             self.shot(int(arg or 0))
         elif kind == "quit":
