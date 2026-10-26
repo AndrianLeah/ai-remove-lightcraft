@@ -1,9 +1,17 @@
 # Instructions for AI agents: installing and using AI Remove
 
-AI Remove is an unofficial plug-in for LightCraft and Chromaforge (a LightCraft fork, once named LightCraft Classic)
-that removes objects from photos with local AI: from a RAW it writes
-the result into a DNG, from a JPEG, PNG, TIFF, WebP, HEIC or AVIF into a copy in the same format. Talk to the user in
-their language. Most users of this package speak Italian.
+AI Remove removes objects, people and reflections from photos with local AI. It is unofficial: not made or endorsed
+by the ArtCraft team (storytold) nor by Chromaforge's contributors. This branch is the **2.0 beta**, which works in two
+ways:
+- **As a local AI server for the Craft apps' shared AI layer** (storytold/craft-ai-integrations). `airemove-cli
+  --serve` answers OpenAI's image edits on 127.0.0.1, and the layer reaches it through a custom OpenAI-compatible
+  connection (see "As a server" below).
+- **As the 1.x window, unchanged,** for LightCraft and Chromaforge (a LightCraft fork, once named LightCraft
+  Classic). From a RAW it writes the result into a DNG; from a JPEG, PNG, TIFF, WebP, HEIC or AVIF, into a copy in the
+  same format.
+
+The released version is 1.6 (the window only). Talk to the user in their language; most users of this package speak
+Italian.
 
 ## Preferred: the MCP server
 
@@ -87,6 +95,28 @@ Setup of the server: `mcp/README.md`.
 - **Projects:** `<photo>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each
   photo. The installer registers it as a file type for the user (Windows `HKCU\Software\Classes\.airemove`, macOS the
   app's Info.plist, Linux `~/.local/share/mime/packages/airemove.xml`): a double-click opens its photo in AI Remove.
+- **As a server (2.0 beta):**
+  - **Start it:** `~/AIRemove/venv/(Scripts|bin)/airemove-cli --serve [--port 7990] [--key-file PATH]`. It serves
+    `GET /v1/models` and `POST /v1/images/edits` (OpenAI's multipart form, `b64_json` PNG answers) on 127.0.0.1 until
+    Ctrl+C, and prints one JSON line once it listens (`serving`, `models`, `key`, `version`).
+  - **Models:**
+    - `lama`, `rorem`, `flux` and `qwen` need a mask: transparent (OpenAI's convention) or white = the area. The
+      prompt goes to `flux` only.
+    - `flux-fill` draws what the prompt describes in the mask (Generative fill): a mask and a prompt are needed
+      (`missing_prompt` without one).
+    - `dai-50`, `dai-75`, `dai-100` and `dai-125` take the mask as optional.
+  - **The answer:** a PNG by default. `output_format` `jpeg` or `webp`, with `output_compression` 0 to 100 as the
+    quality (a WebP at 100 is lossless), keeps a large photo under the Craft layer's 32 MiB cap.
+  - **No RAW:** the server works on pixels and answers with pixels. The DNG write-back is only the window's and
+    `--auto`'s.
+  - **The connection** in craft-ai-integrations is a custom OpenAI-compatible one:
+    - address `http://127.0.0.1:7990/v1`;
+    - the fill models and `flux-fill` declared as image inpainting, `dai-…` as image editing;
+    - the key, if any, from the key file.
+  - **Keys and GPU:** never put the key on the command line; it goes in the key file. The models stay loaded on the GPU
+    while it runs, and one job runs at a time. Don't start it next to the user's AI Remove window.
+
+  The README sections "Start the server", "Connect it to a Craft app" and "The server's API" have the details.
 
 ## Uninstall
 

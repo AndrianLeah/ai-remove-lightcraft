@@ -1,7 +1,12 @@
 # AI Remove MCP server
 
-The server lets an AI assistant install, configure, check, use and uninstall AI Remove. It speaks MCP over stdio and
-uses only the Python standard library, so it works **before** AI Remove is installed. The launchers find a Python:
+The MCP server lets an AI assistant install, configure, check, use and uninstall AI Remove. It speaks MCP over stdio
+and uses only the Python standard library, so it works **before** AI Remove is installed.
+
+It is not the 2.0 image server: that one is started from a shell with `airemove-cli --serve`. The topic `server` of
+`ai_remove_guide` and [AGENTS.md](../AGENTS.md) explain it.
+
+The launchers find a Python:
 
 1. the installed AI Remove's;
 2. else a system Python 3.8+;
@@ -63,7 +68,7 @@ Then ask: *"Install AI Remove for LightCraft and Chromaforge"*. The `install_ai_
 
 | Tool | What it does |
 |---|---|
-| `ai_remove_guide` | What AI Remove is; how to install, use, troubleshoot, uninstall |
+| `ai_remove_guide` | What AI Remove is; how to install, use, run the 2.0 server (`server`), troubleshoot, uninstall |
 | `check_system` | GPU, PyTorch build, what each model is for with its size and licence, disk, the state of LightCraft and Chromaforge (`apps`), install self-test; with `model_dirs` ({model: folder}), what those folders hold of the models (read-only) |
 | `install` | Background install, after the user accepted sizes and licences (`accept_licenses: true`); optional `models`, `model_dirs` (models the user already has: used from there, not downloaded), `hf_token`, `install_dir`, `torch`, `apps` (`lightcraft`, `chromaforge`, `both`, `none`: ask the user which) |
 | `install_status` | Progress (step n/7) and the end of the log |

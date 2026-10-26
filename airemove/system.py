@@ -14,14 +14,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # the install folder: airemove/, models/, work/, venv/
 CONFIG_FILE = ROOT / "airemove.json"  # written by the installer
-VERSION = "1.6.0"
+VERSION = "2.0.0-beta.1"
 REPO = "AndrianLeah/ai-remove-lightcraft"  # on GitHub: its releases are the updates
 RELEASES = f"https://github.com/{REPO}/releases/latest"
 
 
 def version_tuple(v):
-    """'1.10.2' or 'v1.10.2' -> (1, 10, 2), for comparing versions."""
-    return tuple(int(x) for x in re.findall(r"\d+", str(v))[:3])
+    """'1.10.2' or 'v1.10.2' -> (1, 10, 2, 1), for comparing versions; a pre-release comes before its release:
+    '2.0.0-beta.1' -> (2, 0, 0, 0, 1). () for no version."""
+    m = re.match(r"[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?", str(v).strip())
+    if not m:
+        return ()
+    head = tuple(int(x) for x in m.group(1, 2, 3))
+    if m.group(4) is None:
+        return head + (1,)
+    return head + (0,) + tuple(int(x) for x in re.findall(r"\d+", m.group(4)))
 
 
 def latest_release(timeout=4.0):

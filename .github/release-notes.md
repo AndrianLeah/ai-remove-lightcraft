@@ -15,10 +15,16 @@
 | Linux x86-64 | `AIRemove-@VERSION@-linux.tar.gz` | unpack, `sh "Install on Linux.sh"` |
 | All three | `AIRemove-@VERSION@-all-platforms.zip` | |
 
-The installer asks which app to set up: LightCraft, Chromaforge or both. Then restart that app once, select a photo
-and press **Ctrl+Shift+X** (Cmd+Shift+X on a Mac). Or open **AI Remove** from the Start menu, Applications or the app
-menu and choose a photo: it works on its own too (a RAW needs LightCraft or Chromaforge installed, a JPEG, PNG, TIFF,
-WebP, HEIC or AVIF does not).
+**As a local AI server for the Craft apps** (2.0): run `airemove-cli --serve` from the install's `venv`, then add a
+custom OpenAI-compatible connection to `http://127.0.0.1:7990/v1` in craft-ai-integrations. The models are `lama`,
+`rorem`, `flux` and `qwen` (image inpainting) and `dai-50` … `dai-125` (image editing). The README's "Start the
+server" and "Connect it to a Craft app" have the details. No app needs to be set up for this: answer "neither" when
+the installer asks.
+
+**The window:** the installer asks which app to set up, LightCraft, Chromaforge or both. Then restart that app once,
+select a photo and press **Ctrl+Shift+X** (Cmd+Shift+X on a Mac). Or open **AI Remove** from the Start menu,
+Applications or the app menu and choose a photo: it works on its own too (a RAW needs LightCraft or Chromaforge
+installed, a JPEG, PNG, TIFF, WebP, HEIC or AVIF does not).
 
 **Already installed?** Run the @VERSION@ installer again on the same folder. It updates the app and keeps the models
 you have, without downloading them again.

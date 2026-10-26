@@ -1,4 +1,5 @@
-"""MCP server for AI Remove (a plug-in for LightCraft and Chromaforge): lets an AI assistant explain, install,
+"""MCP server for AI Remove (2.0 beta: a local AI server for the Craft apps, and the window for LightCraft and
+Chromaforge): lets an AI assistant explain, install,
 configure, check, use and uninstall AI Remove on Windows, macOS and Linux.
 
 Standard library only (Python 3.8+), stdio transport (one JSON-RPC message per line), so it runs before anything is
@@ -70,9 +71,15 @@ def doc(name):
 
 # ------------------------------------------------------------------------------------------------ guide
 GUIDE = {
-    "overview": """AI Remove is an unofficial plug-in for LightCraft (the raw photo editor by the ArtCraft team; this
-plug-in is not made or endorsed by them). It removes objects and people from photos with AI (Lightroom's
-Generative Remove, but local): select with one click (SAM 3), generate variants (LaMa, SDXL or FLUX Fill), pick one;
+    "overview": """AI Remove 2.0 beta (unofficial: not made or endorsed by the ArtCraft team, who make the Craft apps)
+removes objects, people and reflections from photos with local AI, in two ways:
+- as a local AI server for the Craft apps' shared AI layer (storytold/craft-ai-integrations): `airemove-cli --serve`
+  answers OpenAI's image edits on 127.0.0.1:7990, reached through a custom OpenAI-compatible connection (topic
+  "server");
+- as the 1.x window for LightCraft (the raw photo editor by the ArtCraft team) and Chromaforge, unchanged.
+The released version is 1.6, the window only.
+The window is Lightroom's Generative Remove, but local: select with one click (SAM 3), generate variants (LaMa, RORem,
+FLUX Fill or Qwen-Image), pick one;
 from a RAW the result is written back into a RAW DNG (<name>-AIRemove.dng) stacked on the original in LightCraft, so
 all the development still works on it; from a JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format
 (<name>-AIRemove.jpg...). Every removal stays editable in a project file next to the photo (<photo>.airemove). It also
@@ -120,6 +127,23 @@ Headless (no window): put a mask named "Remove" (or "Remove: <English prompt>"; 
 LightCraft or Chromaforge — e.g. with the app's own MCP tools (an Object mask on the thing, renamed) — then call
 remove_with_masks (app=chromaforge when both are open); for reflections in glass, remove_reflections (the "Remove"
 masks, else the whole photo).""",
+    "server": """2.0 beta: AI Remove as a local OpenAI-compatible image server, for the Craft apps' shared AI layer
+(storytold/craft-ai-integrations) or any OpenAI client. No LightCraft or Chromaforge needed (install with apps=none if
+the user only wants this).
+Start: <install>/venv/Scripts/airemove-cli.exe --serve (Windows; venv/bin/airemove-cli elsewhere), optional --port
+(7990) and --key-file PATH (a file holding the key; never put a key on a command line). It prints one JSON line
+(serving, models, key, version) and serves until Ctrl+C; the models stay loaded on the GPU, one job at a time. It is
+GPU work: not next to the user's AI Remove window.
+In craft-ai-integrations: a custom OpenAI-compatible connection, address http://127.0.0.1:7990/v1, the key if any,
+models lama, rorem, flux, qwen and flux-fill (draws the prompt: required) declared as image inpainting and dai-50,
+dai-75, dai-100, dai-125 as image editing.
+API: GET /v1/models; POST /v1/images/edits (multipart: model, image, mask, prompt, n, output_format png|jpeg|webp,
+output_compression 0-100 = their quality, a WebP at 100 lossless) -> {"data": [{"b64_json": …}]}, the whole picture at
+its size (a PNG by default; above ~30 MP a PNG passes the Craft layer's 32 MiB cap: ask webp or jpeg). Pixels in,
+pixels out: the DNG write-back over a RAW is only the window's and --auto's. Mask: transparent = change (OpenAI's) or white = change; needed by the fill models,
+optional for dai-*. The prompt goes to flux only. Only 127.0.0.1, no browser Origin, Bearer key with --key-file.
+Status: not yet tried inside a Craft app; the layer's "Remove objects" tool needs the prompt to be optional for
+custom models (suggested upstream).""",
     "troubleshoot": """- "LightCraft non risponde": LightCraft is closed, or was started before the install: restart it. On Linux
   with Wayland its window must be visible. The control port is 7980 (LIGHTCRAFT_CONTROL_PORT); Chromaforge's is 7981
   (LIGHTCRAFT_CLASSIC_CONTROL_PORT; without it Chromaforge takes LIGHTCRAFT_CONTROL_PORT too, and both apps want the
@@ -127,7 +151,10 @@ masks, else the whole photo).""",
 - "Chromaforge non ha accettato AI Remove": its control channel wants the token it writes at every start
   (control-token-<port> in its settings folder): restart Chromaforge.
 - First FLUX/SDXL variant slow on AMD: the GPU compiles its kernels once (minutes), then it is fast.
-- Out of GPU memory: use SDXL instead of FLUX, fewer variants, close other GPU apps.
+- Out of GPU memory: use RORem instead of FLUX, fewer variants, close other GPU apps (the server too: it keeps its
+  models loaded).
+- The server: "cannot listen on 127.0.0.1:7990" = the port is taken (another server already running?): --port, and the
+  same port in the connection's address. 401 = the connection's key is not the key file's.
 - Windows SmartScreen / macOS Gatekeeper warnings on the install files: they are unsigned scripts. Windows: More info
   > Run anyway. macOS blocks a double-click on a downloaded unsigned script and macOS 15 dropped right-click > Open:
   run `sh "Install on Mac.command"` in Terminal (Gatekeeper does not check scripts started that way), or use System
@@ -526,9 +553,10 @@ TOOLS = [
                                                                  "keep_models": {"type": "boolean"}}},
      uninstall, False),
 ]
-INSTRUCTIONS = """AI Remove: an unofficial plug-in for LightCraft and Chromaforge (a LightCraft fork) that removes
-objects from photos with local AI and writes the result back into a DNG (from a RAW) or a copy in the picture's format
-(JPEG, PNG, TIFF, WebP, HEIC, AVIF). To install: ai_remove_guide(topic=install), then check_system, explain sizes and
+INSTRUCTIONS = """AI Remove 2.0 beta: removes objects and reflections from photos with local AI, as a local
+OpenAI-compatible server for the Craft apps' shared AI layer (ai_remove_guide(topic=server)) and as the window for
+LightCraft and Chromaforge (a LightCraft fork), which writes the result back into a DNG (from a RAW) or a copy in the
+picture's format (JPEG, PNG, TIFF, WebP, HEIC, AVIF). To install: ai_remove_guide(topic=install), then check_system, explain sizes and
 licences, ask which app to set up (LightCraft, Chromaforge or both) and get the user's consent,
 install(accept_licenses=true, apps=...), poll install_status, then tell the user to restart the app and press
 Ctrl+Shift+X (Cmd+Shift+X on Mac) on a photo. Never invent a Hugging Face token."""
