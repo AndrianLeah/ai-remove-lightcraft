@@ -401,6 +401,21 @@ class HintEntry(tk.Entry):
         self.configure(state=st)
 
 
+def model_meta():
+    """model -> (name, what it is for, what one variant takes on this PC from the last runs): the model menu's lines,
+    in the window and in the panel (panel.py)."""
+    def each(key):
+        return _("~{time} each", time=App.fmt_s(A.expected(key)))
+    return {
+        "lama": ("LaMa", _("Quick fill · plain backgrounds"), "~" + App.fmt_s(A.expected("lama"))),
+        "rorem": ("RORem", _("People and objects · draws no one back"), each("rorem_variant")),
+        "flux": ("FLUX Fill", _("Architecture · large areas"), each("flux_variant")),
+        "qwen": ("Qwen-Image", _("People and objects · complex backgrounds"), each("qwen_variant")),
+        "dai": ("DAI", _("Reflections in glass · whole photo or selection"),
+                "~" + App.fmt_s(A.expected("dai_variant"))),
+        "fill": (_(MODEL_NAMES["fill"]), _("What you describe, drawn in the selection"), each("fill_variant"))}
+
+
 class ModelPicker(tk.Frame):
     """The model menu: a button with the chosen model's name, what it is for and its time on this PC; a click opens
     the list, in two groups, each model with what it is best for (a Combobox line was too short to say it)."""
@@ -1008,17 +1023,7 @@ class App:
         first = "rorem" if "rorem" in keys else keys[0]  # people and objects, none drawn back: the default
         cur = self.model_key() if self.model_var.get() else A.setting("model", first)
         cur = cur if cur in keys else first  # also a model no longer in the menu (SDXL, OSOR, ObjectClear)
-
-        def each(key):
-            return _("~{time} each", time=self.fmt_s(A.expected(key)))
-        self.model_meta = {
-            "lama": ("LaMa", _("Quick fill · plain backgrounds"), "~" + self.fmt_s(A.expected("lama"))),
-            "rorem": ("RORem", _("People and objects · draws no one back"), each("rorem_variant")),
-            "flux": ("FLUX Fill", _("Architecture · large areas"), each("flux_variant")),
-            "qwen": ("Qwen-Image", _("People and objects · complex backgrounds"), each("qwen_variant")),
-            "dai": ("DAI", _("Reflections in glass · whole photo or selection"),
-                    "~" + self.fmt_s(A.expected("dai_variant"))),
-            "fill": (_(MODEL_NAMES["fill"]), _("What you describe, drawn in the selection"), each("fill_variant"))}
+        self.model_meta = model_meta()
         # one line per model (tests and the saved setting go by it): its name first
         self.model_labels = {m: f"{n} · {u} · {t}" for m, (n, u, t) in self.model_meta.items()}
         self.picker.set_models(self.model_meta, keys)
