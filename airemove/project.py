@@ -8,7 +8,8 @@ r<id>/NN.png (each variant, render space of the area), r<id>/NN_hole.png (1-bit,
 that also removed the object's shadow — OSOR, ObjectClear — whose hole is larger than area.png).
 A reflection removal ("Remove reflections", often the whole photo) has r<id>/light.npz instead of its variants'
 pictures: the reflection's light as the model found it (Removal.light) — a few MB instead of tens per picture — and
-in project.json its strength, how much of that light is taken away.
+in project.json its strength, how much of that light is taken away. A removal that draws something new ("Draw something
+new") has "fill": true in project.json; its variants are pictures like any fill's ("Fill 1").
 """
 import io
 import json
@@ -65,6 +66,8 @@ def save(s):
              "counts": dict(r.counts), "variants": []}
         if r.hints:  # what Describe found in it, for Qwen-Image's namer
             e["hints"] = list(r.hints)
+        if r.fill:  # "Draw something new": only Fill variants are made for it
+            e["fill"] = True
         if "selection" not in r.png:
             r.png["selection"] = mask_png(r.mask_e)
             r.png["area"] = mask_png(r.reg_mask)
