@@ -44,6 +44,17 @@ vetrina, il velo su ciò che sta dietro), e la toglie dai valori del RAW stesso:
 dettaglio e il rumore del sensore. **Intensità**, sotto il risultato, dice quanto toglierne (da 0 a 150 %, 75 %
 all'inizio), e la foto segue mentre trascini.
 
+**Disegnare qualcosa di nuovo (riempimento generativo).** Scegli **Riempimento generativo** sotto *Disegna qualcosa di
+nuovo* nel menu dei modelli, seleziona dove va, scrivi cosa disegnare in inglese ("a wooden bench", "a lemon tree in a
+terracotta pot", "white clouds") e premi **Disegna nella selezione**.
+- **Il modello:** FLUX Fill lo disegna con la luce e la messa a fuoco della foto.
+- **Il risultato:** viene scritto nel RAW come il riempimento di una rimozione, in un DNG che si sviluppa come
+  l'originale.
+- **La selezione è la forma che riempie:** per qualcosa che sta in piedi, seleziona fino a terra, altrimenti galleggia.
+- **Non disegna l'ombra a terra.**
+- **Le selezioni grandi:** una selezione grande viene disegnata più piccola della foto e al 100 % risulta morbida. La
+  nota sotto la variante dice di quanto; una selezione più piccola la disegna più nitida.
+
 Ogni rimozione resta modificabile: la puoi rigenerare, cambiare variante o eliminare in qualsiasi momento. Tutto è
 salvato in un unico file accanto alla foto (`<foto>.airemove`). L'originale non viene mai modificato.
 
@@ -181,7 +192,7 @@ Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cache/hu
 |---|---|---|---|---|
 | **LaMa** | Oggetti piccoli e medi su sfondi semplici (muro, cielo, prato, asfalto). Gira sul processore, un solo risultato in pochi secondi. | Aree grandi e strutture (porte, finestre): le sfoca | 0,2 GB | Apache-2.0 |
 | **RORem** (con i file di SDXL Inpainting) | Persone e oggetti, il modello predefinito: SDXL riaddestrato solo per togliere; dove SDXL ridisegna una persona o un oggetto strano nel buco (l'altra di due persone vicine, chi porta una borsa rimasta fuori dalla selezione), disegna lo sfondo. Circa 7 s a variante con una GPU. | Buchi lunghi e sottili (un palo): può lasciare una giuntura, LaMa o FLUX sono più puliti | 11,6 GB (SDXL 6,8 + RORem 4,8) | Apache-2.0, su CreativeML Open RAIL++-M di SDXL |
-| **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. | Le persone: in una strada o tra la folla ridisegna persone dove c'erano | 16,4 GB | FLUX.1 [dev] Non-Commercial |
+| **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. Fa anche il **Riempimento generativo** (Disegna qualcosa di nuovo): quello che descrivi, disegnato nella selezione. | Le persone: in una strada o tra la folla ridisegna persone dove c'erano. Quando disegna: niente ombra a terra; le selezioni grandi vengono morbide | 16,4 GB | FLUX.1 [dev] Non-Commercial |
 | **SAM 3** | La selezione con un clic, o descrivendo cosa selezionare ("people"). Senza, si usa il pennello. | | 3,2 GB, oppure 0 GB se è già in LightCraft o in Chromaforge | SAM License (Meta) |
 | **OSOR** (facoltativo, su FLUX) | Trova le ombre e i riflessi accanto a ciò che selezioni, per "Includi l'ombra" (insieme a SAM 3). | | 0,6 GB | FLUX.1 [dev] Non-Commercial |
 | **Qwen-Image 2.1 Turbo** (facoltativo) | Persone e oggetti su sfondi complessi (una persona davanti a una scalinata, un palo davanti alle colonne): riconosce cosa hai selezionato e lo toglie chiamandolo per nome. Circa 30 s a variante a 1024 px. Serve una GPU NVIDIA o AMD da 16 GB. | Quando hai fretta: circa un minuto per la prima variante di una rimozione | 14,4 GB | Qwen Research License (non commerciale); il suo encoder del testo Qwen3-VL: Apache-2.0 |
@@ -202,7 +213,8 @@ di dire che sono stati modificati con l'AI dove la legge lo richiede. È un rias
 licenze.
 
 Il testo facoltativo **in inglese** guida il riempimento, per esempio "old plaster wall" o "dark doorway". Con
-Qwen-Image dice cosa togliere, se lo ha riconosciuto male ("the lamp post").
+Qwen-Image dice cosa togliere, se lo ha riconosciuto male ("the lamp post"). Con il Riempimento generativo è
+obbligatorio: cosa disegnare ("a wooden bench").
 
 ## Uso
 

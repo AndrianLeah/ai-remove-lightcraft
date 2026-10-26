@@ -80,6 +80,8 @@ Setup of the server: `mcp/README.md`.
      Reflections in glass: `airemove-cli --auto dai` (needs the `dai` model) takes them off the masks as one removal,
      or off the whole photo when it has no such mask, at 75 %; `daiN` takes N % of what DAI found away (0 to 150:
      `dai100` all of it). The MCP tool for it is `remove_reflections` (`strength`, in %).
+     Generative fill: `airemove-cli --auto fill` (needs FLUX) draws what the mask's name says, in English, into the
+     masks as one removal (name the mask `Remove: a wooden bench`). Without a prompt in the name it refuses.
   3. It prints one JSON line with the result's path (`dng`, and `file`: the same, also for a picture), the app it
      worked in (`app`) and the photo id there.
 - **Projects:** `<photo>.airemove` (a zip; `project.json` lists the removals and their variants) sits next to each

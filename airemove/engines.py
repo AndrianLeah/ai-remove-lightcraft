@@ -131,9 +131,11 @@ def sam3_dir():
 
 def installed(model):
     """The model's files are there (model_files: in models/ or in the user's own folder), the checks the installer
-    makes too. OSOR runs on FLUX and RORem on SDXL's files: they need FLUX and SDXL as well."""
+    makes too. OSOR runs on FLUX and RORem on SDXL's files: they need FLUX and SDXL as well. "fill" ("Draw something
+    new") is FLUX itself, drawing its prompt."""
     if model == "sam3":
         return mf.part_ok("sam3", sam3_dir())
+    model = {"fill": "flux"}.get(model, model)
     return mf.has(model) and {"osor": mf.has("flux"), "rorem": mf.has("sdxl")}.get(model, True)
 
 
@@ -148,12 +150,12 @@ def model_folders():
 
 
 def usable(model, dev=None):
-    """Installed and sensible on this machine: FLUX (and OSOR, which runs on it) and Qwen-Image need a GPU; SDXL,
-    RORem work on the processor but take minutes."""
+    """Installed and sensible on this machine: FLUX (and OSOR and "fill", which run on it) and Qwen-Image need a GPU;
+    SDXL, RORem work on the processor but take minutes."""
     dev = dev or device()
     if not installed(model):
         return False
-    return model not in ("flux", "osor", "qwen") or dev != "cpu"
+    return model not in ("flux", "osor", "fill", "qwen") or dev != "cpu"
 
 
 SHADOW_MODELS = ("osor",)  # finds the object's shadow and reflection ("Include the shadow")
@@ -668,12 +670,13 @@ class FLUX:
                 Image.fromarray(eff).resize(src.size, Image.BILINEAR))
 
     def fill(self, src: Image.Image, mask: Image.Image, prompt: str, seed: int, steps: int = None,
-             progress=None, log=print, strength: float = 1.0, size: int = None) -> Image.Image:
+             progress=None, log=print, strength: float = 1.0, size: int = None, draw=False) -> Image.Image:
         """strength < 1: src's hole holds a fill to redraw (its layout stays, its detail is drawn anew). size: one of
-        FLUX_SIZES (default: the one nearer src's)."""
+        FLUX_SIZES (default: the one nearer src's). draw: the prompt alone, what to draw ("Draw something new"), none
+        of the words that keep a removal's hole empty."""
         torch = self.torch
         steps = steps or self.steps
-        p = f"{prompt}, {DEFAULT_PROMPT}" if prompt else DEFAULT_PROMPT
+        p = prompt if draw else f"{prompt}, {DEFAULT_PROMPT}" if prompt else DEFAULT_PROMPT
         emb = self.embeddings(p, log)
         # only two working sizes, both square: ROCm compiles GPU kernels (the VAE decoder above all) the first time it
         # meets a size — minutes — and caches them; with any multiple of 16 nearly every new area paid that again.

@@ -45,6 +45,16 @@ glass reflects (the street seen in the window, the veil over what is behind it),
 themselves: nothing is redrawn, every detail and the sensor's own noise stay. **Strength**, under the result, sets
 how much of it goes (0 to 150 %, 75 % at first), and the photo follows as you drag it.
 
+**Draw something new (generative fill).** Choose **Generative fill** under *Draw something new* in the model menu,
+select where it goes, write what to draw in English ("a wooden bench", "a lemon tree in a terracotta pot", "white
+clouds") and press **Draw in the selection**.
+- **The model:** FLUX Fill draws it with the photo's light and focus.
+- **The result:** it is written into the RAW like a removal's fill: a DNG that develops like the original.
+- **The selection is the shape it fills:** for something that stands, select down to the ground, or it floats.
+- **It draws no shadow on the ground.**
+- **Large selections:** a large selection is drawn smaller than the photo and looks soft at 100 %. The note under the
+  variant says how much; a smaller selection draws it sharper.
+
 Every removal stays editable: regenerate it, pick another variant or delete it whenever you like. Everything lives in
 one project file next to the photo (`<photo>.airemove`). The original is never modified.
 
@@ -83,6 +93,11 @@ embedded preview, which would still show what was removed.
   photo keeps all of its detail. **Strength**, a slider under the result, says how much of what DAI found goes,
   from 0 to 150 %, and the photo follows as you drag it. It starts at 75 %, which came closest to Lightroom's own
   result on a shop window (measured against the reflection Lightroom took away, which it stores in its `.acr` file).
+- **Generative fill,** like Photoshop's, but into the RAW: FLUX Fill draws what you describe where you select.
+  - **How FLUX sees the area:** upright, as the photo is seen, with your prompt alone, in one pass. On its side, as
+    removals show it, a lemon tree in a pot came out as broken pots in 2 variants of 2. Upright it was drawn in 2 of 2.
+  - **On your photos:** a man walking a dog, a pot with a plant, clouds and a tram out of focus all took the photo's
+    light and blur.
 - **Shadows and reflections.** "Include the shadow" adds the selected objects' shadows to the selection, so every
   model removes them: SAM 3 finds the shadows that touch them (a long shadow at a low sun), and OSOR, if installed,
   what goes with each object (its shadow, its reflection), part by part.
@@ -233,7 +248,7 @@ Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cach
 |---|---|---|---|---|
 | LaMa | Small and medium objects on plain backgrounds; runs on the processor in seconds | Large areas and structures (doors, windows): it blurs them | 0.2 GB | Apache-2.0 |
 | RORem (with SDXL Inpainting's files) | People and objects, the default: SDXL Inpainting retrained only to remove, no person or odd object drawn back where SDXL draws one; ~7 s per variant on a GPU | Long thin holes (a pole): it can leave a seam, LaMa or FLUX are cleaner | 11.6 GB (SDXL 6.8 + RORem 4.8) | Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M |
-| FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU | People: in a street or a crowd it draws people back where they were | 16.4 GB | FLUX.1 [dev] Non-Commercial |
+| FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU. Also **Generative fill** (Draw something new): what you describe, drawn in the selection | People: in a street or a crowd it draws people back where they were. Drawing: no shadow on the ground; large selections come out soft | 16.4 GB | FLUX.1 [dev] Non-Commercial |
 | SAM 3 | One-click selection, and selecting by describing ("people"); without it: the brush | | 3.2 GB (0 if LightCraft or Chromaforge has it) | SAM License (Meta) |
 | OSOR (optional, on FLUX) | Finds the shadows and reflections next to what you select, for "Include the shadow" (with SAM 3) | | 0.6 GB | FLUX.1 [dev] Non-Commercial |
 | Qwen-Image 2.1 Turbo (optional) | People and objects on complex backgrounds (a person in front of steps, a pole across columns): it names the selection and removes it by name; ~30 s per variant at 1024 px; needs an NVIDIA or AMD GPU with 16 GB | When in a hurry: about a minute for a removal's first variant | 14.4 GB | Qwen Research License (non-commercial); its text encoder Qwen3-VL: Apache-2.0 |
@@ -254,7 +269,8 @@ Stable Diffusion 2's). FLUX's licence also asks you to check its results before 
 edited with AI where the law requires it. This is a summary, not legal advice: the licences themselves decide.
 
 An optional prompt **in English** guides FLUX, for example "old plaster wall" or "dark doorway". For Qwen-Image it
-names what to remove, when it recognised it wrongly ("the lamp post").
+names what to remove, when it recognised it wrongly ("the lamp post"). For Generative fill it is required: what to
+draw ("a wooden bench").
 
 ## Using it
 
@@ -283,7 +299,8 @@ drop a photo on its icon.
 Chromaforge, is the starting selection. `airemove-cli --auto rorem` fills it without opening the window, writes the
 result, and prints it as JSON (`--app lightcraft|chromaforge` picks the app when both are open).
 `airemove-cli --auto dai` removes the reflections from it, or from the whole photo when it has no such mask, at 75 %;
-`dai100` takes away all of what DAI found, `dai40` 40 % (0 to 150).
+`dai100` takes away all of what DAI found, `dai40` 40 % (0 to 150). `airemove-cli --auto fill` draws what the mask's
+name says (`Remove: a wooden bench`) into the mask, as one removal.
 
 ### Files it writes
 
@@ -348,7 +365,7 @@ Uninstalling turns the channels off.
 | `installer/` | `bootstrap.ps1` / `bootstrap.sh` (fetch uv, then run `install.py`), `install.py` (standard library only), `fetch_models.py` |
 | `mcp/` | The MCP server and its launchers |
 | `assets/icon/` | The icon, and how it was made ([assets/icon/README.md](assets/icon/README.md)) |
-| `tools/` | `build_dist.py` (release packages), `check_dist.py` (checks them), `i18n_check.py` (translation catalogs), `ci_smoke.py` and `ci_removal.py` (CI: a real install, then one removal end to end), `ci_status.py` (CI: the install's status file read while it is written) |
+| `tools/` | `build_dist.py` (release packages), `check_dist.py` (checks them), `i18n_check.py` (translation catalogs), `ci_smoke.py` and `ci_removal.py` (CI: a real install, then one removal end to end), `ci_fill.py` (CI: Generative fill with a stand-in FLUX), `ci_status.py` (CI: the install's status file read while it is written) |
 
 Run from source with an install's Python:
 
