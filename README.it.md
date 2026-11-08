@@ -7,7 +7,7 @@
 [English](README.md)
 
 Toglie oggetti e persone dalle foto con l'intelligenza artificiale, direttamente dentro
-[LightCraft](https://github.com/storytold/lightcraft) o [Chromaforge](https://github.com/emmertex/lightcraft-classic),
+[LightCraft](https://github.com/storytold/lightcraft) o [Chromaforge](https://github.com/emmertex/chromaforge),
 oppure da solo. Fa quello che in Lightroom è "Rimozione generativa", ma tutto gira sul tuo computer. Lavora sui RAW e
 anche su JPEG, PNG, TIFF, WebP, HEIC e AVIF.
 
@@ -128,7 +128,7 @@ Il salvataggio non ne risente. La prima volta che il pannello legge una foto, il
 
 ## LightCraft e Chromaforge
 
-[Chromaforge](https://github.com/emmertex/lightcraft-classic) (prima "LightCraft Classic") è un fork di
+[Chromaforge](https://github.com/emmertex/chromaforge) (prima "LightCraft Classic") è un fork di
 [LightCraft](https://github.com/storytold/lightcraft) con l'impostazione di Lightroom Classic. AI Remove funziona allo
 stesso modo in tutti e due: Ctrl/Cmd+Shift+X, il risultato impilato sull'originale, le maschere chiamate "Rimuovi"
 come selezione di partenza, SAM 3 in comune con le maschere Oggetto dell'app. Cambia solo il modo in cui AI Remove
@@ -136,7 +136,7 @@ parla con ciascuna:
 
 | | LightCraft | Chromaforge |
 |---|---|---|
-| Dove si scarica | [getartcraft.com](https://getartcraft.com) | [le sue release](https://github.com/emmertex/lightcraft-classic/releases) |
+| Dove si scarica | [getartcraft.com](https://getartcraft.com) | [le sue release](https://github.com/emmertex/chromaforge/releases) |
 | Canale di controllo | porta 7980, `LIGHTCRAFT_CONTROL_PORT` | porta 7981, `LIGHTCRAFT_CLASSIC_CONTROL_PORT` |
 | Password sul canale | nessuna | un token che l'app scrive nella sua cartella delle impostazioni a ogni avvio (`control-token-<porta>`); AI Remove lo legge da lì |
 | Cartella delle impostazioni (Windows) | `%APPDATA%\LightCraft` | `%APPDATA%\LightCraft Classic` |

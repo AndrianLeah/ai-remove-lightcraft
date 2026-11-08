@@ -5,7 +5,7 @@
 <h1 align="center">AI Remove for LightCraft and Chromaforge</h1>
 
 Remove objects and people from photos with local AI, from inside [LightCraft](https://github.com/storytold/lightcraft)
-or [Chromaforge](https://github.com/emmertex/lightcraft-classic), or on its own — like Lightroom's Generative Remove,
+or [Chromaforge](https://github.com/emmertex/chromaforge), or on its own — like Lightroom's Generative Remove,
 but on your own computer. From a RAW the result goes back into a **RAW DNG**, so you keep developing it like any raw
 file. From a JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
 
@@ -171,14 +171,14 @@ Save is not affected. The first time the panel reads a photo, the photo's crop d
 
 ## LightCraft and Chromaforge
 
-[Chromaforge](https://github.com/emmertex/lightcraft-classic) (first named "LightCraft Classic") is a fork of
+[Chromaforge](https://github.com/emmertex/chromaforge) (first named "LightCraft Classic") is a fork of
 [LightCraft](https://github.com/storytold/lightcraft) with the Lightroom Classic layout. AI Remove works the same way
 in both: Ctrl/Cmd+Shift+X, the result stacked on the original, its masks named "Remove" as the starting selection, SAM 3
 shared with the app's Object masks. What differs is only how AI Remove reaches each one:
 
 | | LightCraft | Chromaforge |
 |---|---|---|
-| Get it | [getartcraft.com](https://getartcraft.com) | [its releases](https://github.com/emmertex/lightcraft-classic/releases) |
+| Get it | [getartcraft.com](https://getartcraft.com) | [its releases](https://github.com/emmertex/chromaforge/releases) |
 | Control channel | port 7980, `LIGHTCRAFT_CONTROL_PORT` | port 7981, `LIGHTCRAFT_CLASSIC_CONTROL_PORT` |
 | Password on the channel | none | a token the app writes in its settings folder at every start (`control-token-<port>`); AI Remove reads it there |
 | Settings folder (Windows) | `%APPDATA%\LightCraft` | `%APPDATA%\LightCraft Classic` |
