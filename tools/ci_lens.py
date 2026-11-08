@@ -106,7 +106,8 @@ def main(app_dir):
         ref = np.asarray(im, np.float32)
         new = np.asarray(A.crop_view(rgba, crop), np.float32)
         diff = np.abs(ref[60:-60, 60:-60, :3] - new[60:-60, 60:-60, :3]).mean()
-        expect(ref.shape == new.shape and diff < 2, f"no lens, {g['angle']}°: the crop as before ({diff:.2f} levels)")
+        expect(ref.shape == new.shape and diff < 2,
+               f"no lens, turned {g['angle']} degrees: the crop as before ({diff:.2f} levels)")
 
     flat = np.full((H, W, 3), 128, np.uint8)
     Image.fromarray(flat).save(work / "base.png")

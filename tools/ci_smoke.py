@@ -326,6 +326,9 @@ def uninstall(d):
 
 
 def main():
+    # a program's output passed on as it came: a character the runner's console can't show (Windows: cp1252) is
+    # replaced, not a crash of this script after the check itself passed
+    sys.stdout.reconfigure(errors="replace")
     if len(sys.argv) != 3 or sys.argv[1] not in ("check", "folder", "mcp", "remove", "uninstall"):
         print(__doc__)
         return 2
