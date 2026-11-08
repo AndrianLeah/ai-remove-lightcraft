@@ -5,7 +5,9 @@
 #   (.github/release-notes.md is the start), then publish it.
 # - Run by hand (Actions > Release > Run workflow, or gh workflow run release.yml -f tag=vX.Y.Z): the same for that tag,
 #   built from the tag when it exists, else from the branch the run is on (GitHub makes the tag there when the draft is
-#   published). Run again on a draft: its packages are replaced, its notes kept. A published release is never touched.
+#   published). Run again on a draft: its packages are replaced, its notes kept. A published release is never touched:
+#   publishing a draft makes its tag, whose push runs this again and ends there, without an error; a run by hand on a
+#   published release stops with one.
 # - Pull requests: the same build and checks, the packages kept as the run's artifact; no release.
 name: Release
 
@@ -115,11 +117,16 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.build.outputs.tag }}
           SHA: ${{ needs.build.outputs.sha }}
+          EVENT: ${{ github.event_name }}
         run: |
           (cd dist && sha256sum -c SHA256SUMS)
           files=(dist/AIRemove-* dist/SHA256SUMS)
           if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
             if [ "$draft" != true ]; then
+              if [ "$EVENT" = push ]; then  # the tag publishing the draft made: nothing left to do
+                echo "::notice::release $TAG is published already (its tag was made by publishing it): left as it is"
+                exit 0
+              fi
               echo "::error::release $TAG is published already: left as it is"
               exit 1
             fi
