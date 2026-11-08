@@ -791,25 +791,34 @@ def crop_view(rgba, crop, lens=None, size=None):
     x0, y0 = round(c["x0"] * w), round(c["y0"] * h)
     cw, ch = round(c["x1"] * w) - x0, round(c["y1"] * h) - y0
     ow, oh = size if size and size[0] < cw else (cw, ch)
-    v, u = np.mgrid[0:oh, 0:ow] + 0.5  # each output pixel's centre, back to where it comes from
-    x, y = u * cw / ow, v * ch / oh
-    if crop.get("flip_h"):
-        x = cw - x
-    if crop.get("flip_v"):
-        y = ch - y
-    x, y = x + x0 - w / 2, y + y0 - h / 2
-    a = np.radians(g.get("angle") or 0.0)
-    x, y = np.cos(a) * x + np.sin(a) * y + w / 2, -np.sin(a) * x + np.cos(a) * y + h / 2
-    if lens is not None:
-        x, y = lens.source(x, y, w, h)
-    planes = [ndi.map_coordinates(rgba[..., k].astype(np.float32), [y - 0.5, x - 0.5], order=1, mode="constant",
-                                  cval=0.0) for k in range(4)]
+    key = (h, w, repr(crop), (ow, oh), None if lens is None else (lens.coef.tobytes(), lens.gain_coef.tobytes()))
+    if _VIEW_MAP[0] == key:  # the same view as last time (another variant of the photo): the same map
+        x, y = _VIEW_MAP[1]
+    else:
+        v, u = np.mgrid[0:oh, 0:ow] + 0.5  # each output pixel's centre, back to where it comes from
+        x, y = u * cw / ow, v * ch / oh
+        if crop.get("flip_h"):
+            x = cw - x
+        if crop.get("flip_v"):
+            y = ch - y
+        x, y = x + x0 - w / 2, y + y0 - h / 2
+        a = np.radians(g.get("angle") or 0.0)
+        x, y = np.cos(a) * x + np.sin(a) * y + w / 2, -np.sin(a) * x + np.cos(a) * y + h / 2
+        if lens is not None:
+            x, y = lens.source(x, y, w, h)
+        x, y = (x - 0.5).astype(np.float32), (y - 0.5).astype(np.float32)  # map_coordinates' pixel indices
+        _VIEW_MAP[:] = [key, (x, y)]
+    planes = [ndi.map_coordinates(rgba[..., k], [y, x], order=1, mode="constant", cval=0.0, output=np.float32)
+              for k in range(4)]
     rgb8 = np.clip(np.stack(planes[:3], -1) + 0.5, 0, 255).astype(np.uint8)
     alpha8 = np.clip(planes[3] + 0.5, 0, 255).astype(np.uint8)
     if lens is not None and np.any(lens.gain_coef):  # the profile's vignetting: as bright as the app shows it
         m = alpha8 > 0
-        rgb8[m] = lin_to_srgb8(srgb_to_lin(rgb8[m]) * lens.gain(x[m], y[m], w, h)[:, None])
+        rgb8[m] = lin_to_srgb8(srgb_to_lin(rgb8[m]) * lens.gain(x[m] + 0.5, y[m] + 0.5, w, h)[:, None])
     return Image.fromarray(np.dstack([rgb8, alpha8]), "RGBA")
+
+
+_VIEW_MAP = [None, None]  # crop_view's last (view, coordinate map): the panel draws one view again for each variant
 
 
 def mask_selection(lc, pid, mask, work, size):

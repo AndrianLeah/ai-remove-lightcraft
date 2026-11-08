@@ -35,8 +35,8 @@ Keys, as in the window: Enter the action, Esc Stop, ← → the variants, the ba
 
 Tests: AIREMOVE_PANEL_TEST runs steps separated by ";": wait:ms · mode:remove|fill|reflect · model:key ·
 mask:<name> · prompt:<text> · variants:n · generate · waitvars:n · pick:i · step:±1 · list:<id> · original:0|1 ·
-info · stop · split · save · waitidle · drag:dx,dy · dock · menu[:close] · discard · full · window[:closed] · wshot:n ·
-wtab:<tab> · wback · wmenu · shot:n · pshot:n · quit."""
+info · stop · split · save · waitidle · waitshown · drag:dx,dy · dock · menu[:close] · discard · full ·
+window[:closed] · wshot:n · wtab:<tab> · wback · wmenu · shot:n · pshot:n · quit."""
 import json
 import os
 import queue
@@ -1020,7 +1020,11 @@ class Panel:
         s.find()
         chosen = [m for m in s.info["develop"]["masks"] if m["id"] == mask_id]
         s.targets, s.prompt = chosen, ""
+        s.want_lens = True  # the variants are drawn over the app's view, lens corrections and all (overlay_png)
         s.prepare()
+        if s.lens_optics is not None:  # measured while the model works: the first preview need not wait for it
+            s.lens_thread = threading.Thread(target=self.measure_lens, args=(s, s.lens_optics), daemon=True)
+            s.lens_thread.start()
         for attr, eng in self.engines.items():
             setattr(s, attr, eng)
         # a reopened project: a removal made here from a mask before is that mask's again (its name, in the project)
@@ -1313,28 +1317,33 @@ class Panel:
         self.overlay_files.append(path)
         return path, None
 
+    def measure_lens(self, s, optics):
+        """s.lens from the photo exported with its lens corrections (work/lens.png), for those optics; or, when they
+        cannot be matched, s.lens_failed."""
+        t0 = time.time()
+        s.lens = A.LensWarp.measure(s.work / "base.png", s.work / "lens.png", optics)
+        s.lens_failed = None if s.lens is not None else dict(optics)
+        A.log(f"panel: lens corrections in {time.time() - t0:.2f}s")
+
     def lens_for(self, s, pid, dev):
         """The photo's lens corrections as the app shows it (A.LensWarp), None when they move nothing; and why the
         variants cannot be drawn through them, if so. Measured once per photo and lens setting: from the export made
-        when the photo was read (Session.prepare), or a new one when the lens settings changed since."""
+        when the photo was read (Session.prepare, measured meanwhile: read), or a new one when the lens settings
+        changed since."""
         optics = dev.get("optics") or {}
         if not A.lens_moves(optics):
             return None, None
-        if s.lens is not None and s.lens.optics == optics:
-            return s.lens, None
-        failed = _("Not shown on this photo: its lens corrections could not be matched. Save shows the result.")
-        if s.lens is None and getattr(s, "lens_failed", None) == optics:
-            return None, failed
-        lens_png = s.work / "lens.png"
-        if s.lens_optics != optics or not lens_png.exists():
-            A.render_neutral(self.lc, pid, {"develop": dev}, None, lens_png=str(lens_png))
-            s.lens_optics = dict(optics)
-        t0 = time.time()
-        s.lens = A.LensWarp.measure(s.work / "base.png", lens_png, optics)
-        A.log(f"panel: lens corrections in {time.time() - t0:.2f}s")
-        if s.lens is None:
-            s.lens_failed = dict(optics)
-            return None, failed
+        if getattr(s, "lens_thread", None) is not None:
+            s.lens_thread.join()
+        if s.lens is None or s.lens.optics != optics:
+            if getattr(s, "lens_failed", None) != optics:
+                if s.lens_optics != optics or not (s.work / "lens.png").exists():
+                    A.render_neutral(self.lc, pid, {"develop": dev}, None, lens_png=str(s.work / "lens.png"))
+                    s.lens_optics = dict(optics)
+                self.measure_lens(s, optics)
+        if s.lens is None or s.lens.optics != optics:
+            return None, _("Not shown on this photo: its lens corrections could not be matched. Save shows the "
+                           "result.")
         return s.lens, None
 
     def put_layout(self, path):
@@ -1569,6 +1578,11 @@ class Panel:
             if self.busy or (kind == "waitvars" and (self.cur is None or len(self.cur[2].candidates) < want)):
                 self.root.after(500, lambda: self.test(steps))
                 return
+        elif kind == "waitshown":  # until the chosen variants are on the photo in the app
+            if self.overlay_shown is None or not self.overlays.empty():
+                self.root.after(300, lambda: self.test(steps))
+                return
+            delay = 1000
         elif kind == "pick":
             self.pick(int(arg))
         elif kind == "step":
