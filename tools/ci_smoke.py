@@ -22,7 +22,8 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                selection" splits a selection into removals: tools/ci_split.py, and "Remove
                                reflections" with a stand-in for DAI: tools/ci_reflections.py (the reflection's light
                                taken off the raw values), and "Draw something new" with a stand-in for FLUX:
-                               tools/ci_fill.py (the prompt alone, the area upright, the fill in the sensor data)
+                               tools/ci_fill.py (the prompt alone, the area upright, the fill in the sensor data),
+                               and the panel's preview through the app's lens corrections: tools/ci_lens.py
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
                                app, its menu entry, its .airemove file type and, on Windows, its Settings > Apps entry
                                are gone; the user's own model folders are still there
@@ -291,6 +292,8 @@ def remove(d):
     expect(r.returncode == 0, f"\"Remove reflections\" end to end: exit status 0 (it was {r.returncode})")
     r = run([py, ROOT / "tools" / "ci_fill.py", d])
     expect(r.returncode == 0, f"\"Draw something new\" end to end: exit status 0 (it was {r.returncode})")
+    r = run([py, ROOT / "tools" / "ci_lens.py", d])
+    expect(r.returncode == 0, f"the panel's preview through lens corrections: exit status 0 (it was {r.returncode})")
 
 
 def uninstall(d):
@@ -323,6 +326,9 @@ def uninstall(d):
 
 
 def main():
+    # a program's output passed on as it came: a character the runner's console can't show (Windows: cp1252) is
+    # replaced, not a crash of this script after the check itself passed
+    sys.stdout.reconfigure(errors="replace")
     if len(sys.argv) != 3 or sys.argv[1] not in ("check", "folder", "mcp", "remove", "uninstall"):
         print(__doc__)
         return 2

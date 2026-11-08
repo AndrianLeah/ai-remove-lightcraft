@@ -382,6 +382,11 @@ def srgb_to_lin(x8):
     return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
 
 
+def lin_to_srgb8(x):
+    x = np.clip(x, 0.0, 1.0)
+    return (np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1 / 2.4) - 0.055) * 255 + 0.5).astype(np.uint8)
+
+
 def mask_from_renders(base_png, dim_png):
     """Binary mask from a normal render and one with the Rimuovi masks at exposure -4.
     Only pixels the mask darkens strongly count (weight ~> 0.5); the faint soft fringe of LightCraft masks
@@ -586,19 +591,25 @@ def wait_sam(lc):
         time.sleep(2)
 
 
-def render_neutral(lc, pid, info, base_png, targets=(), mask_png=None):
+def render_neutral(lc, pid, info, base_png, targets=(), mask_png=None, lens_png=None):
     """base_png: the whole uncropped photo as developed, without lens corrections and geometry, 2400 px long; with
-    targets, mask_png too: the same with those masks 4 stops darker (mask_from_renders tells them apart). The photo's
-    crop, lens, geometry and masks are put back afterwards."""
+    targets, mask_png too: the same with those masks 4 stops darker (mask_from_renders tells them apart); with
+    lens_png, first the same with the photo's own lens corrections (LensWarp measures them against base_png; base_png
+    None: that one alone). The photo's crop, lens, geometry and masks are put back afterwards."""
     dev = info["develop"]
     saved = {"crop": dev["crop"], "optics": dev["optics"], "geometry": dev["geometry"]}
     sel = {"command": "library.select", "params": {"ids": [pid], "active": pid}}
+    steps = [sel, {"command": "crop.set", "params": {"rect": [0, 0, 1, 1], "angle": 0}}]
+    if lens_png:
+        steps += [{"command": "develop.merge", "params": {"settings": {"geometry": NEUTRAL_GEOMETRY},
+                                                          "label": "AI Remove (temporaneo)"}},
+                  {"command": "app.export", "params": {"path": lens_png, "longEdge": 2400}}]
+    if base_png:
+        steps += [{"command": "develop.merge", "params": {"settings": {"optics": {"lens_profile": False, "distortion": 0},
+                                                                      "geometry": NEUTRAL_GEOMETRY}, "label": "AI Remove (temporaneo)"}},
+                  {"command": "app.export", "params": {"path": base_png, "longEdge": 2400}}]
     try:
-        r = lc.run([sel,
-                    {"command": "crop.set", "params": {"rect": [0, 0, 1, 1], "angle": 0}},
-                    {"command": "develop.merge", "params": {"settings": {"optics": {"lens_profile": False, "distortion": 0},
-                                                                        "geometry": NEUTRAL_GEOMETRY}, "label": "AI Remove (temporaneo)"}},
-                    {"command": "app.export", "params": {"path": base_png, "longEdge": 2400}}]
+        r = lc.run(steps
                    + ([] if not targets else
                       [{"command": "mask.adjust", "params": {"id": m["id"], "values": {"exposure": -4}}} for m in targets]
                       + [{"command": "app.export", "params": {"path": mask_png, "longEdge": 2400}}]))
@@ -611,6 +622,203 @@ def render_neutral(lc, pid, info, base_png, targets=(), mask_png=None):
         restore += [{"command": "develop.merge", "params": {"settings": saved, "label": "AI Remove (ripristino)"}},
                     {"command": "mask.select", "params": {"id": None}}]
         lc.run(restore)
+
+
+def lens_moves(optics):
+    """Whether the app's lens corrections (its optics section) move or brighten the photo against base.png, which is
+    read without them (render_neutral): its profile, or its manual Distortion. The RAW write-back stays in base.png's
+    frame (the app corrects the DNG as it does the original); only what is drawn over the app's view follows them."""
+    return bool(optics.get("lens_profile")) or bool(optics.get("distortion"))
+
+
+class LensWarp:
+    """How the app's lens corrections move and brighten the photo, from base.png (without them) to the app's view (with
+    them). The app tells neither, and its corrections are many (the camera's own, embedded in the file; its lens
+    profiles; the manual Distortion), so they are measured: the photo exported both ways (render_neutral's lens_png)
+    and compared tile by tile (phase correlation), coarse to fine, each pass on base.png already warped by the model
+    so far (a tile compared with an unwarped one differs in scale too, which biases its shift). The model is radial
+    about the centre, as the app's own are (DNG WarpRectilinear, the manual k1·r²): for a point u of the corrected
+    photo, from its centre in half diagonals, source = u·(a0 + a1 r² [+ a2 r⁴ + a3 r⁶]) + tangential terms, a higher
+    power only when it explains the photo clearly better (where it has no texture, the sky, its outer radii go
+    unmeasured and a high power would invent them). The gain (profile vignetting): log2 g = b0 + b1 r² + b2 r⁴ + b3 r⁶
+    along the source radius, from the two exports' ratio. On lightcraft-cli renders, manual Distortion −100…+100
+    with Vignetting: 95 % of the photo within 0.05 px at 2400 px, the worst 0.16 px; tone within ~1 level."""
+
+    TERMS = ([0, 1, 4, 5], [0, 1, 2, 4, 5], [0, 1, 2, 3, 4, 5])  # r², then r⁴, then r⁶ (the tangential pair always)
+
+    def __init__(self, coef, gain, optics):
+        self.coef, self.gain_coef, self.optics = coef, gain, dict(optics)
+
+    @staticmethod
+    def basis(u):
+        x, y = u[:, 0], u[:, 1]
+        r2 = x * x + y * y
+        return (np.stack([x, x * r2, x * r2 ** 2, x * r2 ** 3, 2 * x * y, r2 + 2 * x * x], 1),
+                np.stack([y, y * r2, y * r2 ** 2, y * r2 ** 3, r2 + 2 * y * y, 2 * x * y], 1))
+
+    @classmethod
+    def apply(cls, coef, u):
+        bx, by = cls.basis(u)
+        return np.stack([bx @ coef, by @ coef], 1)
+
+    def source(self, x, y, w, h):
+        """Positions in the corrected photo (px of a w × h frame, a pixel's centre at i + 0.5) → base.png's."""
+        c, hd = np.array([w / 2, h / 2]), np.hypot(w, h) / 2
+        u = np.stack([(np.ravel(x) - c[0]) / hd, (np.ravel(y) - c[1]) / hd], 1)
+        s = c + hd * self.apply(self.coef, u)
+        return s[:, 0].reshape(np.shape(x)), s[:, 1].reshape(np.shape(x))
+
+    def gain(self, sx, sy, w, h):
+        """The corrections' brightening (linear light) at base.png positions."""
+        r2 = ((sx - w / 2) ** 2 + (sy - h / 2) ** 2) / (np.hypot(w, h) / 2) ** 2
+        b = self.gain_coef
+        return 2.0 ** (b[0] + r2 * (b[1] + r2 * (b[2] + r2 * b[3])))
+
+    @staticmethod
+    def _gray(path, side):
+        """The export's luminance (linear light), side px long."""
+        im = Image.open(path).convert("RGB")
+        s = side / max(im.size)
+        a8 = np.asarray(im.resize((max(1, round(im.width * s)), max(1, round(im.height * s))), Image.LANCZOS))
+        return (srgb_to_lin(a8) @ np.array([0.2126, 0.7152, 0.0722])).astype(np.float32)
+
+    @staticmethod
+    def _shift(a, b, win):
+        """d with a(x) ~ b(x + d), and the correlation peak's height (how sure)."""
+        a, b = (a - a.mean()) * win, (b - b.mean()) * win
+        R = np.fft.rfft2(a) * np.conj(np.fft.rfft2(b))
+        R /= np.abs(R) + 1e-12
+        r = np.fft.irfft2(R, s=a.shape)
+        h, w = r.shape
+        iy, ix = np.unravel_index(np.argmax(r), r.shape)
+
+        def peak(lo, mid, hi):  # parabolic: the peak between pixels
+            den = lo - 2 * mid + hi
+            return 0.5 * (lo - hi) / den if abs(den) > 1e-12 else 0.0
+        py = iy + peak(r[(iy - 1) % h, ix], r[iy, ix], r[(iy + 1) % h, ix])
+        px = ix + peak(r[iy, (ix - 1) % w], r[iy, ix], r[iy, (ix + 1) % w])
+        return np.array([-(px - w if px > w / 2 else px), -(py - h if py > h / 2 else py)]), float(r[iy, ix])
+
+    @classmethod
+    def _fit(cls, uc, un, cols):
+        bx, by = cls.basis(uc)
+        A = np.concatenate([bx[:, cols], by[:, cols]])
+        y = np.concatenate([un[:, 0], un[:, 1]])
+        keep = np.ones(len(uc), bool)
+        for __ in range(4):  # robust: tiles far off (a moving thing, a repeated pattern) left out
+            k2 = np.concatenate([keep, keep])
+            sol = np.linalg.lstsq(A[k2], y[k2], rcond=None)[0]
+            coef = np.zeros(6)
+            coef[cols] = sol
+            res = np.linalg.norm(cls.apply(coef, uc) - un, axis=1)
+            keep = res <= max(3 * 1.4826 * np.median(res[keep]), 1e-4)
+        return coef, res, keep
+
+    @classmethod
+    def measure(cls, base_png, lens_png, optics, tile=64):
+        """The LensWarp from base_png to lens_png, or None when the photo has too little texture to tell."""
+        coef, half = np.array([1.0, 0, 0, 0, 0, 0]), tile // 2
+        win = np.outer(np.hanning(tile), np.hanning(tile)).astype(np.float32)
+        for side, step in ((300, 24), (600, 24), (1200, 40)):  # at 300 px a corner's shift is within a tile's reach
+            N, C = cls._gray(base_png, side), cls._gray(lens_png, side)
+            if N.shape != C.shape:
+                return None
+            h, w = C.shape
+            c, hd = np.array([w / 2, h / 2]), np.hypot(w, h) / 2
+            yy, xx = np.mgrid[0:h, 0:w] + 0.5
+            for __ in range(3):
+                warp = cls(coef, np.zeros(4), optics)
+                sx, sy = warp.source(xx, yy, w, h)
+                Nw = ndi.map_coordinates(N, [sy - 0.5, sx - 0.5], order=1, mode="constant", cval=np.nan)
+                pc, q = [], []
+                for cy in range(half, h - half, step):
+                    for cx in range(half, w - half, step):
+                        a, b = C[cy - half:cy + half, cx - half:cx + half], Nw[cy - half:cy + half, cx - half:cx + half]
+                        if a.std() < 0.004 or not np.isfinite(b).all():
+                            continue
+                        d, pk = cls._shift(a, b, win)
+                        if pk >= 0.15 and np.abs(d).max() <= half / 2:
+                            pc.append([cx, cy])
+                            q.append([cx + d[0], cy + d[1]])
+                if len(pc) < 30:
+                    return None
+                # C(q) ~ Nw(q + d) = N(source(q + d)): corrected q comes from source(q + d)
+                q = np.array(q)
+                pn = np.stack(warp.source(q[:, 0], q[:, 1], w, h), 1)
+                uc, un = (np.array(pc, float) - c) / hd, (pn - c) / hd
+                fits = [cls._fit(uc, un, cols) for cols in cls.TERMS]
+                keep = fits[-1][2]
+                rms = [np.sqrt((np.linalg.norm(cls.apply(f[0], uc) - un, axis=1)[keep] ** 2).mean()) for f in fits]
+                coef, e = next((f[0], e) for f, e in zip(fits, rms) if e <= rms[-1] * 1.15 + 2e-5)
+        err = e * hd * 2400 / max(w, h)
+        if err > 2.0:  # px at base.png's size: not a lens's smooth warp (a different photo, a moving subject)
+            log(f"lens corrections not measured: {err:.1f} px apart")
+            return None
+        # the gain: the corrected export over base.png warped onto it, block by block, along the source radius
+        sx, sy = cls(coef, np.zeros(4), optics).source(xx, yy, w, h)
+        Nw = ndi.map_coordinates(N, [sy - 0.5, sx - 0.5], order=1, mode="constant", cval=np.nan)
+        rs2 = ((sx - w / 2) ** 2 + (sy - h / 2) ** 2) / hd ** 2
+        ok = np.isfinite(Nw) & (Nw > 0.02) & (Nw < 0.9) & (C > 0.02) & (C < 0.9)
+        rows, ratio, B = [], [], 12
+        for y in range(0, h - B + 1, B):
+            for x in range(0, w - B + 1, B):
+                m = ok[y:y + B, x:x + B]
+                if m.sum() > B * B * 0.6:
+                    rows.append(rs2[y:y + B, x:x + B][m].mean())
+                    ratio.append(np.median(C[y:y + B, x:x + B][m] / Nw[y:y + B, x:x + B][m]))
+        gain = np.zeros(4)
+        if len(rows) >= 30:
+            r2, lg = np.array(rows), np.log2(np.array(ratio))
+            A = np.stack([np.ones_like(r2), r2, r2 ** 2, r2 ** 3], 1)
+            keep = np.ones(len(lg), bool)
+            for __ in range(4):
+                gain = np.linalg.lstsq(A[keep], lg[keep], rcond=None)[0]
+                res = np.abs(A @ gain - lg)
+                keep = res <= max(3 * 1.4826 * np.median(res[keep]), 0.01)
+        log(f"lens corrections measured: {err:.2f} px rms at 2400 px, scale {coef[0]:.4f}, "
+            f"corners {2 ** (gain @ [1, 1, 1, 1]):.2f}x brighter")
+        return cls(coef, gain, optics)
+
+
+def crop_view(rgba, crop, lens=None, size=None):
+    """rgba (base.png's frame) as the app shows the photo: through its lens corrections (lens: a LensWarp), turned and
+    cut as its crop, flipped, at most size (the view's pixels); one resampling for all of it. The app's crop, as
+    lightcraft-cli renders it (measured): the whole photo turned about its centre by the angle (clockwise when
+    positive) on the same canvas, the rect cut from that, then the flips."""
+    h, w = rgba.shape[:2]
+    g = crop["geometry"]
+    c = g["rect"]
+    x0, y0 = round(c["x0"] * w), round(c["y0"] * h)
+    cw, ch = round(c["x1"] * w) - x0, round(c["y1"] * h) - y0
+    ow, oh = size if size and size[0] < cw else (cw, ch)
+    key = (h, w, repr(crop), (ow, oh), None if lens is None else (lens.coef.tobytes(), lens.gain_coef.tobytes()))
+    if _VIEW_MAP[0] == key:  # the same view as last time (another variant of the photo): the same map
+        x, y = _VIEW_MAP[1]
+    else:
+        v, u = np.mgrid[0:oh, 0:ow] + 0.5  # each output pixel's centre, back to where it comes from
+        x, y = u * cw / ow, v * ch / oh
+        if crop.get("flip_h"):
+            x = cw - x
+        if crop.get("flip_v"):
+            y = ch - y
+        x, y = x + x0 - w / 2, y + y0 - h / 2
+        a = np.radians(g.get("angle") or 0.0)
+        x, y = np.cos(a) * x + np.sin(a) * y + w / 2, -np.sin(a) * x + np.cos(a) * y + h / 2
+        if lens is not None:
+            x, y = lens.source(x, y, w, h)
+        x, y = (x - 0.5).astype(np.float32), (y - 0.5).astype(np.float32)  # map_coordinates' pixel indices
+        _VIEW_MAP[:] = [key, (x, y)]
+    planes = [ndi.map_coordinates(rgba[..., k], [y, x], order=1, mode="constant", cval=0.0, output=np.float32)
+              for k in range(4)]
+    rgb8 = np.clip(np.stack(planes[:3], -1) + 0.5, 0, 255).astype(np.uint8)
+    alpha8 = np.clip(planes[3] + 0.5, 0, 255).astype(np.uint8)
+    if lens is not None and np.any(lens.gain_coef):  # the profile's vignetting: as bright as the app shows it
+        m = alpha8 > 0
+        rgb8[m] = lin_to_srgb8(srgb_to_lin(rgb8[m]) * lens.gain(x[m] + 0.5, y[m] + 0.5, w, h)[:, None])
+    return Image.fromarray(np.dstack([rgb8, alpha8]), "RGBA")
+
+
+_VIEW_MAP = [None, None]  # crop_view's last (view, coordinate map): the panel draws one view again for each variant
 
 
 def mask_selection(lc, pid, mask, work, size):
@@ -630,14 +838,14 @@ def mask_selection(lc, pid, mask, work, size):
     return m if m is not None and m.sum() >= 20 else None
 
 
-def extract(lc, pid, info, targets, work):
+def extract(lc, pid, info, targets, work, lens_png=None):
     """base.png = the whole uncropped photo as developed (selection happens on it; it is also the frame LightCraft's
     masks live in), the raw DNG export (an ordinary picture: its own file), and — if there are Rimuovi masks — their
-    union in that frame (else None)."""
+    union in that frame (else None). lens_png: the photo with its lens corrections too (render_neutral)."""
     sel = {"command": "library.select", "params": {"ids": [pid], "active": pid}}
     base_png, mask_png, dng = str(work / "base.png"), str(work / "masked.png"), str(work / "source.dng")
     use_sam = not targets or sam_mask(targets, 4, 4) is not None  # SAM 3 selections are read, not rendered
-    render_neutral(lc, pid, info, base_png, () if use_sam else targets, mask_png)
+    render_neutral(lc, pid, info, base_png, () if use_sam else targets, mask_png, lens_png)
     if info.get("kind") == "image":  # its pixels are the file's: nothing to export
         dng = info["source"]["path"]
     else:
@@ -1345,6 +1553,9 @@ class Session:
         self._area_lock = threading.RLock()  # the working sensor data and the areas rendered from it
         self._work_cfa, self._work_key = None, None
         self.dng_path, self.dng_id, self.restored = None, None, None
+        # the panel draws over the app's view, which has the photo's lens corrections: the photo is exported with them
+        # too (work/lens.png, for the optics in lens_optics) and the warp measured from it (LensWarp, kept in lens)
+        self.want_lens, self.lens_optics, self.lens = False, None, None
 
     # -------------------------------------------------------------- photo
     def find(self):
@@ -1371,7 +1582,10 @@ class Session:
         else:
             if self.targets:
                 wait_sam(lc)
-            self.init_mask, self.lum_e, dng = extract(lc, self.pid, self.info, self.targets, self.work)
+            optics = self.info["develop"].get("optics") or {}
+            lens_png = str(self.work / "lens.png") if self.want_lens and lens_moves(optics) else None
+            self.init_mask, self.lum_e, dng = extract(lc, self.pid, self.info, self.targets, self.work, lens_png)
+            self.lens_optics = dict(optics) if lens_png else None
         self.base = Image.open(self.work / "base.png").convert("RGB")
         self.base_arr = np.asarray(self.base)
         self.raw = open_source(dng)

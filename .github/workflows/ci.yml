@@ -48,7 +48,7 @@ jobs:
         include:
           - os: windows-latest
             torch: cpu
-          - os: macos-14
+          - os: macos-15
             torch: mps
           - os: ubuntu-latest
             torch: cpu

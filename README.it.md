@@ -97,6 +97,10 @@ maschere dell'app toglie oggetti, riempie e toglie riflessi, senza uscire dall'a
 - **Il risultato si vede sulla foto nell'app.** La variante scelta viene disegnata sopra la foto, nella vista
   dell'app stessa, come sua Layout Image. Succede finché la foto si vede intera (vista Dettaglio, Adatta, non durante
   il ritaglio). Tieni premuto **Originale**, o `\`, per confrontare.
+  - **Correzioni dell'obiettivo:** con un profilo dell'obiettivo o una Distorsione manuale attivi, la variante viene
+    disegnata come l'app corregge la foto. AI Remove misura come le correzioni la spostano e la schiariscono, con
+    un'esportazione in più della foto quando la legge. Il riempimento invece viene scritto nel RAW così com'è stato
+    scattato, e l'app corregge allo stesso modo il DNG salvato.
 - **Una rimozione per maschera.** Ogni maschera tiene le sue varianti finché il pannello è aperto, e *Su questa foto*
   le elenca. **Salva in LightCraft** (o in Chromaforge) scrive tutte le varianti scelte in un solo DNG, impilato
   sull'originale, e il salvataggio successivo aggiorna lo stesso DNG. Le maschere usate come selezione non passano nel
