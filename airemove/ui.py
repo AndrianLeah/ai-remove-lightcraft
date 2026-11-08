@@ -1047,6 +1047,11 @@ class App:
         self.lang_code = tk.StringVar(value=chosen if chosen in i18n.LANGUAGES else "auto")
         self.lang_btn = self.button(head, i18n.language().upper() + "  ▾", self.show_lang_menu, small=True)
         self.lang_btn.pack(side="left", padx=(int(14 * k), 0))
+        # AI Remove's settings (settings.py): the apps' programs, ports and set-up, the models' folders
+        self.settings_btn = self.button(head, "⚙", self.open_settings, small=True)
+        self.settings_btn.pack(side="left", padx=(int(6 * k), 0))
+        self.settings_btn.bind("<Enter>", lambda e: self.status.configure(
+            text=_("Settings: where LightCraft, Chromaforge and the models are; the apps' set-up")), add="+")
         self.lang_menu = tk.Menu(r, tearoff=0, bg=CARD, fg=FG, activebackground=ACCENT, activeforeground="#1b1b1b",
                                  selectcolor=ACCENT, bd=0, relief="flat", font=self.f_small)
         self.lang_menu.add_radiobutton(label=_("Auto (as {app})", app=self.s.app), value="auto", variable=self.lang_code,
@@ -1059,6 +1064,8 @@ class App:
         self.lang_menu.add_checkbutton(label=_("{key} in {app} opens the panel", key=A.SHORTCUT, app=self.s.app),
                                        variable=self.shortcut_panel,
                                        command=lambda: A.remember("shortcut_panel", self.shortcut_panel.get()))
+        self.lang_menu.add_separator()
+        self.lang_menu.add_command(label=_("Settings…"), command=self.open_settings)
         self.head.bind("<Configure>", lambda e: self.fit_header())
         self.canvas_sel = tk.Canvas(left, bg=CANVAS, highlightthickness=0, cursor="crosshair")
         self.canvas_sel.pack(fill="both", expand=True, pady=(0, int(10 * k)))
@@ -1103,6 +1110,12 @@ class App:
         r.bind("<KeyPress-space>", self.on_space)
         r.bind("<KeyRelease-space>", lambda e: setattr(self, "space", False))
         self.drag_xy = None
+
+    def open_settings(self):
+        """AI Remove's Settings window (settings.py) over this one; a model folder changed there shows in the model
+        menu at once."""
+        import settings
+        settings.open_window(self.root, on_change=self.refresh_models)
 
     def show_lang_menu(self):
         b = self.lang_btn

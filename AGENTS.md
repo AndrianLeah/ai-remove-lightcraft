@@ -63,14 +63,22 @@ Setup of the server: `mcp/README.md`.
   works on the app's active photo (both open: LightCraft's, unless `--app chromaforge`).
 - **Which app:** AI Remove asks each app that answers which photo it has selected and works in that one;
   `--app lightcraft|chromaforge` picks one (the MCP tools take `app`). LightCraft's control port is 7980
-  (`LIGHTCRAFT_CONTROL_PORT`), Chromaforge's 7981 (`LIGHTCRAFT_CLASSIC_CONTROL_PORT`), and Chromaforge's channel wants
-  the token in `control-token-<port>` in its settings folder (AI Remove reads it).
+  (`LIGHTCRAFT_CONTROL_PORT`), Chromaforge's 7981 (`CHROMAFORGE_CONTROL_PORT`; `LIGHTCRAFT_CLASSIC_CONTROL_PORT` for
+  its builds from before 26.45, which were named `lightcraft-classic`), and Chromaforge's channel wants the token in
+  `control-token-<port>` in its settings folder (AI Remove reads it). Chromaforge 26.45 without
+  `CHROMAFORGE_CONTROL_PORT` takes LightCraft's port: `--check` then says `"clash"` for it; run
+  `bootstrap --configure-lightcraft --yes --apps chromaforge` (or the MCP tool configure_lightcraft) and have the user
+  restart Chromaforge.
 - **On its own (no LightCraft window):** `airemove <path to a photo>`, or the app with LightCraft closed, which asks
   for a file. A RAW is read through `lightcraft-cli` (LightCraft must be installed; `LIGHTCRAFT_CLI` points to it
-  elsewhere; without LightCraft, Chromaforge's `lightcraft-classic-cli`, or `LIGHTCRAFT_CLASSIC_CLI`) with that app's
+  elsewhere; without LightCraft, Chromaforge's `chromaforge-cli`, or `CHROMAFORGE_CLI`) with that app's
   default development; a JPEG, PNG, TIFF, WebP, HEIC or AVIF as it is. "Save as DNG"
   ("Save as JPEG"…) writes `<name>-AIRemove.dng` (`.jpg`…) next to the photo without importing it. A photo that is
   LightCraft's current selection opens as LightCraft's photo instead.
+- **Settings, after the installation:** the user changes each app's program and command line, the models folder and a
+  model's own folder, and sets an app up again, in the Settings window (the gear in AI Remove's window and panel, or
+  `airemove-cli --settings`). It saves to the install's `airemove.json` (`app_paths`, `models_dir`, `model_paths`),
+  which the app, the installer and the MCP server read.
 - **Check:** `~/AIRemove/venv/(Scripts|bin)/airemove-cli --check` prints a JSON report: GPU, models, LightCraft and
   Chromaforge connections (`apps`).
 - **Headless:**

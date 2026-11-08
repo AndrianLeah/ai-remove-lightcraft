@@ -78,7 +78,9 @@ all the development still works on it; from a JPEG, PNG, TIFF, WebP, HEIC or AVI
 (<name>-AIRemove.jpg...). Every removal stays editable in a project file next to the photo (<photo>.airemove). It also
 works on its own, on a photo file, without LightCraft's window.
 It works the same way in Chromaforge (github.com/emmertex/chromaforge, once "LightCraft Classic"), a fork of
-LightCraft: one of them or both, the installer sets up the ones chosen.
+LightCraft: one of them or both, the installer sets up the ones chosen. Afterwards the user can change where each
+app's program and command line and AI Remove's models are, and set an app up again, in AI Remove's Settings window
+(the gear in its window and in the panel; airemove --settings).
 Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended (NVIDIA, AMD RX 7000/9000, Apple M).""",
     "install": """1. check_system: shows the GPU, the PyTorch build that will be used, the recommended models, sizes and
    licences, free disk space, and whether LightCraft and Chromaforge are installed / running ("apps").
@@ -124,8 +126,9 @@ remove_with_masks (app=chromaforge when both are open); for reflections in glass
 masks, else the whole photo).""",
     "troubleshoot": """- "LightCraft non risponde": LightCraft is closed, or was started before the install: restart it. On Linux
   with Wayland its window must be visible. The control port is 7980 (LIGHTCRAFT_CONTROL_PORT); Chromaforge's is 7981
-  (LIGHTCRAFT_CLASSIC_CONTROL_PORT; without it Chromaforge takes LIGHTCRAFT_CONTROL_PORT too, and both apps want the
-  same port: run configure_lightcraft(apps=chromaforge)).
+  (CHROMAFORGE_CONTROL_PORT; LIGHTCRAFT_CLASSIC_CONTROL_PORT for a build from before its rename). Without its own
+  variable Chromaforge 26.45 takes LIGHTCRAFT_CONTROL_PORT, LightCraft's port, and only one of the two opens its channel
+  (check_system says "clash"): run configure_lightcraft(apps=chromaforge), then restart Chromaforge.
 - "Chromaforge non ha accettato AI Remove": its control channel wants the token it writes at every start
   (control-token-<port> in its settings folder): restart Chromaforge.
 - First FLUX/SDXL variant slow on AMD: the GPU compiles its kernels once (minutes), then it is fast.
@@ -165,9 +168,13 @@ def check_folders(dirs):
 def app_state(host, cfg, ins):
     """What check_system says about LightCraft or Chromaforge: installed, running, reachable, set up."""
     port = host.port() if host.env("CONTROL_PORT") else int(cfg.get(host.cfg_key("port")) or host.default_port)
-    return {"name": host.name, "app": host.app(), "running": ins.lc_running(host), "control_port": port,
-            "reachable": host.reachable(port), "settings_dir": str(host.config_dir()),
-            "configured": cfg.get(host.key)}
+    rep = {"name": host.name, "app": host.app(), "cli": " ".join(host.cli() or []) or None,
+           "running": ins.lc_running(host), "control_port": port, "variable": host.var("CONTROL_PORT"),
+           "reachable": host.reachable(port), "settings_dir": str(host.config_dir()),
+           "configured": cfg.get(host.key)}
+    if host.clash():  # Chromaforge 26.45 on LightCraft's port, from LIGHTCRAFT_CONTROL_PORT: set it up again
+        rep["clash"] = host.clash().key
+    return rep
 
 
 def app_args(a):
@@ -196,7 +203,7 @@ def check_system(a):
                                       "download_gb": ins.TORCH_FLAVOURS[flavour][1]},
         "models": {m: {"name": v.name, "gb": 0 if (m == "sam3" and lc_sam) else v.gb, "what": v.what,
                        "licence": v.licence, "needs_hf_token": bool(v.gated) and not (m == "sam3" and lc_sam),
-                       "recommended": m in rec, "installed": mf.has(m, d / "models", paths, optional=True)}
+                       "recommended": m in rec, "installed": mf.has(m, ins.models_root(d, cfg), paths, optional=True)}
                    for m, v in mf.MODELS.items()},
         "sam3_from_lightcraft": lc_sam, "sam3_from_app": sam_host and sam_host.name,
         "install_dir": str(d), "free_gb": round(ins.gb_free(d), 1),
@@ -339,7 +346,7 @@ def open_ai_remove(a):
     if not venv_python(d).exists():
         return {"ok": False, "error": "AI Remove is not installed (install first)"}
     hosts = [h for h in ([system.host_named(a.get("app"))] if system.host_named(a.get("app")) else system.HOSTS)
-             if h.reachable()]
+             if h.answers()]
     if not hosts:
         return {"ok": False, "error": "neither LightCraft nor Chromaforge is reachable: open it (restart it once "
                                       "after installing)" if not a.get("app") else
@@ -392,7 +399,7 @@ def remove_reflections(a):
 def project_info(a):
     raw = a.get("raw_path")
     if not raw and a.get("photo_id"):
-        host = system.host_named(a.get("app")) or next((h for h in system.HOSTS if h.reachable()), system.LIGHTCRAFT)
+        host = system.host_named(a.get("app")) or next((h for h in system.HOSTS if h.answers()), system.LIGHTCRAFT)
         r = installer().lc_request(host.port(), "engine.execute",
                                    {"command": "photo.inspect", "params": {"id": int(a["photo_id"])}}, host=host)
         if not r or not r.get("ok"):

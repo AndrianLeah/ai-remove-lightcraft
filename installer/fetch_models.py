@@ -47,7 +47,7 @@ def sam3_from_lightcraft(dest):
     """SAM 3 from the copy LightCraft (or Chromaforge) downloaded for its Object masks, if one did."""
     host = system.sam3_host(mf.SAM3_WEIGHTS)
     if host is not None:
-        how = system.link_or_copy(host.sam3_dir() / mf.SAM3_WEIGHTS, dest / "sam3" / mf.SAM3_WEIGHTS)
+        how = system.link_or_copy(system.sam3_file(mf.SAM3_WEIGHTS), dest / "sam3" / mf.SAM3_WEIGHTS)
         print("  " + (_("SAM 3: using the model {app} already downloaded (linked)", app=host.name) if how != "copy" else
                       _("SAM 3: using the model {app} already downloaded (copied)", app=host.name)))
         return True

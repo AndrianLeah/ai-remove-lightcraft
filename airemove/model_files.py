@@ -308,6 +308,49 @@ def find_model(model, folder):
     return found if whole or any(PARTS[p].gb >= 1 for p in found) else {}
 
 
+# ------------------------------------------------------------------------------------------------ changed afterwards
+# The Settings window (settings.py) changes these after the installation, in airemove.json; the app reads them at its
+# next use (part_dir, models_dir: a model loaded already stays as it is until AI Remove closes), the installer keeps
+# them when it runs again.
+def where(model):
+    """For the Settings window: ("models" | "yours" | "missing", {part: folder}) — all of the model's parts in the
+    install's models folder, some from folders of the user's own (those listed), or not all there."""
+    paths = recorded()
+    if not has(model, paths=paths):
+        return "missing", {}
+    mine = {p: str(part_dir(p, paths=paths)) for p in MODELS[model].parts
+            if p in paths and part_dir(p, paths=paths) == Path(paths[p])}
+    return ("yours" if mine else "models"), mine
+
+
+def use_folder(model, folder):
+    """The model's parts found in the user's folder (find_model, as the installer's --model-dir) recorded in
+    airemove.json "model_paths": {part: folder} found; {} when the folder does not hold the model (nothing changed). A
+    part it lacks stays where it was."""
+    found = find_model(model, folder)
+    if found:
+        system.save_config(model_paths=dict(recorded(), **{p: str(f) for p, f in found.items()}))
+    return found
+
+
+def forget_folder(model):
+    """The model's parts no longer taken from the user's own folders (which are left as they are): from the models
+    folder again, where the installer downloads what is missing there. Parts other models share go with it (SDXL's
+    are RORem's too)."""
+    system.save_config(model_paths={p: f for p, f in recorded().items() if p not in MODELS[model].parts})
+
+
+def models_in(folder):
+    """The models whose parts are all in folder laid out as the install's models/ (folder/<part>)."""
+    return [m for m in MODELS if has(m, folder, {})]
+
+
+def set_models_dir(folder):
+    """The install's models folder (airemove.json "models_dir"): another one, or None for <install>/models again."""
+    keep = folder and os.path.normcase(os.path.abspath(folder)) != os.path.normcase(str(system.ROOT / "models"))
+    system.save_config(models_dir=str(folder) if keep else None)
+
+
 def looks_for(model):
     """For a message: one file of each needed part, as the install's models/ folder has it."""
     out = []

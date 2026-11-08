@@ -73,10 +73,11 @@ WIDTH = 330  # the panel's width, at 96 dpi
 
 # ------------------------------------------------------------------------------------------------ the tether (Windows)
 class Tether:
-    """The app's main window (the largest visible one of its process) and the panel made an owned window of it."""
+    """The app's main window (the largest visible one of its process) and the panel made an owned window of it.
+    exes: the file names its program may have (system.Host.programs: chromaforge.exe, lightcraft-classic.exe…)."""
 
-    def __init__(self, exe):
-        self.exe, self.hwnd = exe.lower(), 0
+    def __init__(self, exes):
+        self.exes, self.hwnd = {e.lower() for e in ([exes] if isinstance(exes, str) else exes)}, 0
         self.ok = sys.platform == "win32"
         if self.ok:
             import ctypes
@@ -106,7 +107,7 @@ class Tether:
         found = []
 
         def each(hwnd, __):
-            if self.u32.IsWindowVisible(hwnd) and self.u32.GetWindowTextLengthW(hwnd) and self._exe(hwnd) == self.exe:
+            if self.u32.IsWindowVisible(hwnd) and self.u32.GetWindowTextLengthW(hwnd) and self._exe(hwnd) in self.exes:
                 r = self.rect(hwnd)
                 found.append(((r[2] - r[0]) * (r[3] - r[1]), hwnd))
             return True
@@ -203,7 +204,7 @@ class Panel:
         self.side_w = self.width + int(30 * k)  # ModelPicker's caveat wraps at side_w - 90 (the window's side panel)
         self.on_photo = tk.BooleanVar(value=bool(A.setting("panel_on_photo", True)))
         self.show_info = bool(A.setting("model_info", False))  # "What it does", open or not: the window's too
-        self.tether = Tether(self.host.exe + ".exe")
+        self.tether = Tether(self.host.programs())
         if self.tether.find():
             r.overrideredirect(True)  # docked: its own header, no frame
         self.build()
@@ -281,6 +282,8 @@ class Panel:
         self.button(head, "×", self.close, small=True).pack(side="right")
         self.fold_btn = self.button(head, "–", self.fold, small=True)
         self.fold_btn.pack(side="right", padx=(0, int(4 * k)))
+        # AI Remove's settings (settings.py): the apps' programs and set-up, the models' folders
+        self.button(head, "⚙", self.open_settings, small=True).pack(side="right", padx=(0, int(4 * k)))
         # the rest scrolls when it is taller than the app's window leaves room for
         self.scroller = ui.Panel(box, k, CARD)
         self.scroller.pack(fill="both", expand=True)
@@ -467,6 +470,12 @@ class Panel:
     # -------------------------------------------------------------- modes and choices
     def models_for(self, mode):
         return [m for m in TABS[mode][1] if m == "lama" or engines.usable(m)]
+
+    def open_settings(self):
+        """AI Remove's Settings window (settings.py), over the panel; a model folder changed there: the tab's models
+        read again."""
+        import settings
+        settings.open_window(self.root, on_change=lambda: self.set_mode(self.mode))
 
     def set_mode(self, mode):
         self.mode, self.list_pick = mode, None
