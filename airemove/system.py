@@ -52,7 +52,7 @@ def config():
 
 
 class Host:
-    """An app AI Remove works inside: LightCraft, or Chromaforge (github.com/emmertex/lightcraft-classic, first named
+    """An app AI Remove works inside: LightCraft, or Chromaforge (github.com/emmertex/chromaforge, first named
     LightCraft Classic), a fork of LightCraft with the same control channel, commands, command line and SAM 3 folder
     under names of its own — and a token its control channel asks for before anything else.
 

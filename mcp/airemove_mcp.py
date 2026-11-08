@@ -77,7 +77,7 @@ from a RAW the result is written back into a RAW DNG (<name>-AIRemove.dng) stack
 all the development still works on it; from a JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format
 (<name>-AIRemove.jpg...). Every removal stays editable in a project file next to the photo (<photo>.airemove). It also
 works on its own, on a photo file, without LightCraft's window.
-It works the same way in Chromaforge (github.com/emmertex/lightcraft-classic, once "LightCraft Classic"), a fork of
+It works the same way in Chromaforge (github.com/emmertex/chromaforge, once "LightCraft Classic"), a fork of
 LightCraft: one of them or both, the installer sets up the ones chosen.
 Runs on Windows, macOS (Apple Silicon) and Linux; a GPU is strongly recommended (NVIDIA, AMD RX 7000/9000, Apple M).""",
     "install": """1. check_system: shows the GPU, the PyTorch build that will be used, the recommended models, sizes and

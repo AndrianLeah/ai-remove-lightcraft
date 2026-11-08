@@ -1210,7 +1210,7 @@ def main():
         out.write(f"  {h.name}: " + (h.app() or _("not found")))
     if not system.installed_hosts():
         out.write("  " + _("AI Remove works inside LightCraft (getartcraft.com) or Chromaforge "
-                           "(github.com/emmertex/lightcraft-classic): install one of them"))
+                           "(github.com/emmertex/chromaforge): install one of them"))
     if apps is None:
         apps = choose_apps(cfg, args.yes)
     sam_host = system.sam3_host(mf.SAM3_WEIGHTS)  # an app that has SAM 3 already: linked, not downloaded
