@@ -16,7 +16,6 @@ import system
 from i18n import _
 
 ROOT = system.ROOT
-MODELS = mf.models_dir()  # the install's models; a model the user already had elsewhere is where mf.part_dir says
 USE_MASK_PROMPT = True  # refine SAM objects with their previous mask as a prompt (see SAM3.refine)
 DEFAULT_PROMPT = "empty background, seamless continuation of the surrounding scene, photograph, natural light"
 NEGATIVE = ("person, people, human, man, woman, child, figure, statue, animal, text, watermark, logo, "
@@ -115,15 +114,15 @@ def sam3_dir():
     linked (no second 3.2 GB copy) when it is there — or the user's own folder the installer found it in. No config
     files are needed: transformers' defaults for the SAM 3 tracker are this checkpoint's (checked: identical masks)."""
     d = mf.part_dir("sam3")
-    if d != MODELS / "sam3":
+    if d != mf.models_dir() / "sam3":
         return d
     w = d / SAM3_WEIGHTS
     try:
         d.mkdir(parents=True, exist_ok=True)
         if not w.exists():
-            host = system.sam3_host(SAM3_WEIGHTS)
-            if host is not None:
-                system.link_or_copy(host.sam3_dir() / SAM3_WEIGHTS, w)
+            theirs = system.sam3_file(SAM3_WEIGHTS)  # LightCraft's or Chromaforge's (any of its builds')
+            if theirs is not None:
+                system.link_or_copy(theirs, w)
     except OSError:
         pass
     return d
@@ -146,7 +145,7 @@ def available():
 
 def model_folders():
     """{part: folder} of the parts used from the user's own folders (the rest are in models/)."""
-    return {p: str(mf.part_dir(p)) for p in mf.recorded() if mf.part_dir(p) != MODELS / p}
+    return {p: str(mf.part_dir(p)) for p in mf.recorded() if mf.part_dir(p) != mf.models_dir() / p}
 
 
 def usable(model, dev=None):
@@ -365,7 +364,7 @@ class SAM3:
         if (self.path / "tokenizer.json").exists() or (self.path / "tokenizer_config.json").exists():
             self.det_proc = Sam3Processor.from_pretrained(self.path)
         else:
-            vocab = next((d for d in (self.path,) + tuple(h.sam3_dir() for h in system.HOSTS)
+            vocab = next((d for d in (self.path,) + tuple(d for h in system.HOSTS for d in h.sam3_dirs())
                           if (d / "vocab.json").exists() and (d / "merges.txt").exists()), None)
             if vocab is None:
                 raise FileNotFoundError(_("Describe needs SAM 3's text files (vocab.json and merges.txt), which come "
@@ -566,7 +565,7 @@ class FLUX:
     def embeddings(self, prompt, log=print, tokens=256):
         import hashlib
         torch = self.torch
-        d = MODELS / "flux_prompts"  # in the install's models, also when FLUX is in the user's own folder
+        d = mf.models_dir() / "flux_prompts"  # in the install's models, also when FLUX is in the user's own folder
         d.mkdir(parents=True, exist_ok=True)
         name = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:16] + ("" if tokens == 256 else f"-{tokens}")
         f = d / (name + ".pt")

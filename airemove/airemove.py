@@ -30,9 +30,11 @@ How to use:
 
 It talks to the running LightCraft through LightCraft's control channel (JSON lines on 127.0.0.1, see system.py):
 LightCraft must be started with it on — the installer sets LIGHTCRAFT_CONTROL_PORT for it on every OS.
-Chromaforge (LightCraft Classic, a fork of LightCraft: system.Host) works the same way, on its own port
-(LIGHTCRAFT_CLASSIC_CONTROL_PORT, 7981) and with the token its channel asks for; the app that has the photo
-selected is the one used, --app picks one.
+Chromaforge (once LightCraft Classic, a fork of LightCraft: system.Host) works the same way, on its own port
+(CHROMAFORGE_CONTROL_PORT, 7981; LIGHTCRAFT_CLASSIC_CONTROL_PORT for its builds from before the rename) and with the
+token its channel asks for; the app that has the photo selected is the one used, --app picks one. Where each app's
+program, command line and AI Remove's models are can be changed after the installation in the Settings window
+(settings.py, airemove --settings): airemove.json, which system.Host and model_files read at every use.
 
 usage: airemove.py [PHOTO…] [--app A] [--id PHOTO_ID] [--variants N]   a photo no app has selected opens on its own
        airemove.py --panel [--app A]                         the panel next to the app's window
@@ -43,6 +45,8 @@ usage: airemove.py [PHOTO…] [--app A] [--id PHOTO_ID] [--variants N]   a photo
                                                              --shadow: the object's shadow too (as the button)
        airemove.py --check                                   JSON report: GPU, models, LightCraft and Chromaforge
                                                              connections
+       airemove.py --settings                                the Settings window: the apps' programs, ports and
+                                                             set-up, the models' folders
 A: lightcraft | chromaforge
 """
 import argparse, base64, collections, json, os, re, socket, subprocess, sys, threading, time, traceback, zlib
@@ -901,7 +905,7 @@ def extract_headless(path, work):
     """base.png and the photo's data, for a photo opened on its own:
     - an ordinary picture: base.png is the picture as it is shown (upright), its data is its own file;
     - a RAW: from lightcraft-cli (LightCraft installed, its window not needed; else Chromaforge's
-      lightcraft-classic-cli), the photo with that app's default development, uncropped and without lens and geometry
+      chromaforge-cli), the photo with that app's default development, uncropped and without lens and geometry
       corrections — the frame extract() makes from the running app — and the raw DNG."""
     if imagefile.format_of(path):
         open_source(path).upright(2400).save(work / "base.png")
@@ -909,8 +913,8 @@ def extract_headless(path, work):
     host, cli = system.host_cli()
     if cli is None:
         raise Fail(_("LightCraft's command line (lightcraft-cli) was not found, nor Chromaforge's: AI Remove reads RAW "
-                     "files through it, also with the app closed. Install LightCraft or Chromaforge, or open AI Remove "
-                     "from it."))
+                     "files through it, also with the app closed. Install LightCraft or Chromaforge, choose where it "
+                     "is in AI Remove's Settings, or open AI Remove from the app."))
     neutral = work / "neutral.json"
     neutral.write_text(json.dumps({"crop": {"geometry": {"angle": 0.0, "rect": {"x0": 0.0, "y0": 0.0, "x1": 1.0,
                                                                                  "y1": 1.0}}},
@@ -929,7 +933,7 @@ def extract_headless(path, work):
         if p.returncode or not out.exists():
             raise Fail(_("{app} could not read {file}:\n{error}", app=host.name, file=path.name,
                          error=(p.stderr or p.stdout).strip()[-400:]))
-        log(f"{host.exe}-cli: {out.name} in {time.time() - t0:.1f}s")
+        log(f"{Path(cli[-1]).name}: {out.name} in {time.time() - t0:.1f}s")
     return None, base_luminance(base_png), str(dng)
 
 
@@ -964,9 +968,10 @@ def selected_file(lc, paths):
 
 
 def answering_hosts(args):
-    """The apps to look for the photo in: the one --app names, else every one answering on its control port."""
+    """The apps to look for the photo in: the one --app names, else every one answering on its control port (two on
+    one port, system.Host.clash: the one that is there, Host.answers)."""
     named = system.host_named(getattr(args, "app", None))
-    return [named] if named else [h for h in system.HOSTS if h.reachable()]
+    return [named] if named else [h for h in system.HOSTS if h.answers()]
 
 
 def host_for(args):
@@ -2781,8 +2786,14 @@ def check():
            "lightcraft_cli": " ".join(cli or []) or None,  # RAWs opened on their own: read with it
            "heic": imagefile.heif_available(), "apps": {}}  # HEIC pictures: pillow-heif
     for h in system.HOSTS:
-        a = rep["apps"][h.key] = {"name": h.name, "app": h.app(), "port": h.port(), "settings": str(h.config_dir())}
-        if not h.reachable():
+        cli_h = h.cli()
+        a = rep["apps"][h.key] = {"name": h.name, "app": h.app(), "cli": " ".join(cli_h or []) or None,
+                                  "program": h.names_now().exe, "chosen": h.chosen() or None,
+                                  "running": h.running(), "port": h.port(), "variable": h.var("CONTROL_PORT"),
+                                  "settings": str(h.config_dir())}
+        if h.clash():  # Chromaforge 26.45 on LightCraft's port: set it up again (installer, Settings window)
+            a["clash"] = h.clash().key
+        if not h.answers():
             a["connected"] = False
             continue
         lc = LC(host=h)
@@ -2886,6 +2897,9 @@ def main():
     ap.add_argument("--auto", help=f"no window: {' | '.join(ENGINES)}[N] on the photo's Rimuovi masks")
     ap.add_argument("--shadow", action="store_true", help="--auto: remove the object's shadow and reflection too")
     ap.add_argument("--check", action="store_true", help="print a JSON report and exit")
+    ap.add_argument("--settings", action="store_true",
+                    help="the Settings window: where LightCraft's and Chromaforge's programs and AI Remove's models "
+                         "are, the apps' control channel, external editor and shortcut")
     ap.add_argument("--panel", action="store_true",
                     help="the panel next to the app's window, on its active photo and its masks (what the app's "
                          f"{SHORTCUT} opens, unless turned off in the window's menu); one per app: a second one "
@@ -2894,6 +2908,9 @@ def main():
     args.raw = args.files[0] if args.files else None
     if args.check:
         return check()
+    if args.settings:
+        import settings
+        return settings.run()
     # the panel: --panel, or the app's Ctrl+Shift+X on its selection. One per app: if it is open, it comes forward
     # and this launch ends — before the log is emptied, which is the open panel's
     host = None

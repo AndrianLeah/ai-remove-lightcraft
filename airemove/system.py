@@ -51,32 +51,130 @@ def config():
         return {}
 
 
+def save_config(**changes):
+    """airemove.json with these keys changed (None: the key removed), the rest as it was; what the Settings window
+    changes after the installation. Written in place, as the installer does: the same file, read again at every use."""
+    cfg = config()
+    for k, v in changes.items():
+        if v is None:
+            cfg.pop(k, None)
+        else:
+            cfg[k] = v
+    CONFIG_FILE.write_text(json.dumps(cfg, indent=1, ensure_ascii=False), encoding="utf-8")
+    return cfg
+
+
+def _norm(p):
+    return os.path.normcase(os.path.abspath(str(p)))
+
+
+class Names:
+    """One of the names an app has had (Chromaforge's brand.toml: the current ones, then [legacy]): exe its program's
+    (the command line is <exe>-cli), settings its settings folder's, prefixes those of the environment variables it
+    reads, in the order it reads them (its own first, then the ones it falls back to), mac_app its Mac app bundle,
+    mac_process the process name there."""
+
+    def __init__(self, exe, settings, prefixes, mac_app, mac_process):
+        self.exe, self.settings, self.prefixes = exe, settings, prefixes
+        self.mac_app, self.mac_process = mac_app, mac_process
+
+    def __repr__(self):
+        return f"Names({self.exe})"
+
+
 class Host:
     """An app AI Remove works inside: LightCraft, or Chromaforge (github.com/emmertex/chromaforge, first named
     LightCraft Classic), a fork of LightCraft with the same control channel, commands, command line and SAM 3 folder
     under names of its own — and a token its control channel asks for before anything else.
 
-    An app reads its environment variables with its own prefix first, then with the prefixes it had before (Chromaforge
-    falls back to LIGHTCRAFT_*: LIGHTCRAFT_CONTROL_PORT alone opens its channel on that port too); env() reads them the
-    same way. key: AI Remove's own name for it (--app, airemove.json, the MCP tools); settings: its settings folder's
-    name; exe: its program's (the command line is <exe>-cli); folders: its Windows install folders' names; app_id: its
-    Flatpak and desktop entry id."""
+    names: the names it has had, the current ones first. Chromaforge 26.45 renamed everything (chromaforge.exe,
+    %APPDATA%\\Chromaforge, CHROMAFORGE_*); a build from before is still lightcraft-classic.exe with "LightCraft
+    Classic" and LIGHTCRAFT_CLASSIC_*. The names in use (names_now) are the build's that is found: running, chosen in
+    the Settings window, or installed — the newest one when none is.
 
-    def __init__(self, key, name, prefixes, settings, port, exe, folders, mac_apps, mac_process, app_id):
-        self.key, self.name, self.prefixes, self.settings = key, name, prefixes, settings
-        self.default_port, self.exe, self.folders = port, exe, folders
-        self.mac_apps, self.mac_process, self.app_id = mac_apps, mac_process, app_id
+    An app reads its environment variables with its own prefix first, then with the ones it had before. The current
+    Chromaforge falls back to NONAMEYET_*, then LIGHTCRAFT_* — LightCraft's own: LIGHTCRAFT_CONTROL_PORT alone opens
+    its channel on LightCraft's port, where it collides with LightCraft (clash) — and only then LIGHTCRAFT_CLASSIC_*.
+    env() reads them the same way; the installer sets the variables under every prefix of its own (own_vars), so old
+    and new builds both find theirs first.
+
+    key: AI Remove's own name for it (--app, airemove.json, the MCP tools); folders: its Windows install folders'
+    names; app_id: its Flatpak and desktop entry id. The program and the command line chosen in the Settings window
+    (airemove.json "app_paths") come before the ones found."""
+
+    def __init__(self, key, name, names, port, folders, app_id):
+        self.key, self.name, self.names = key, name, names
+        self.default_port, self.folders, self.app_id = port, folders, app_id
 
     def __repr__(self):
         return f"Host({self.key})"
 
-    def var(self, name):
-        """The variable NAME under the app's own prefix (LIGHTCRAFT_CLASSIC_CONTROL_PORT): the one AI Remove sets."""
-        return f"{self.prefixes[0]}_{name}"
+    # ---- the names in use
+    def chosen(self):
+        """{"app": path, "cli": path}: what the user chose in the Settings window (airemove.json "app_paths")."""
+        d = (config().get("app_paths") or {}).get(self.key)
+        return {k: v for k, v in d.items() if k in ("app", "cli") and isinstance(v, str) and v} \
+            if isinstance(d, dict) else {}
 
-    def env(self, name):
-        """The variable NAME as the app reads it: its own prefix, else an older one."""
-        return next((os.environ[f"{p}_{name}"] for p in self.prefixes if os.environ.get(f"{p}_{name}")), None)
+    def names_of(self, program):
+        """The names whose program this file (or app bundle) is, else None."""
+        p = Path(str(program))
+        if p.suffix.lower() == ".app":  # a bundle: the program inside says which build it is, whatever its name
+            n = next((n for n in self.names if (p / "Contents" / "MacOS" / n.exe).exists()), None)
+            if n is not None:
+                return n
+        stem = p.name.lower()
+        for n in self.names:
+            if stem in (n.exe, f"{n.exe}.exe", n.mac_app.lower()):
+                return n
+        return None
+
+    def names_now(self):
+        """The names of the build in use: the program running, else the one chosen or installed, else the newest."""
+        for prog in running_programs():
+            n = self.names_of(prog)
+            if n is not None:
+                return n
+        app = self.app()
+        return (self.names_of(app) if app else None) or self.names[0]
+
+    @property
+    def exe(self):
+        return self.names_now().exe
+
+    @property
+    def prefixes(self):
+        return self.names_now().prefixes
+
+    @property
+    def settings(self):
+        return self.names_now().settings
+
+    def programs(self):
+        """Every file name its program has had: chromaforge.exe, lightcraft-classic.exe (and the chosen one's)."""
+        ext = ".exe" if system() == "windows" else ""
+        out = [n.exe + ext for n in self.names]
+        if self.chosen().get("app"):
+            out.append(Path(self.chosen()["app"]).name)
+        return list(dict.fromkeys(x.lower() for x in out))
+
+    def own_prefixes(self):
+        """The prefixes that are the app's own under one of its names (CHROMAFORGE, LIGHTCRAFT_CLASSIC): the ones a
+        build reads first. Never another app's (LIGHTCRAFT)."""
+        return list(dict.fromkeys(n.prefixes[0] for n in self.names))
+
+    def var(self, name):
+        """The variable NAME under the app's current prefix (CHROMAFORGE_CONTROL_PORT): the one messages name."""
+        return f"{self.names[0].prefixes[0]}_{name}"
+
+    def own_vars(self, name):
+        """The variable NAME under every prefix of its own, the current one first: the ones AI Remove sets."""
+        return [f"{p}_{name}" for p in self.own_prefixes()]
+
+    def env(self, name, names=None):
+        """The variable NAME as the app (the build in use, or names) reads it: its own prefix, else an older one."""
+        names = names or self.names_now()
+        return next((os.environ[f"{p}_{name}"] for p in names.prefixes if os.environ.get(f"{p}_{name}")), None)
 
     def cfg_key(self, name):
         """airemove.json's key for this app's NAME: LightCraft's are the plain ones (port, control_env…), from before
@@ -94,6 +192,15 @@ class Host:
                 pass
         return self.default_port
 
+    def clash(self):
+        """The other app whose control port this one takes too, else None: Chromaforge 26.45 without
+        CHROMAFORGE_CONTROL_PORT reads LIGHTCRAFT_CONTROL_PORT, the one the installer sets for LightCraft. Then only one
+        of the two opens its channel (the first started) and AI Remove cannot tell which one answers: setting the app
+        up again (installer, Settings window) sets its own variable."""
+        if self is LIGHTCRAFT:
+            return None
+        return LIGHTCRAFT if self.port() == LIGHTCRAFT.port() else None
+
     def reachable(self, port=None, timeout=1.0):
         try:
             with socket.create_connection(("127.0.0.1", port or self.port()), timeout=timeout):
@@ -101,43 +208,72 @@ class Host:
         except OSError:
             return False
 
+    def answers(self, timeout=1.0):
+        """Something answers on its port, and as far as can be told it is this app: with a clash (both apps on one
+        port) the one of the two that is running; both running, LightCraft (it reads its own variable, and only the
+        first one started gets the port: here LightCraft, normally open first)."""
+        if not self.reachable(timeout=timeout):
+            return False
+        other = self.clash() or next((h for h in HOSTS if h is not self and h.clash() is self), None)
+        if other is None:
+            return True
+        mine, theirs = self.running(), other.running()
+        if bool(mine) != bool(theirs):
+            return bool(mine)
+        return self is LIGHTCRAFT
+
     def token(self, port=None):
         """The token its control channel wants first, if it wants one (Chromaforge; LightCraft so far does not):
         the CONTROL_TOKEN variable, else the file control-token-<port> the app writes in its settings folder at every
-        start."""
+        start — the folder of the build in use, else the newest such file in the folder of another of its names."""
         v = self.env("CONTROL_TOKEN")
         if v:
             return v.strip()
-        try:
-            return (self.config_dir() / f"control-token-{port or self.port()}").read_text("utf-8").strip() or None
-        except OSError:
-            return None
+        name = f"control-token-{port or self.port()}"
+        first = self.config_dir() / name
+        others = sorted((p for p in (self.config_dir(n) / name for n in self.names) if p != first and p.is_file()),
+                        key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in [first] + others:
+            try:
+                t = p.read_text("utf-8").strip()
+                if t:
+                    return t
+            except OSError:
+                pass
+        return None
 
     def is_flatpak(self):
-        """True when the app is the Flatpak (Linux)."""
+        """True when the app is the Flatpak (Linux). Asked once a minute at most: names_now asks often."""
         if system() != "linux" or not shutil.which("flatpak"):
             return False
         import subprocess
+        import time
+        when, was = getattr(self, "_flatpak", (0.0, False))
+        if time.monotonic() - when < 60:
+            return was
         try:
-            return subprocess.run(["flatpak", "info", self.app_id], capture_output=True, timeout=10).returncode == 0
+            now = subprocess.run(["flatpak", "info", self.app_id], capture_output=True, timeout=10).returncode == 0
         except (OSError, subprocess.SubprocessError):
-            return False
+            now = False
+        self._flatpak = (time.monotonic(), now)
+        return now
 
-    def config_dir(self):
-        """Its settings folder: the CONFIG_DIR variable, else macOS ~/Library/Application Support/<settings> ·
-        Windows %APPDATA%\\<settings> · Linux $XDG_CONFIG_HOME/<settings in lower case> (the Flatpak's:
-        ~/.var/app/<id>/config/<the same>)."""
-        v = self.env("CONFIG_DIR")
+    def config_dir(self, names=None):
+        """Its settings folder (the build in use's, or names'): the CONFIG_DIR variable, else macOS ~/Library/
+        Application Support/<settings> · Windows %APPDATA%\\<settings> · Linux $XDG_CONFIG_HOME/<settings in lower
+        case> (the Flatpak's: ~/.var/app/<id>/config/<the same>)."""
+        names = names or self.names_now()
+        v = self.env("CONFIG_DIR", names)
         if v:
             return Path(v)
         home = Path.home()
         s = system()
         if s == "macos":
-            return home / "Library" / "Application Support" / self.settings
+            return home / "Library" / "Application Support" / names.settings
         if s == "windows":
-            return Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming") / self.settings
-        flat = home / ".var" / "app" / self.app_id / "config" / self.settings.lower()
-        native = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / self.settings.lower()
+            return Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming") / names.settings
+        flat = home / ".var" / "app" / self.app_id / "config" / names.settings.lower()
+        native = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / names.settings.lower()
         if flat.is_dir() and not native.is_dir():
             return flat
         return native
@@ -151,57 +287,215 @@ class Host:
         v = self.env("SAM3_DIR")
         return Path(v) if v else self.config_dir() / "models" / "sam3"
 
-    def app(self):
-        """The program (or app bundle) if it is installed where its installers put it, else None."""
+    def sam3_dirs(self):
+        """Every folder where one of its builds keeps SAM 3: the one in use first."""
+        dirs = [self.sam3_dir()] + [Path(self.env("SAM3_DIR", n) or self.config_dir(n) / "models" / "sam3")
+                                    for n in self.names]
+        return list(dict.fromkeys(dirs))
+
+    def found_apps(self):
+        """[(program or app bundle, where)], every one found where its installers put it, the current names first;
+        where: "installed" (its install folder, App Paths, /Applications, the PATH) or "flatpak"."""
         s = system()
         cands = []
         if s == "windows":
-            for var in ("ProgramW6432", "ProgramFiles", "LOCALAPPDATA"):
-                d = os.environ.get(var)
-                for f in self.folders if d else ():
-                    sub = ("Programs", f) if var == "LOCALAPPDATA" else (f,)
-                    cands.append(Path(d, *sub, f"{self.exe}.exe"))
-            cands += _app_paths(f"{self.exe}.exe")  # installed in a folder of the user's choice
+            for n in self.names:
+                for var in ("ProgramW6432", "ProgramFiles", "LOCALAPPDATA"):
+                    d = os.environ.get(var)
+                    for f in self.folders if d else ():
+                        sub = ("Programs", f) if var == "LOCALAPPDATA" else (f,)
+                        cands.append(Path(d, *sub, f"{n.exe}.exe"))
+                cands += _app_paths(f"{n.exe}.exe")  # installed in a folder of the user's choice
         elif s == "macos":
-            cands = [base / a for a in self.mac_apps for base in (Path("/Applications"), Path.home() / "Applications")]
+            cands = [base / n.mac_app for n in self.names
+                     for base in (Path("/Applications"), Path.home() / "Applications")]
         else:
-            w = shutil.which(self.exe)
-            if w:
-                cands.append(Path(w))
-            cands += [Path("/usr/bin") / self.exe, Path("/opt") / self.exe / self.exe]
-        found = next((c for c in cands if c.exists()), None)
-        if found is None and s == "linux" and self.is_flatpak():
-            return "flatpak:" + self.app_id
-        return str(found) if found else None
+            for n in self.names:
+                w = shutil.which(n.exe)
+                if w:
+                    cands.append(Path(w))
+                cands += [Path("/usr/bin") / n.exe, Path("/opt") / n.exe / n.exe]
+        seen, out = set(), []
+        for c in cands:
+            if c.exists() and _norm(c) not in seen:
+                seen.add(_norm(c))
+                out.append((str(c), "installed"))
+        if not out and s == "linux" and self.is_flatpak():
+            out.append(("flatpak:" + self.app_id, "flatpak"))
+        return out
+
+    def app(self):
+        """The program (or app bundle): the one chosen in the Settings window while it is there, else the first one
+        found where its installers put it, else None."""
+        c = self.chosen().get("app")
+        if c and Path(c).exists():
+            return c
+        found = self.found_apps()
+        return found[0][0] if found else None
+
+    def cli_names(self):
+        return [f"{n.exe}-cli" for n in self.names]
+
+    def cli_next_to(self, app):
+        """Its command line next to the program (on a Mac inside its app bundle), under any of its names, else None."""
+        s, a = system(), Path(app)
+        for cli in self.cli_names():
+            c = (a.with_name(f"{cli}.exe") if s == "windows" else
+                 a / "Contents" / "MacOS" / cli if s == "macos" else a.with_name(cli))
+            if c.is_file():
+                return str(c)
+        return None
 
     def cli(self):
-        """The command that runs it without its window (<exe>-cli), as an argument list, or None: next to the program
-        its installers put (on a Mac inside its app bundle), on the PATH, or the Flatpak's. <PREFIX>_CLI overrides it
-        (LIGHTCRAFT_CLI, LIGHTCRAFT_CLASSIC_CLI). AI Remove reads a RAW opened on its own through it."""
-        v = os.environ.get(self.var("CLI"))
+        """The command that runs it without its window (<exe>-cli), as an argument list, or None: <PREFIX>_CLI under a
+        prefix of its own (LIGHTCRAFT_CLI; CHROMAFORGE_CLI, LIGHTCRAFT_CLASSIC_CLI), else the one chosen in the Settings
+        window, else next to its program (on a Mac inside its app bundle), on the PATH, or the Flatpak's. AI Remove
+        reads a RAW opened on its own through it."""
+        v = next((os.environ[x] for x in self.own_vars("CLI") if os.environ.get(x)), None)
         if v:
             return [v]
+        c = self.chosen().get("cli")
+        if c and Path(c).is_file():
+            return [c]
         app = self.app()
         if app and app.startswith("flatpak:"):
-            return ["flatpak", "run", f"--command={self.exe}-cli", self.app_id]
-        s = system()
-        cands = []
-        if app:
-            a = Path(app)
-            cli = f"{self.exe}-cli"
-            cands.append(a.with_name(f"{cli}.exe") if s == "windows" else
-                         a / "Contents" / "MacOS" / cli if s == "macos" else a.with_name(cli))
-        w = shutil.which(f"{self.exe}-cli")
-        if w:
-            cands.append(Path(w))
-        found = next((c for c in cands if c.exists()), None)
-        return [str(found)] if found else None
+            return ["flatpak", "run", f"--command={self.names_now().exe}-cli", self.app_id]
+        found = self.cli_next_to(app) if app else None
+        if found:
+            return [found]
+        w = next((shutil.which(n) for n in self.cli_names() if shutil.which(n)), None)
+        return [w] if w else None
 
     def process(self):
         """Its process name as pgrep matches it: the kernel keeps 15 characters of it on Linux, 16 on macOS."""
+        n = self.names_now()
         if system() == "macos":
-            return self.mac_process[:16]
-        return self.exe[:15]
+            return n.mac_process[:16]
+        return n.exe[:15]
+
+    def processes(self):
+        """Every process name it has had, as pgrep matches it."""
+        return list(dict.fromkeys((n.mac_process[:16] if system() == "macos" else n.exe[:15]) for n in self.names))
+
+    def running(self):
+        """The program of its running process, else None (running_programs)."""
+        return next((p for p in running_programs() if self.names_of(p) is not None
+                     or Path(p).name.lower() in self.programs()), None)
+
+
+_RUNNING = [0.0, []]  # (when, what): listed again at most every RUNNING_TTL seconds
+RUNNING_TTL = 2.0
+
+
+def running_programs(fresh=False):
+    """The programs of the processes running now, as full paths where the system says them (Windows, Linux; macOS:
+    ps gives the executable's path). Standard library only; [] when they cannot be listed. Kept for RUNNING_TTL
+    seconds (Host.names_now asks often), unless fresh."""
+    import time
+    if fresh or time.monotonic() - _RUNNING[0] > RUNNING_TTL:
+        _RUNNING[:] = [time.monotonic(), _list_programs()]
+    return _RUNNING[1]
+
+
+def _list_programs():
+    s = system()
+    if s == "windows":
+        return _win_processes()
+    import subprocess
+    if s == "linux":
+        out = []
+        try:
+            for d in os.scandir("/proc"):
+                if d.name.isdigit():
+                    try:
+                        out.append(os.readlink(f"/proc/{d.name}/exe"))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return out
+    try:
+        txt = subprocess.run(["ps", "-axo", "comm="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out = []
+    for line in txt.splitlines():
+        line = line.strip()
+        m = re.match(r"(.*?\.app)/Contents/MacOS/", line)
+        out.append(m.group(1) if m else line)  # the app bundle, as the Settings window chooses it
+    return out
+
+
+def _win_processes():
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        return []
+
+    class Entry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_void_p), ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", ctypes.c_wchar * 260)]
+    k32 = ctypes.windll.kernel32
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    k32.OpenProcess.restype = wintypes.HANDLE
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return []
+    out = []
+    try:
+        e = Entry()
+        e.dwSize = ctypes.sizeof(Entry)
+        ok = k32.Process32FirstW(snap, ctypes.byref(e))
+        while ok:
+            path = e.szExeFile
+            h = k32.OpenProcess(0x1000, False, e.th32ProcessID)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if h:
+                buf, n = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
+                if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
+                    path = buf.value
+                k32.CloseHandle(h)
+            out.append(path)
+            ok = k32.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        k32.CloseHandle(snap)
+    return out
+
+
+def find_programs(host, folder, depth=4, limit=4000):
+    """{"app": program, "cli": command line} that the folder (or a few levels below it) holds for the app, under any
+    of its names: the Settings window's "Look in a folder…". Breadth first, at most `limit` folders; {} for none."""
+    s = system()
+    found, level, seen = {}, [Path(folder)], 0
+    apps = {(n.mac_app if s == "macos" else n.exe + (".exe" if s == "windows" else "")).lower() for n in host.names}
+    clis = {c + (".exe" if s == "windows" else "") for c in host.cli_names()}
+    for __ in range(depth + 1):
+        deeper = []
+        for d in level:
+            seen += 1
+            try:
+                with os.scandir(d) as it:
+                    entries = sorted(it, key=lambda e: e.name.lower())
+            except OSError:
+                continue
+            for e in entries:
+                low = e.name.lower()
+                if "app" not in found and low in apps and (e.is_dir() if s == "macos" else e.is_file()):
+                    found["app"] = e.path
+                    nxt = host.cli_next_to(e.path)
+                    if nxt and "cli" not in found:
+                        found["cli"] = nxt
+                elif "cli" not in found and low in clis and e.is_file():
+                    found["cli"] = e.path
+                elif e.is_dir() and not e.name.startswith(".") and not (s == "macos" and low.endswith(".app")):
+                    deeper.append(Path(e.path))
+            if ("app" in found and "cli" in found) or seen >= limit:
+                return found
+        level = deeper
+    return found
 
 
 def _app_paths(exe):
@@ -220,11 +514,19 @@ def _app_paths(exe):
     return found
 
 
-LIGHTCRAFT = Host("lightcraft", "LightCraft", ("LIGHTCRAFT",), "LightCraft", 7980, "lightcraft", ("LightCraft",),
-                  ("LightCraft.app",), "LightCraft", "ai.storyteller.lightcraft")
-CHROMAFORGE = Host("chromaforge", "Chromaforge", ("LIGHTCRAFT_CLASSIC", "NONAMEYET", "LIGHTCRAFT"),
-                   "LightCraft Classic", 7981, "lightcraft-classic", ("Chromaforge", "LightCraft Classic"),
-                   ("Chromaforge.app", "LightCraft Classic.app"), "lightcraft-classic", "com.emmertex.chromaforge")
+LIGHTCRAFT = Host("lightcraft", "LightCraft",
+                  [Names("lightcraft", "LightCraft", ("LIGHTCRAFT",), "LightCraft.app", "LightCraft")],
+                  7980, ("LightCraft",), "ai.storyteller.lightcraft")
+# emmertex/chromaforge's brand.toml: [product] / [identity] now, [legacy] before (its env_prefixes in its order, after
+# its own). The Mac disk image also carries a hidden "LightCraft Classic.app" copy of a new build: names_of tells them
+# apart by the program inside (cli_next_to looks for every name's)
+CHROMAFORGE = Host("chromaforge", "Chromaforge",
+                   [Names("chromaforge", "Chromaforge",
+                          ("CHROMAFORGE", "NONAMEYET", "LIGHTCRAFT", "LIGHTCRAFT_CLASSIC"), "Chromaforge.app",
+                          "chromaforge"),
+                    Names("lightcraft-classic", "LightCraft Classic", ("LIGHTCRAFT_CLASSIC", "NONAMEYET", "LIGHTCRAFT"),
+                          "LightCraft Classic.app", "lightcraft-classic")],
+                   7981, ("Chromaforge", "LightCraft Classic"), "com.emmertex.chromaforge")
 HOSTS = (LIGHTCRAFT, CHROMAFORGE)  # in this order where one has to be picked without a reason (LightCraft came first)
 
 
@@ -239,7 +541,13 @@ def installed_hosts():
 
 def sam3_host(weights):
     """The app that has downloaded SAM 3 for its Object masks (the file weights in its sam3_dir), else None."""
-    return next((h for h in HOSTS if (h.sam3_dir() / weights).exists()), None)
+    return next((h for h in HOSTS if (h.sam3_dir() / weights).exists()), None) or \
+        next((h for h in HOSTS for d in h.sam3_dirs() if (d / weights).exists()), None)
+
+
+def sam3_file(weights):
+    """The SAM 3 weights an app downloaded (sam3_host), in the folder of whichever of its builds has them, else None."""
+    return next((d / weights for h in HOSTS for d in h.sam3_dirs() if (d / weights).exists()), None)
 
 
 def host_cli():

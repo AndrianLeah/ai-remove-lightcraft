@@ -137,17 +137,28 @@ parla con ciascuna:
 | | LightCraft | Chromaforge |
 |---|---|---|
 | Dove si scarica | [getartcraft.com](https://getartcraft.com) | [le sue release](https://github.com/emmertex/chromaforge/releases) |
-| Canale di controllo | porta 7980, `LIGHTCRAFT_CONTROL_PORT` | porta 7981, `LIGHTCRAFT_CLASSIC_CONTROL_PORT` |
+| Programma | `lightcraft` | `chromaforge` (prima della 26.45: `lightcraft-classic`) |
+| Canale di controllo | porta 7980, `LIGHTCRAFT_CONTROL_PORT` | porta 7981, `CHROMAFORGE_CONTROL_PORT` (prima della 26.45: `LIGHTCRAFT_CLASSIC_CONTROL_PORT`) |
 | Password sul canale | nessuna | un token che l'app scrive nella sua cartella delle impostazioni a ogni avvio (`control-token-<porta>`); AI Remove lo legge da lì |
-| Cartella delle impostazioni (Windows) | `%APPDATA%\LightCraft` | `%APPDATA%\LightCraft Classic` |
-| Riga di comando, per un RAW aperto da solo | `lightcraft-cli` | `lightcraft-classic-cli` (usata se LightCraft non è installato) |
+| Cartella delle impostazioni (Windows) | `%APPDATA%\LightCraft` | `%APPDATA%\Chromaforge` (prima della 26.45: `%APPDATA%\LightCraft Classic`) |
+| Riga di comando, per un RAW aperto da solo | `lightcraft-cli` | `chromaforge-cli` (prima della 26.45: `lightcraft-classic-cli`; usata se LightCraft non è installato) |
 
 L'installer ti chiede quale configurare: **LightCraft, Chromaforge o entrambi** (quelli installati sono la risposta
 predefinita); `--apps` risponde senza domanda. Con due porte diverse possono essere aperti tutti e due: AI Remove chiede
 a ciascuna app aperta quale foto ha selezionato, così Ctrl/Cmd+Shift+X apre la foto dell'app in cui l'hai premuto.
 Avviato dal menu con tutti e due aperti, prende la foto attiva di LightCraft (di Chromaforge se in LightCraft non ce
-n'è); `--app chromaforge` prende quella di Chromaforge. Hai installato Chromaforge dopo? Ripeti la configurazione:
+n'è); `--app chromaforge` prende quella di Chromaforge. Hai installato Chromaforge dopo? Premi **Configura
+Chromaforge** nelle [Impostazioni](#impostazioni), oppure ripeti la configurazione:
 `--configure-lightcraft --apps chromaforge`.
+
+**Chromaforge 26.45 ha cambiato nome.** Programma, riga di comando, cartella delle impostazioni e variabili d'ambiente
+ora si chiamano tutti Chromaforge (i nomi qui sopra). AI Remove trova sia le versioni nuove sia quelle di prima; AI
+Remove 1.7.0 invece la nuova non la trova: aggiorna AI Remove. Una cosa richiede la configurazione dell'aggiornamento
+(oppure **Configura di nuovo** nelle [Impostazioni](#impostazioni)): senza `CHROMAFORGE_CONTROL_PORT`, Chromaforge 26.45
+ripiega sulla variabile di LightCraft, `LIGHTCRAFT_CONTROL_PORT`, e vuole anche lei la porta 7980, così il canale di
+controllo lo ottiene solo la prima delle due che apri. La configurazione le dà la sua variabile (e
+`LIGHTCRAFT_CLASSIC_CONTROL_PORT` resta, per una versione di prima); poi riavvia Chromaforge. Finché è così,
+`airemove-cli --check` scrive `"clash"`.
 
 **Il modello Soggetto di Chromaforge, se lo installi.** Chromaforge può usare BiRefNet per le maschere Soggetto e
 Sfondo. Su Windows e Linux gira sul processore: circa 10 secondi ogni volta che va ridisegnata una foto con una di
@@ -233,7 +244,8 @@ lì non c'è lo scarica: per esempio gli encoder di testo di FLUX, se in ComfyUI
 lo usa dov'è: non copia niente, e disinstallare AI Remove non tocca quella cartella. Le cartelle restano scritte in
 `airemove.json` (`model_paths`), quindi non spostarle.
 
-Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cache/huggingface/hub`.
+Senza domande: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cache/huggingface/hub`. Dopo
+l'installazione, le [Impostazioni](#impostazioni) fanno lo stesso un modello alla volta.
 
 ## I modelli
 
@@ -288,6 +300,31 @@ AI Remove si può aprire anche dal menu Start, da Applicazioni o dal menu delle 
 LightCraft o di Chromaforge se uno dei due è aperto, altrimenti su una foto che scegli tu (vedi "Da solo" in alto). Su
 Mac puoi anche trascinare una foto sulla sua icona.
 
+## Impostazioni
+
+Quello che l'installer ha chiesto una volta si può vedere e cambiare anche dopo: il pulsante **⚙** in alto a destra
+nella finestra di AI Remove (anche *Impostazioni…* nel menu della lingua), il **⚙** nell'intestazione del pannello,
+oppure `airemove-cli --settings`. Ogni modifica è salvata subito nel file `airemove.json` dell'installazione, che leggono
+AI Remove, l'installer (un aggiornamento la mantiene) e il server MCP.
+
+- **Il programma e la riga di comando di ogni app.** AI Remove li trova dove li mettono i loro installer e, mentre
+  l'app è aperta, ovunque sia il programma in esecuzione. *Cambia* elenca quelli trovati, sceglie un altro programma
+  oppure lo cerca in una cartella che indichi tu (una copia portatile, una versione compilata da te); la riga di comando
+  accanto viene con lui. *Torna a trovarlo in automatico* rimette quello installato. Con la riga di comando AI Remove
+  legge un RAW aperto da solo.
+- **Il canale di controllo di ogni app:** la porta, la variabile da cui la legge, se risponde, e un avviso quando
+  Chromaforge prenderebbe la porta di LightCraft (vedi [LightCraft e Chromaforge](#lightcraft-e-chromaforge)).
+- **L'editor esterno e Ctrl/Cmd+Shift+X:** AI Remove, un altro programma o nessuno. **Configura di nuovo** fa per
+  quell'app la stessa configurazione dell'installer: la variabile della porta di controllo, AI Remove come editor
+  esterno, la scorciatoia. Un'app che non lascia cambiare il suo editor esterno a un altro programma mentre è aperta
+  (LightCraft da [storytold/lightcraft#2638](https://github.com/storytold/lightcraft/pull/2638) in poi) lo riceve nel
+  suo file delle impostazioni quando la chiudi e premi di nuovo il pulsante. Se la variabile della porta era nuova,
+  riavvia l'app.
+- **I modelli:** la cartella dei modelli dell'installazione (spostala su un altro disco, poi sceglila qui: da allora
+  l'installer scarica lì) e, per ogni modello, una tua cartella che lo contiene, come in
+  [Modelli che hai già](#modelli-che-hai-già). *Cartella dei modelli* riprende il modello da quella
+  dell'installazione. Un modello già caricato tiene i suoi file finché AI Remove resta aperto.
+
 ## Lingua
 
 AI Remove è in **inglese** e in **italiano**. Di base segue la lingua di LightCraft, altrimenti quella di
@@ -330,6 +367,9 @@ istruzioni in [AGENTS.md](AGENTS.md).
   dell'installazione. Riavviala. Su Linux con Wayland la sua finestra deve essere visibile.
 - **"Chromaforge non ha accettato AI Remove"**: il token del suo canale di controllo non è quello che AI Remove ha
   letto. Chiudi Chromaforge e riaprilo.
+- **Chromaforge 26.45 non risponde, LightCraft sì** (o il contrario): vogliono la stessa porta. Aggiorna AI Remove,
+  oppure premi **Configura di nuovo** per Chromaforge nelle [Impostazioni](#impostazioni), poi riavvia Chromaforge
+  (vedi [LightCraft e Chromaforge](#lightcraft-e-chromaforge)).
 - **Aprire una foto da Chromaforge è lento**: probabilmente hai installato il suo modello Soggetto (BiRefNet), che su
   Windows e Linux gira sul processore. Vedi [LightCraft e Chromaforge](#lightcraft-e-chromaforge) per spegnerlo.
 - **La prima variante è lenta (AMD)**: la GPU compila i suoi programmi la prima volta che incontra una dimensione,

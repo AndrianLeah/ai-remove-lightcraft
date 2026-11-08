@@ -10,10 +10,10 @@ install folder. Standard library only. What it does, in order (each step can be 
      Qwen-Image) and removes the ones AI Remove no longer uses from its own models folder (RETIRED);
      a model the user already has in a folder of their own is used from there (airemove.json "model_paths")
   5. creates the launcher (AI Remove.exe / app / command) with its icon, a Start menu / Applications / menu entry
-  6. sets up the apps chosen — LightCraft, Chromaforge (LightCraft Classic) or both, asked at the start (--apps): the
-     app's control channel (LIGHTCRAFT_CONTROL_PORT 7980, LIGHTCRAFT_CLASSIC_CONTROL_PORT 7981), AI Remove as its
-     external editor and the shortcut Ctrl+Shift+X (Cmd+Shift+X on a Mac) for Photo > Edit In > Open Original in
-     Other Editor
+  6. sets up the apps chosen — LightCraft, Chromaforge (once LightCraft Classic) or both, asked at the start (--apps):
+     the app's control channel (LIGHTCRAFT_CONTROL_PORT 7980; CHROMAFORGE_CONTROL_PORT 7981, and
+     LIGHTCRAFT_CLASSIC_CONTROL_PORT for its builds from before the rename), AI Remove as its external editor and the
+     shortcut Ctrl+Shift+X (Cmd+Shift+X on a Mac) for Photo > Edit In > Open Original in Other Editor
   7. checks the result (airemove --check)
 
   install.py [--dir DIR] [--models lama,sam3,rorem,flux,osor,qwen | recommended | none]
@@ -44,7 +44,7 @@ PKG = Path(__file__).resolve().parent.parent  # the unzipped package (or the ins
 sys.path.insert(0, str(PKG / "airemove"))
 import model_files as mf  # noqa: E402  (standard library only, shared with the app: the same checks)
 import system  # noqa: E402  (standard library only, shared with the app)
-from i18n import _, N_, num  # noqa: E402
+from i18n import _, _n, N_, num  # noqa: E402
 
 VERSION = system.VERSION
 PY_VERSION = "3.12"
@@ -547,9 +547,16 @@ def choose_models(flavour, gpu, installed, given, sam_host):
     return wanted
 
 
-def get_models(d, wanted, token, models_from, paths):
+def models_root(d, cfg):
+    """The install's models folder: <install>/models, or the one chosen since in AI Remove's Settings window
+    (airemove.json "models_dir": model_files.models_dir), where the missing models are downloaded too."""
+    return Path(cfg["models_dir"]) if cfg.get("models_dir") else d / "models"
+
+
+def get_models(d, wanted, token, models_from, paths, dest=None):
     py = venv_python(d)
-    cmd = [py, str(d / "installer" / "fetch_models.py"), "--dest", str(d / "models"), "--models", ",".join(wanted),
+    cmd = [py, str(d / "installer" / "fetch_models.py"), "--dest", str(dest or d / "models"), "--models",
+           ",".join(wanted),
            "--paths", json.dumps({p: str(f) for p, f in paths.items()})]
     if models_from:
         cmd += ["--from", str(models_from)]
@@ -739,10 +746,12 @@ def linux_project_type(data, remove=False):
 
 # ------------------------------------------------------------------------------------------------ 6. the apps
 def lc_running(host=system.LIGHTCRAFT):
-    """Whether the app (LightCraft, Chromaforge) is running, with or without its control channel."""
+    """Whether the app (LightCraft, Chromaforge) is running, with or without its control channel: under any name its
+    program has had (chromaforge.exe, lightcraft-classic.exe) or the one chosen in AI Remove's Settings window."""
     if system.system() == "windows":
-        return f"{host.exe}.exe" in output(["tasklist", "/FI", f"IMAGENAME eq {host.exe}.exe", "/NH"]).lower()
-    return bool(output(["pgrep", "-x", host.process()]).strip())
+        listed = output(["tasklist", "/NH", "/FO", "CSV"]).lower()
+        return any(f'"{exe}"' in listed for exe in host.programs())
+    return any(output(["pgrep", "-x", p]).strip() for p in host.processes())
 
 
 def lc_request(port, method, params, timeout=10, host=system.LIGHTCRAFT):
@@ -774,34 +783,42 @@ def mac_agent(host):
 
 
 def set_control_port(port, cfg, host=system.LIGHTCRAFT):
-    """The app's <PREFIX>_CONTROL_PORT (LIGHTCRAFT_CONTROL_PORT, LIGHTCRAFT_CLASSIC_CONTROL_PORT) for the app started
-    from now on (it reads it at start)."""
-    s, done, var = system.system(), [], host.var("CONTROL_PORT")
+    """The app's <PREFIX>_CONTROL_PORT for the app started from now on (it reads it at start): LightCraft's
+    LIGHTCRAFT_CONTROL_PORT; Chromaforge's under each prefix of its own (CHROMAFORGE_CONTROL_PORT, and
+    LIGHTCRAFT_CLASSIC_CONTROL_PORT for a build from before its rename). Without its own, Chromaforge 26.45 would take
+    LIGHTCRAFT_CONTROL_PORT, LightCraft's port (system.Host.clash)."""
+    s, done, names = system.system(), [], host.own_vars("CONTROL_PORT")
+    pairs = [f"{v}={port}" for v in names]
     if s == "windows":
-        output(["setx", var, str(port)])
-        done.append(_("user variable {variable}", variable=var))
+        for v in names:
+            output(["setx", v, str(port)])
+        done.append(_n("user variable {variable}", "user variables {variable}", len(names), variable=", ".join(names)))
     elif s == "macos":
         agent = Path.home() / "Library" / "LaunchAgents" / f"{mac_agent(host)}.plist"
         agent.parent.mkdir(parents=True, exist_ok=True)
+        setenv = "; ".join(f"/bin/launchctl setenv {v} {port}" for v in names)
         agent.write_text(
             '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
             '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n'
             f'  <key>Label</key><string>{mac_agent(host)}</string>\n'
-            '  <key>ProgramArguments</key><array><string>/bin/launchctl</string><string>setenv</string>'
-            f'<string>{var}</string><string>{port}</string></array>\n'
+            '  <key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string>'
+            f'<string>{setenv}</string></array>\n'
             '  <key>RunAtLoad</key><true/>\n</dict></plist>\n', encoding="utf-8")
-        output(["launchctl", "setenv", var, str(port)])
+        for v in names:
+            output(["launchctl", "setenv", v, str(port)])
+        output(["launchctl", "unload", str(agent)])  # an agent from before: loaded again with what it says now
         output(["launchctl", "load", "-w", str(agent)])
         done.append(f"LaunchAgent {agent.name}")
     else:
         envd = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "environment.d"
         envd.mkdir(parents=True, exist_ok=True)
-        (envd / f"60-{host.key}-control.conf").write_text(f"{var}={port}\n", encoding="utf-8")
+        (envd / f"60-{host.key}-control.conf").write_text("".join(f"{x}\n" for x in pairs), encoding="utf-8")
         done.append(_("~/.config/environment.d (from the next login)"))
-        output(["systemctl", "--user", "set-environment", f"{var}={port}"])
+        output(["systemctl", "--user", "set-environment"] + pairs)
         if host.is_flatpak():
-            output(["flatpak", "override", "--user", f"--env={var}={port}", "--share=network",
-                    f"--filesystem={cfg['dir']}", "--talk-name=org.freedesktop.Flatpak", host.app_id])
+            output(["flatpak", "override", "--user"] + [f"--env={x}" for x in pairs] +
+                   ["--share=network", f"--filesystem={cfg['dir']}", "--talk-name=org.freedesktop.Flatpak",
+                    host.app_id])
             done.append(_("Flatpak permissions (local network, AI Remove's folder, starting programs)"))
             cfg[host.cfg_key("flatpak_override")] = True
         else:  # the menu entry starts the app with the channel on, without waiting for a new login
@@ -811,7 +828,7 @@ def set_control_port(port, cfg, host=system.LIGHTCRAFT):
                         if (Path(p) / "applications" / f"{host.app_id}.desktop").exists()), None)
             if src:
                 text = src.read_text(encoding="utf-8")
-                text = re.sub(rf"^Exec=(?!env {var})", f"Exec=env {var}={port} ", text, flags=re.M)
+                text = re.sub(rf"^Exec=(?!env {names[0]}=)", f"Exec=env {' '.join(pairs)} ", text, flags=re.M)
                 data.mkdir(parents=True, exist_ok=True)
                 (data / src.name).write_text(text, encoding="utf-8")
                 cfg[host.cfg_key("desktop_override")] = str(data / src.name)
@@ -821,24 +838,26 @@ def set_control_port(port, cfg, host=system.LIGHTCRAFT):
 
 
 def unset_control_port(d, cfg, host=system.LIGHTCRAFT):
-    """Undo set_control_port."""
-    s, var = system.system(), host.var("CONTROL_PORT")
+    """Undo set_control_port (every variable of the app's own, also one set by an AI Remove from before)."""
+    s, names = system.system(), host.own_vars("CONTROL_PORT")
     if s == "windows":
-        output(["reg", "delete", "HKCU\\Environment", "/v", var, "/f"])
+        for v in names:
+            output(["reg", "delete", "HKCU\\Environment", "/v", v, "/f"])
     elif s == "macos":
         agent = Path.home() / "Library" / "LaunchAgents" / f"{mac_agent(host)}.plist"
         output(["launchctl", "unload", str(agent)])
-        output(["launchctl", "unsetenv", var])
+        for v in names:
+            output(["launchctl", "unsetenv", v])
         agent.unlink(missing_ok=True)
     else:
         envd = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "environment.d"
         (envd / f"60-{host.key}-control.conf").unlink(missing_ok=True)
-        output(["systemctl", "--user", "unset-environment", var])
+        output(["systemctl", "--user", "unset-environment"] + names)
         if cfg.get(host.cfg_key("desktop_override")):
             Path(cfg[host.cfg_key("desktop_override")]).unlink(missing_ok=True)
         if cfg.get(host.cfg_key("flatpak_override")):
-            output(["flatpak", "override", "--user", f"--unset-env={var}",
-                    f"--nofilesystem={d}", "--no-talk-name=org.freedesktop.Flatpak", host.app_id])
+            output(["flatpak", "override", "--user"] + [f"--unset-env={v}" for v in names] +
+                   [f"--nofilesystem={d}", "--no-talk-name=org.freedesktop.Flatpak", host.app_id])
     out.write("  " + _("{app}'s control channel: removed", app=host.name))
 
 
@@ -922,7 +941,7 @@ def choose_apps(cfg, yes):
     options = {str(n): [h] for n, h in enumerate(system.HOSTS, 1)}
     options.update({str(len(system.HOSTS) + 1): list(system.HOSTS), "0": []})
     out.write("")
-    para(_("AI Remove works inside LightCraft and inside Chromaforge (LightCraft Classic): it becomes the app's "
+    para(_("AI Remove works inside LightCraft and inside Chromaforge (once LightCraft Classic): it becomes the app's "
            "external editor, on {key}, and turns on its control channel. Which one should it be set up for?",
            key=APP_KEY), "  ", "  ")
     for n, h in enumerate(system.HOSTS, 1):
@@ -1033,9 +1052,12 @@ def status(d):
     cfg = read_cfg(d)
     rep = {"installed": venv_python(d).exists(), "dir": str(d), "config": cfg, "os": system.system(), "apps": {}}
     for h in system.HOSTS:
-        a = rep["apps"][h.key] = {"name": h.name, "app": h.app(), "running": lc_running(h),
+        a = rep["apps"][h.key] = {"name": h.name, "app": h.app(), "cli": " ".join(h.cli() or []) or None,
+                                  "running": lc_running(h),
                                   "reachable": h.reachable(int(cfg.get(h.cfg_key("port")) or h.default_port)),
                                   "settings": str(h.config_dir()), "configured": cfg.get(h.key)}
+        if h.clash():  # Chromaforge 26.45 would take LightCraft's port: --configure-lightcraft sets its own
+            a["clash"] = h.clash().key
         try:
             st = json.loads(ui_json(h).read_text(encoding="utf-8-sig")).get("settings", {})
             a["editor"], a["shortcut"] = st.get("externalEditor"), (st.get("keymap") or {}).get(EDIT_COMMAND)
@@ -1217,7 +1239,7 @@ def main():
 
     # models: what this install has already — in its models/ or, from an earlier run, in the user's own folders (a
     # re-run keeps it and does not ask about it again) —, the folders given with --model-dir, then the questions
-    models_dir = d / "models"
+    models_dir = models_root(d, cfg)
     kept = {p: f for p, f in (cfg.get("model_paths") or {}).items() if p in mf.PARTS and mf.part_ok(p, f)}
     installed = [m for m in MODELS if mf.has(m, models_dir, kept, optional=True)]
     other = Path(args.models_from).expanduser() if args.models_from else None
@@ -1328,7 +1350,7 @@ def main():
     # the parts in the user's own folders: recorded first, so the app finds them even if a download fails later
     cfg["model_paths"] = {p: str(f) for p, f in paths.items()}
     write_cfg(d, cfg)
-    done, failed = get_models(d, wanted, token, args.models_from, paths) if wanted else ([], [])
+    done, failed = get_models(d, wanted, token, args.models_from, paths, models_dir) if wanted else ([], [])
     cfg["models"] = sorted(set(cfg.get("models", [])) | set(done))
     cfg["model_paths"] = {p: f for p, f in cfg["model_paths"].items() if mf.part_ok(p, f)}
     for m, why in failed:

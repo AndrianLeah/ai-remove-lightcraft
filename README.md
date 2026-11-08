@@ -179,17 +179,26 @@ shared with the app's Object masks. What differs is only how AI Remove reaches e
 | | LightCraft | Chromaforge |
 |---|---|---|
 | Get it | [getartcraft.com](https://getartcraft.com) | [its releases](https://github.com/emmertex/chromaforge/releases) |
-| Control channel | port 7980, `LIGHTCRAFT_CONTROL_PORT` | port 7981, `LIGHTCRAFT_CLASSIC_CONTROL_PORT` |
+| Program | `lightcraft` | `chromaforge` (before 26.45: `lightcraft-classic`) |
+| Control channel | port 7980, `LIGHTCRAFT_CONTROL_PORT` | port 7981, `CHROMAFORGE_CONTROL_PORT` (before 26.45: `LIGHTCRAFT_CLASSIC_CONTROL_PORT`) |
 | Password on the channel | none | a token the app writes in its settings folder at every start (`control-token-<port>`); AI Remove reads it there |
-| Settings folder (Windows) | `%APPDATA%\LightCraft` | `%APPDATA%\LightCraft Classic` |
-| Command line, for a RAW on its own | `lightcraft-cli` | `lightcraft-classic-cli` (used when LightCraft is not installed) |
+| Settings folder (Windows) | `%APPDATA%\LightCraft` | `%APPDATA%\Chromaforge` (before 26.45: `%APPDATA%\LightCraft Classic`) |
+| Command line, for a RAW on its own | `lightcraft-cli` | `chromaforge-cli` (before 26.45: `lightcraft-classic-cli`; used when LightCraft is not installed) |
 
 The installer asks which to set up: **LightCraft, Chromaforge or both** (the ones installed are the default), and
 `--apps` answers without the question. The two ports let both be open together: AI Remove asks each open app which
 photo it has selected, so Ctrl/Cmd+Shift+X opens the photo of the app you pressed it in. Started from the menu with
 both open, it takes LightCraft's active photo (Chromaforge's when LightCraft has none); `--app chromaforge` takes
-Chromaforge's. Installed Chromaforge later?
-Run the configuration again: `--configure-lightcraft --apps chromaforge`.
+Chromaforge's. Installed Chromaforge later? Press **Set up Chromaforge** in [Settings](#settings), or run the
+configuration again: `--configure-lightcraft --apps chromaforge`.
+
+**Chromaforge 26.45 renamed itself.** Its program, command line, settings folder and environment variables all carry
+the name Chromaforge now (the names above). AI Remove finds both the new and the older builds. AI Remove 1.7.0 does not
+find the new one: update AI Remove. One thing needs the update's set-up (or **Set up again** in
+[Settings](#settings)): without `CHROMAFORGE_CONTROL_PORT`, Chromaforge 26.45 falls back to LightCraft's variable,
+`LIGHTCRAFT_CONTROL_PORT`, and wants port 7980 too, so only the first of the two opened gets a control channel. The
+set-up gives it its own variable (and `LIGHTCRAFT_CLASSIC_CONTROL_PORT` stays, for an older build); restart Chromaforge
+afterwards. `airemove-cli --check` says `"clash"` while this is so.
 
 **Chromaforge's Subject model, if you install it.** Chromaforge can use BiRefNet for its Subject and Background
 masks. On Windows and Linux it runs on the processor, about 10 s each time a photo with such a mask (Lightroom's
@@ -287,7 +296,8 @@ it does not find there is downloaded, for example FLUX's text encoders when only
 used where it is: nothing is copied, and uninstalling AI Remove leaves that folder alone. The folders are recorded in
 `airemove.json` (`model_paths`), so keep them where they are.
 
-Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cache/huggingface/hub`.
+Without questions: `--model-dir flux=D:\ComfyUI\models --model-dir rorem=~/.cache/huggingface/hub`. After the
+installation, [Settings](#settings) does the same for one model at a time.
 
 ## Models
 
@@ -357,6 +367,29 @@ name says (`Remove: a wooden bench`) into the mask, as one removal.
 | `<photo name>.airemove` | next to the photo | the project: every removal and its variants. Double-click it to open the photo in AI Remove |
 | `install.log`, `work/last-run.log` | in `~/AIRemove` | logs |
 
+## Settings
+
+What the installer asked once can be seen and changed afterwards: the **⚙** button at the top right of AI Remove's
+window (also *Settings…* in its language menu), the **⚙** in the panel's header, or `airemove-cli --settings`. Every
+change is saved at once in the install's `airemove.json`, which AI Remove, the installer (an update keeps it) and the MCP
+server all read.
+
+- **Each app's program and command line.** AI Remove finds them where their installers put them and, while the app is
+  open, wherever its running program is. *Change* lists what it found, picks another program, or looks for it in a
+  folder you choose (a portable copy, a build of your own); the command line next to it comes with it. *Find it by
+  itself again* goes back to the one installed. The command line is how a RAW opened on its own is read.
+- **Each app's control channel:** its port, the variable it reads it from, whether it answers, and a warning when
+  Chromaforge would take LightCraft's port (see [LightCraft and Chromaforge](#lightcraft-and-chromaforge)).
+- **Its external editor and Ctrl/Cmd+Shift+X:** AI Remove, another program, or none. **Set up again** does the
+  installer's own set-up for that app: the control port's variable, AI Remove as the external editor, the shortcut. An
+  app that does not let another program change its external editor while it runs (LightCraft from
+  [storytold/lightcraft#2638](https://github.com/storytold/lightcraft/pull/2638) on) gets it in its settings file once
+  you close it and press the button again. Restart the app afterwards when its port's variable was new.
+- **The models:** the install's models folder (move it to another disk, then choose it here; the installer downloads
+  into it from then on), and for each model a folder of your own that holds it, as in
+  [Models you already have](#models-you-already-have). *Models folder* takes the model from the install's folder
+  again. A model already loaded keeps its files until AI Remove is closed.
+
 ## Languages
 
 AI Remove speaks **English** (the source language) and **Italian**. It picks the language in this order:
@@ -408,11 +441,11 @@ Uninstalling turns the channels off.
 
 | Path | What |
 |---|---|
-| `airemove/` | The app: `airemove.py` (session, the bridge to LightCraft and Chromaforge, RAW pipeline, CLI), `ui.py` (Tk window), `engines.py` (SAM 3, LaMa, SDXL, FLUX), `model_files.py` (each model's files, sizes and licence, and where they are), `rawdng.py` (DNG read/write, sensor noise), `imagefile.py` (JPEG, PNG, TIFF, WebP, HEIC, AVIF read/write, with the same calls), `blend.py` (seamless blending), `project.py` (`.airemove` files), `system.py` (per-OS paths; `Host`: each app's ports, token, settings and command line), `i18n.py` + `locales/` (translations) |
+| `airemove/` | The app: `airemove.py` (session, the bridge to LightCraft and Chromaforge, RAW pipeline, CLI), `ui.py` (Tk window), `engines.py` (SAM 3, LaMa, SDXL, FLUX), `model_files.py` (each model's files, sizes and licence, and where they are), `rawdng.py` (DNG read/write, sensor noise), `imagefile.py` (JPEG, PNG, TIFF, WebP, HEIC, AVIF read/write, with the same calls), `blend.py` (seamless blending), `project.py` (`.airemove` files), `system.py` (per-OS paths; `Host`: each app's names old and new, ports, token, settings, program and command line), `panel.py` (the panel beside the app), `settings.py` (the Settings window), `i18n.py` + `locales/` (translations) |
 | `installer/` | `bootstrap.ps1` / `bootstrap.sh` (fetch uv, then run `install.py`), `install.py` (standard library only), `fetch_models.py` |
 | `mcp/` | The MCP server and its launchers |
 | `assets/icon/` | The icon, and how it was made ([assets/icon/README.md](assets/icon/README.md)) |
-| `tools/` | `build_dist.py` (release packages), `check_dist.py` (checks them), `i18n_check.py` (translation catalogs), `ci_smoke.py` and `ci_removal.py` (CI: a real install, then one removal end to end), `ci_fill.py` (CI: Generative fill with a stand-in FLUX), `ci_status.py` (CI: the install's status file read while it is written) |
+| `tools/` | `build_dist.py` (release packages), `check_dist.py` (checks them), `i18n_check.py` (translation catalogs), `ci_smoke.py` and `ci_removal.py` (CI: a real install, then one removal end to end), `ci_fill.py` (CI: Generative fill with a stand-in FLUX), `ci_status.py` (CI: the install's status file read while it is written), `ci_settings.py` (CI: Chromaforge's names, its port clash and the Settings window's choices, with made-up apps) |
 
 Run from source with an install's Python:
 
