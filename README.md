@@ -97,6 +97,10 @@ takes reflections away using the app's own masks, without leaving the app.
 - **The result shows on the photo in the app.** The chosen variant is drawn over the photo in the app's own view, as
   its Layout Image. This works while the photo is shown whole (Detail view, Fit, not cropping). Hold **Original**, or
   `\`, to compare.
+  - **Lens corrections:** with a lens profile or a manual Distortion on, the variant is drawn the way the app corrects
+    the photo. AI Remove measures how the corrections move and brighten it, from one more export of the photo when it
+    reads it. The fill itself is written into the RAW as it was shot, and the app corrects the saved DNG the same
+    way.
 - **One removal per mask.** Each mask keeps its variants while the panel is open, and *On this photo* lists them.
   **Save to LightCraft** (or Chromaforge) writes every chosen variant into one DNG, stacked on the original, and the
   next save updates it. The masks used as selections are not carried into the DNG.

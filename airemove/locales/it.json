@@ -171,6 +171,7 @@
   "Not made yet: choose a model above, then \"Generate #{id}\"": "Non ancora fatta: scegli un modello qui sopra, poi \"Genera #{id}\"",
   "not reachable now": "non raggiungibile adesso",
   "Not shown on this photo: its Geometry (Upright, perspective…) moves it in {app}. Save shows the result.": "Non si vede su questa foto: la sua Geometria (Upright, prospettiva…) la sposta in {app}. Salva mostra il risultato.",
+  "Not shown on this photo: its lens corrections could not be matched. Save shows the result.": "Non si vede su questa foto: le sue correzioni dell'obiettivo non si riescono ad allineare. Salva mostra il risultato.",
   "Nothing found for \"{what}\": a plain name in English works best (person, car, sign)": "Non trovo \"{what}\": funziona meglio un nome semplice in inglese (person, car, sign)",
   "Object": "Oggetto",
   "objects close together stay in one mask: each would show in the other's fill": "gli oggetti vicini restano in una maschera sola: ognuno si vedrebbe nel riempimento dell'altro",

@@ -51,7 +51,7 @@ from pathlib import Path
 from tkinter import ttk
 
 import numpy as np
-from PIL import Image, ImageOps, ImageTk
+from PIL import Image, ImageTk
 
 import airemove as A
 import engines
@@ -1278,18 +1278,20 @@ class Panel:
                 A.log("panel on the photo:", repr(e))
 
     def overlay_png(self, s, rs, pid):
-        """The removals' chosen variants as the app shows photo pid: transparent but where they change it, as the app
-        crops it, at the size it shows it, as a PNG in the Session's folder: (path, None), or (None, why) where the
-        app's view cannot be matched — its Geometry (Upright, perspective, scale, offsets), which base.png is
-        without. A lens profile is not undone in base.png either: near the edges of a wide lens a variant may sit a
-        pixel or two off."""
+        """The removals' chosen variants as the app shows photo pid: transparent but where they change it, through its
+        lens corrections (lens_for), as the app crops it, at the size it shows it, as a PNG in the Session's folder:
+        (path, None), or (None, why) where the app's view cannot be matched — its Geometry (Upright, perspective,
+        scale, offsets), which base.png is without. The variants themselves stay in base.png's frame, the RAW's: the
+        app corrects the saved DNG as it does the original."""
         dev = self.lc.one("photo.inspect", {"id": pid})["develop"]
         crop, geo = dev["crop"], dev.get("geometry") or {}
-        g = crop["geometry"]
         if any(geo.get(k, v) != v for k, v in A.NEUTRAL_GEOMETRY.items()):
             A.log("panel: not shown on the photo (its Geometry)")
             return None, _("Not shown on this photo: its Geometry (Upright, perspective…) moves it in {app}. Save "
                            "shows the result.", app=self.host.name)
+        lens, problem = self.lens_for(s, pid, dev)
+        if problem:
+            return None, problem
         h, w = s.base_arr.shape[:2]
         alpha = np.zeros((h, w), np.float32)  # where the removals shown change the photo
         for r in rs:
@@ -1303,24 +1305,37 @@ class Panel:
         # result the DNG has some of them already, and what is drawn over it must have them too
         rgba[..., :3] = s.composite(only=self.chosen_removals(s))
         rgba[..., 3] = np.clip(alpha * 255, 0, 255).astype(np.uint8)
-        # the app's crop, as lightcraft-cli renders it (measured): the whole photo turned about its centre by the angle
-        # (clockwise when positive) on the same canvas, the rect cut from that, then the flips
-        im = Image.fromarray(rgba, "RGBA")
-        if g.get("angle"):
-            im = im.rotate(-g["angle"], resample=Image.BICUBIC)
-        c = g["rect"]
-        im = im.crop((round(c["x0"] * w), round(c["y0"] * h), round(c["x1"] * w), round(c["y1"] * h)))
-        if crop.get("flip_h"):
-            im = ImageOps.mirror(im)
-        if crop.get("flip_v"):
-            im = ImageOps.flip(im)
-        if self.view_px and self.view_px[0] < im.width:  # no bigger than the app shows it: written and read faster
-            im = im.resize(self.view_px, Image.BILINEAR)
+        # no bigger than the app shows it: written and read faster
+        im = A.crop_view(rgba, crop, lens, self.view_px)
         self.overlay_n += 1
         path = s.work / f"on-photo-{self.overlay_n}.png"  # a new name each time: the app reads it again
         im.save(path, compress_level=1)
         self.overlay_files.append(path)
         return path, None
+
+    def lens_for(self, s, pid, dev):
+        """The photo's lens corrections as the app shows it (A.LensWarp), None when they move nothing; and why the
+        variants cannot be drawn through them, if so. Measured once per photo and lens setting: from the export made
+        when the photo was read (Session.prepare), or a new one when the lens settings changed since."""
+        optics = dev.get("optics") or {}
+        if not A.lens_moves(optics):
+            return None, None
+        if s.lens is not None and s.lens.optics == optics:
+            return s.lens, None
+        failed = _("Not shown on this photo: its lens corrections could not be matched. Save shows the result.")
+        if s.lens is None and getattr(s, "lens_failed", None) == optics:
+            return None, failed
+        lens_png = s.work / "lens.png"
+        if s.lens_optics != optics or not lens_png.exists():
+            A.render_neutral(self.lc, pid, {"develop": dev}, None, lens_png=str(lens_png))
+            s.lens_optics = dict(optics)
+        t0 = time.time()
+        s.lens = A.LensWarp.measure(s.work / "base.png", lens_png, optics)
+        A.log(f"panel: lens corrections in {time.time() - t0:.2f}s")
+        if s.lens is None:
+            s.lens_failed = dict(optics)
+            return None, failed
+        return s.lens, None
 
     def put_layout(self, path):
         if self.layout_before is None:  # the app's own setting, put back by take_layout
