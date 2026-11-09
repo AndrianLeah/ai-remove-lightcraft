@@ -25,7 +25,8 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                reflections" with a stand-in for DAI: tools/ci_reflections.py (the reflection's light
                                taken off the raw values), and "Draw something new" with a stand-in for FLUX:
                                tools/ci_fill.py (the prompt alone, the area upright, the fill in the sensor data),
-                               and the panel's preview through the app's lens corrections: tools/ci_lens.py
+                               and the panel's preview through the app's lens corrections: tools/ci_lens.py, and
+                               the original's EXIF in the DNG: tools/ci_dng_exif.py
   ci_smoke.py uninstall DIR    the uninstaller the install made (Settings > Apps / the install folder) with --yes: the
                                app, its menu entry, its .airemove file type and, on Windows, its Settings > Apps entry
                                are gone; the user's own model folders are still there
@@ -303,6 +304,8 @@ def remove(d):
     expect(r.returncode == 0, f"\"Draw something new\" end to end: exit status 0 (it was {r.returncode})")
     r = run([py, ROOT / "tools" / "ci_lens.py", d])
     expect(r.returncode == 0, f"the panel's preview through lens corrections: exit status 0 (it was {r.returncode})")
+    r = run([py, ROOT / "tools" / "ci_dng_exif.py", d])
+    expect(r.returncode == 0, f"the original's EXIF in the DNG: exit status 0 (it was {r.returncode})")
 
 
 def uninstall(d):

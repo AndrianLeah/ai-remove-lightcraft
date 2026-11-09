@@ -59,6 +59,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 from rawdng import RawDNG  # noqa: E402
+import exifcopy  # noqa: E402
 import imagefile  # noqa: E402
 import engines  # noqa: E402
 import blend  # noqa: E402
@@ -2731,6 +2732,11 @@ class Session:
                unique_path(self.src_path.with_name(f"{self.src_path.stem}-AIRemove{suffix}")))
         tmp = out.with_name(out.stem + ".tmp" + out.suffix)
         self.raw.write_cfa(str(tmp), cfa, [r.box for r in rs])
+        if isinstance(self.raw, RawDNG):  # the app's DNG export has no EXIF: the original's, back in (exifcopy)
+            try:
+                log(f"EXIF from {self.src_path.name}: " + exifcopy.copy_exif(self.src_path, tmp))
+            except Exception as e:  # the metadata never costs the save
+                log(f"EXIF not copied from {self.src_path.name}: {e!r}")
         try:
             os.replace(tmp, out)
         except PermissionError:
