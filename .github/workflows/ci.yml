@@ -11,7 +11,8 @@
 # taken off the raw values), "Draw something new" with a stand-in for FLUX (tools/ci_fill.py: the prompt alone, the
 # area upright, the fill in the sensor data), the MCP server over stdio, and the uninstaller
 # (tools/ci_smoke.py), Chromaforge's old and new names and the Settings window's logic (tools/ci_settings.py, made-up
-# apps and install). Before the install: a program
+# apps and install), the window opening zoomed with its top bar still, also sized by its content and from the panel
+# (tools/ci_window.py, the install's Tk: Tk 9 on the Mac). Before the install: a program
 # reading install-status.json cannot stop the installer's writes of it (tools/ci_status.py).
 # No secrets, no photos.
 name: CI

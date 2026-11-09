@@ -47,6 +47,8 @@ RIGHT, MIDDLE = ("2", "3") if MAC else ("3", "2")
 MOD = "Cmd" if MAC else "Ctrl"  # the zoom / undo modifier, as shown in the hints
 ALT = "Option" if MAC else "Alt"
 ICON = A.ROOT / "assets" / "icon" / "airemove-256.png"
+# px (times the screen's scale) more than one row needs, for the top bar to go back to one row from two (fit_header)
+HEAD_HYSTERESIS = 24
 
 
 def mods(e):
@@ -680,13 +682,17 @@ class App:
             r.iconphoto(True, self._icon)
         except (tk.TclError, OSError):
             pass
+        # a size of its own before the zoom (and to go back to from it): without one the window took the width its
+        # widgets asked for, which the top bar changes (fit_header), and on macOS (Tk 9) "wm state zoomed", which runs
+        # the event loop until the window is still, never returned: the window flickered, at 100 % CPU
+        r.geometry(f"{int(r.winfo_screenwidth() * .9)}x{int(r.winfo_screenheight() * .85)}+20+10")
         try:
             if X11:
                 r.attributes("-zoomed", True)  # X11 window managers: maximized
             else:
                 r.state("zoomed")  # the photo gets the whole screen
         except tk.TclError:
-            r.geometry(f"{int(r.winfo_screenwidth() * .9)}x{int(r.winfo_screenheight() * .85)}+20+10")
+            pass  # at that size
         bring_to_front(r)
         threading.Thread(target=self.worker, daemon=True).start()
         r.after(100, self.poll)
@@ -741,6 +747,14 @@ class App:
         if W <= 1:
             return
         k = self.k
+        if self.head_l.pack_propagate() and self.head_l.winfo_reqheight() > 1:
+            # the photo's row, once laid out, keeps its height but asks for no width: what is chosen here (one row or
+            # two, the texts) then changes the width the top bar asks of the window by 1 px at most. One row asked
+            # for the photo's row and the controls side by side, two rows for the wider of them: a window sized by its
+            # content (1.8.0's on macOS, while it zoomed) changed width at each switch, and the bar switched back,
+            # forever
+            self.head_l.configure(width=1, height=self.head_l.winfo_reqheight())
+            self.head_l.pack_propagate(False)
 
         def width(lbl, text, pad):  # what a label takes with this text: the text, its own border, its padding
             f = tkfont.Font(font=lbl.cget("font"))
@@ -750,7 +764,11 @@ class App:
         fixed = self.app_lbl.winfo_reqwidth() + int(18 * k) + (
             self.open_btn.winfo_reqwidth() if self.open_btn.winfo_manager() else 0)
         beside = W - self.head_r.winfo_reqwidth() - int(14 * k)  # the photo's row with the controls on it
-        one_row = beside - fixed - width(self.repo_lbl, gh_short, 10) >= min(title_w, int(160 * k))
+        spare = beside - fixed - width(self.repo_lbl, gh_short, 10) - min(title_w, int(160 * k))
+        # back to one row only with room to spare (HEAD_HYSTERESIS, far more than the 1 px a switch can change the
+        # window's width by): a width that wavers at the edge (the zoom's steps, a window sized by its content) cannot
+        # switch the top bar back and forth
+        one_row = spare >= (0 if self.head_one_row else int(HEAD_HYSTERESIS * k))
         if one_row != self.head_one_row:
             self.head_one_row = one_row
             self.head_l.pack_forget()

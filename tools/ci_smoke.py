@@ -6,7 +6,9 @@ installer/bootstrap.(ps1|sh) --models lama --no-lightcraft: LightCraft is not on
                                .airemove file type registered to open with it, with the project icon; the installer
                                with an app that refuses its external editor while it runs: tools/ci_editor_lock.py;
                                Chromaforge's names, its port clash and the Settings window's choices (the apps'
-                               programs, the models' folders, "Set up again"): tools/ci_settings.py
+                               programs, the models' folders, "Set up again"): tools/ci_settings.py; the window
+                               opening, zoomed, and its top bar settling (also as the panel opens it):
+                               tools/ci_window.py (Linux: under xvfb-run when there is no display)
   ci_smoke.py folder DIR       a model the user already has in a folder of their own (--model-dir): DIR's LaMa moved
                                into a folder laid out like a Hugging Face cache, next to DIR; the installer run again
                                with --model-dir lama=<an empty folder> must stop, changing nothing, and with
@@ -172,6 +174,10 @@ def check(d):
     r = run([py, ROOT / "tools" / "ci_settings.py"])  # the install's Python: engines' model lookup checked too
     expect(r.returncode == 0, f"Chromaforge's names and the Settings window's logic: exit status 0 (it was "
                               f"{r.returncode})")
+    # the install's Python and Tk (on macOS Tk 9, whose zoom never returned in 1.8.0); Linux: a display of its own
+    xvfb = OS == "linux" and not os.environ.get("DISPLAY") and shutil.which("xvfb-run")
+    r = run((["xvfb-run", "-a"] if xvfb else []) + [py, ROOT / "tools" / "ci_window.py", d])
+    expect(r.returncode == 0, f"the window opens, zoomed, its top bar still: exit status 0 (it was {r.returncode})")
 
 
 def installer(d, args):
