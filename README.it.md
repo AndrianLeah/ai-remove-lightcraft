@@ -335,6 +335,11 @@ apri AI Remove. Per forzarla si usa la variabile `AIREMOVE_LANG=it` oppure `AIRE
 
 - `<nome>-AIRemove.dng` (da un'immagine: `.jpg`, `.png`… come l'originale): la foto ritoccata, nella cartella
   dell'originale e impilata con lui in LightCraft o in Chromaforge (da solo: solo nella cartella).
+  - **Con i metadati dell'originale.** L'esportazione DNG dell'app non ha EXIF, quindi AI Remove ci copia quelli
+    dell'originale: tempo, diaframma, ISO, focale, obiettivo, numeri di serie, GPS, autore e copyright.
+  - **Il profilo dell'obiettivo segue.** Con l'obiettivo indicato nel DNG, l'app gli trova lo stesso profilo
+    dell'originale.
+  - **Non copiate:** le note del produttore, che non si possono copiare in un altro file.
 - `<nome della foto>.airemove`: il progetto, con tutte le rimozioni e le varianti, accanto alla foto. Con un doppio
   clic apre la foto in AI Remove.
 - `~/AIRemove`: il programma, i modelli, i log (`install.log` e `work/last-run.log`).

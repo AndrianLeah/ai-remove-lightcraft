@@ -150,6 +150,11 @@ Save is not affected. The first time the panel reads a photo, the photo's crop d
   what goes with each object (its shadow, its reflection), part by part.
 - **Writes a real RAW.** The fill is converted back into the camera's linear space and re-mosaicked into the Bayer data
   with matching sensor noise, so the DNG develops like the original.
+  - **With the original's metadata.** The app's DNG export carries no EXIF, so AI Remove copies the original's into
+    the DNG: exposure, aperture, ISO, focal length, lens, serial numbers, GPS, artist and copyright.
+  - **The lens profile follows.** With the lens named in the DNG, the app finds the same lens profile for it as for
+    the original.
+  - **Not copied:** the maker notes, which can't be copied into another file.
 - **Seamless blending:** a Poisson membrane plus texture transfer from the ring around the hole.
 - **Long removals stay sharp.** A pole as tall as the photo, a cable or a railing is filled in tiles along it, each
   close to the model's own size, so the fill is not a small picture enlarged; thin ones also get a LaMa variant, which
