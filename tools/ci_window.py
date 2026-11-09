@@ -9,10 +9,13 @@ Python. DIR's app code is imported; the Session is a stand-in (no photo yet, no 
     HEAD_HYSTERESIS px wider; widths wavering inside that band change nothing, a width going back and forth across one
     of its edges changes it once;
   - opened from the panel (master, on_close), back to the panel and reopened (reopen): zoomed again, the top bar still.
-Exit status 1 at the first check that fails; 0 with "skipped" when there is no display to open a window on.
+One Tk for the whole test, the app's own window's (macOS's Tk does not take a second one, nor a new one after it): the
+other windows are on it, as the panel's are. Exit status 1 at the first check that fails; 0 with "skipped" when there is
+no display to open a window on.
 
   ci_window.py DIR
 """
+import faulthandler
 import os
 import sys
 import threading
@@ -48,13 +51,10 @@ def session():
 
 
 def main(app_dir):
+    faulthandler.enable()  # a crash inside Tk: where it was, on stderr
+    sys.stdout.reconfigure(line_buffering=True)
     sys.path.insert(0, str(Path(app_dir) / "airemove"))
     import tkinter as tk
-    try:
-        tk.Tk().destroy()
-    except tk.TclError as e:
-        print(f"skipped: no display to open a window on ({e})")
-        return
     import ui
 
     def watchdog():
@@ -96,12 +96,20 @@ def main(app_dir):
 
     # --- as the app opens it
     t0 = time.time()
-    app = ui.App(session(), types.SimpleNamespace(variants=3))
+    try:
+        app = ui.App(session(), types.SimpleNamespace(variants=3))
+    except tk.TclError as e:
+        if "display" not in str(e):
+            raise
+        print(f"skipped: no display to open a window on ({e})")
+        return
     r = app.root
     opened = time.time() - t0
+    sw = r.winfo_screenwidth()
+    print(f"  Tk {r.tk.call('info', 'patchlevel')} ({r.tk.call('tk', 'windowingsystem')}), screen {sw} x "
+          f"{r.winfo_screenheight()}, scale {app.k:.2f}")
     app.on_found(None)  # the photo's name in the top bar, as when the photo is found
     expect(quiet(r), f"opened in {opened:.1f} s, the top bar then still (fit_header {calls[0]} times)")
-    sw = r.winfo_screenwidth()
     expect(r.winfo_width() >= 0.85 * sw, f"the window takes the screen: {r.winfo_width()} px of {sw} "
                                          f"({r.wm_geometry()}, {r.state()})")
     expect(not app.head_l.pack_propagate() and app.head_l.winfo_height() > 1,
@@ -124,12 +132,12 @@ def main(app_dir):
         "" if a[:1] == ("-zoomed",) else wm["wm_attributes"](self, *a, **kw))
     try:
         n, f = calls[0], flips[0]
-        sized = ui.App(session(), types.SimpleNamespace(variants=3))
+        sized = ui.App(session(), types.SimpleNamespace(variants=3), master=r)
     finally:
         for name, fn in wm.items():
             setattr(tk.Wm, name, fn)
-    expect(quiet(sized.root, most=10), f"sized by its content: the top bar settles (fit_header {calls[0] - n} times, "
-                                       f"{flips[0] - f} changes), the window {sized.root.winfo_width()} px")
+    expect(quiet(r, most=10), f"sized by its content: the top bar settles (fit_header {calls[0] - n} times, "
+                              f"{flips[0] - f} changes), the window {sized.root.winfo_width()} px")
     sized.destroy()
 
     # --- the hysteresis, on widths given to fit_header (the window's own size does not matter here)
@@ -168,29 +176,26 @@ def main(app_dir):
             expect(flips[0] - f <= 1, f"{name}: back and forth across {edge} px by 1 px: {flips[0] - f} change")
         del app.head.winfo_width
     app.title_text = "DSC_0042.NEF"
-    app.destroy()
 
-    # --- opened from the panel, back to it, reopened
+    # --- opened from the panel (the first window's Tk stands for the panel's), back to it, reopened
     begin("the window from the panel")
-    panel = tk.Tk()
-    panel.withdraw()
     closed = []
     start = {"removal": None, "selection": None, "model": "lama", "prompts": {}, "variants": 3}
     t0, n = time.time(), calls[0]
-    app = ui.App(session(), types.SimpleNamespace(variants=3), master=panel, on_close=closed.append, start=dict(start))
-    r = app.root
-    expect(quiet(panel), f"from the panel: opened in {time.time() - t0:.1f} s, the top bar then still "
-                         f"(fit_header {calls[0] - n} times), the window {r.winfo_width()} px of {sw}")
-    app.quit()
-    quiet(panel, 0.3)
-    expect(closed == [app] and r.state() == "withdrawn", "back to the panel: the window kept, hidden")
+    win = ui.App(session(), types.SimpleNamespace(variants=3), master=r, on_close=closed.append, start=dict(start))
+    w = win.root
+    expect(quiet(r), f"from the panel: opened in {time.time() - t0:.1f} s, the top bar then still "
+                     f"(fit_header {calls[0] - n} times), the window {w.winfo_width()} px of {sw}")
+    win.quit()
+    quiet(r, 0.3)
+    expect(closed == [win] and w.state() == "withdrawn", "back to the panel: the window kept, hidden")
     t0, n = time.time(), calls[0]
-    app.reopen(dict(start))
-    expect(quiet(panel), f"reopened in {time.time() - t0:.1f} s, the top bar then still (fit_header {calls[0] - n} "
-                         f"times), the window {r.winfo_width()} px of {sw} ({r.state()})")
-    expect(r.winfo_width() >= 0.85 * sw, "reopened, it takes the screen again")
+    win.reopen(dict(start))
+    expect(quiet(r), f"reopened in {time.time() - t0:.1f} s, the top bar then still (fit_header {calls[0] - n} "
+                     f"times), the window {w.winfo_width()} px of {sw} ({w.state()})")
+    expect(w.winfo_width() >= 0.85 * sw, "reopened, it takes the screen again")
+    win.destroy()
     app.destroy()
-    panel.destroy()
     expect(not errors, f"no error in the window's callbacks ({len(errors)})")
     print("window: all checks passed")
 
