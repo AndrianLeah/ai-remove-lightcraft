@@ -588,13 +588,39 @@ def link_or_copy(src, dst):
     return "copy"
 
 
+NO_CUDA_CODE = "has no code for the"  # in gpu_summary's description: what the installer looks for
+
+
+def cuda_has_code(capability, arch_list):
+    """Whether a CUDA build of PyTorch can run on an NVIDIA card of this compute capability ((6, 1) for a GTX 1060).
+    arch_list (torch.cuda.get_arch_list()): the architectures it carries code for, "sm_86" compiled — it runs on that
+    generation (same major) at that version or later — or "compute_90", which the driver compiles for any later card.
+    Since 2.8 the CUDA 12.8 build has none for cards before Turing (GTX 10 series and older): they failed at their
+    first use with "no kernel image is available for execution on the device" (#58). An empty list: cannot tell."""
+    major, minor = capability
+    cap = major * 10 + minor
+    found = False
+    for a in arch_list:
+        kind, __, v = a.partition("_")
+        if not v.isdigit():
+            continue
+        found, v = True, int(v)
+        if (kind == "sm" and v // 10 == major and v <= cap) or (kind == "compute" and v <= cap):
+            return True
+    return not found
+
+
 def gpu_summary():
-    """torch's view of the accelerator: (device, description). Imports torch (only call it in the app's venv)."""
+    """torch's view of the accelerator: (device, description). Imports torch (only call it in the app's venv). An
+    NVIDIA card its PyTorch has no code for (cuda_has_code) is left out: the processor, which works."""
     import torch
     if torch.cuda.is_available():
         name = torch.cuda.get_device_name(0)
         vram = torch.cuda.get_device_properties(0).total_memory / 2 ** 30
         kind = "ROCm" if getattr(torch.version, "hip", None) else "CUDA"
+        if kind == "CUDA" and not cuda_has_code(torch.cuda.get_device_capability(0), torch.cuda.get_arch_list()):
+            return "cpu", (f"processor ({os.cpu_count()} cores): this PyTorch (CUDA {torch.version.cuda}) "
+                           f"{NO_CUDA_CODE} {name}, run the installer again")
         return "cuda", f"{name} ({kind}, {vram:.0f} GB)"
     if getattr(torch, "xpu", None) is not None and torch.xpu.is_available():
         return "xpu", torch.xpu.get_device_name(0)

@@ -214,9 +214,10 @@ to `birefnet.disabled`): those masks then use the app's own quick analysis.
 ## Requirements
 
 - **LightCraft** or **Chromaforge** installed, or both (see [LightCraft and Chromaforge](#lightcraft-and-chromaforge)).
-- **Windows 10/11** with NVIDIA, AMD Radeon RX 7000/9000 or Intel Arc graphics. Without a GPU only LaMa is practical.
+- **Windows 10/11** with NVIDIA (GeForce GTX 750 or later), AMD Radeon RX 7000/9000 or Intel Arc graphics. Without a
+  GPU only LaMa is practical.
 - **macOS 12+** on Apple Silicon (M1 or later; 16 GB of memory recommended). Intel Macs are not supported.
-- **Linux x86-64** with NVIDIA, or AMD with ROCm.
+- **Linux x86-64** with NVIDIA (GTX 750 or later), or AMD with ROCm.
 - **Disk:** 5 to 30 GB, depending on the models.
 - **Internet:** while installing. Afterwards only a check for a new AI Remove on GitHub, at most once a day: it
   sends nothing about you or your photos, and `"update_check": false` in `work/settings.json` turns it off.

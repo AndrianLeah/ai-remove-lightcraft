@@ -167,6 +167,8 @@ def check(d):
     r = run([sys.executable, ROOT / "tools" / "ci_editor_lock.py"])
     expect(r.returncode == 0, f"the installer with an app that locks its external editor: exit status 0 (it was "
                               f"{r.returncode})")
+    r = run([sys.executable, ROOT / "tools" / "ci_cuda_build.py"])
+    expect(r.returncode == 0, f"PyTorch's CUDA build for the NVIDIA card (#58): exit status 0 (it was {r.returncode})")
     cf = (rep.get("apps") or {}).get("chromaforge") or {}
     expect(cf.get("variable") == "CHROMAFORGE_CONTROL_PORT" and "cli" in cf and "program" in cf,
            f"--check: Chromaforge's current names (its variable {cf.get('variable')}, program {cf.get('program')})")
