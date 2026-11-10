@@ -171,9 +171,9 @@ delle impostazioni (per esempio in `birefnet.disabled`): quelle maschere userann
 | | |
 |---|---|
 | **LightCraft** o **Chromaforge** | installato, o tutti e due (vedi [LightCraft e Chromaforge](#lightcraft-e-chromaforge)) |
-| **Windows 10/11** | scheda NVIDIA, AMD Radeon RX 7000/9000 o Intel Arc; senza GPU funziona solo LaMa |
+| **Windows 10/11** | scheda NVIDIA (GeForce GTX 750 o successive), AMD Radeon RX 7000/9000 o Intel Arc; senza GPU funziona solo LaMa |
 | **macOS 12+** | Mac con chip Apple (M1 o successivi); meglio con almeno 16 GB di memoria |
-| **Linux x86-64** | scheda NVIDIA, oppure AMD con ROCm |
+| **Linux x86-64** | scheda NVIDIA (GTX 750 o successive), oppure AMD con ROCm |
 | **Spazio su disco** | da 5 GB (solo LaMa) a circa 30 GB (tutti i modelli) |
 | **Internet** | durante l'installazione; poi solo un controllo di nuove versioni su GitHub, al massimo una volta al giorno (non invia nulla su di te o sulle foto; si spegne con `"update_check": false` in `work/settings.json`) |
 

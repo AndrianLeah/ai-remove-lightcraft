@@ -64,6 +64,15 @@ AMD_WIN_OK = re.compile(r"RX\s*[79]\d{3}|PRO\s*W7\d{3}|AI\s*PRO|Radeon\s*(8060S|
 TORCH_FLAVOURS = {
     "cuda": ("NVIDIA (CUDA)", 4.5), "rocm": ("AMD (ROCm, Linux)", 9.0), "rocm-win": (N_("AMD (ROCm for Windows)"), 6.0),
     "xpu": ("Intel Arc (XPU)", 3.5), "mps": ("Apple Silicon (Metal)", 1.0), "cpu": (N_("processor only"), 1.0)}
+# PyTorch's CUDA builds (#58): since 2.8 the one for CUDA 12.8 has no code for NVIDIA cards before Turing (GTX 10
+# series and older), which then fail at their first use with "no kernel image is available for execution on the
+# device". Those take the CUDA 12.6 build, which still has them (not RTX 50 cards); every other card the 12.8 one.
+CUDA_BUILDS = {"cu128": "12.8", "cu126": "12.6"}  # build -> torch.version.cuda
+CUDA_TURING = 7.5  # the compute capability from which a card takes the CUDA 12.8 build (RTX 20, GTX 16 and later)
+# cards before Turing by name, when the driver is too old to give the capability: GeForce GTX 750-1080 (laptops' M
+# too), GeForce 830M-940MX, GTX / TITAN X, Xp and V, MX110-350, Quadro K / M / P / GV, Tesla K / M / P / V
+OLD_NVIDIA = re.compile(r"GTX\s*(?:[5-9]\d\d|10\d0)M?\b|GeForce\s*[89][1-4]0MX?\b|GTX\s*TITAN|TITAN\s*(?:Xp?|V)\b|"
+                        r"\bMX\s*[1-3]\d0\b|Quadro\s*(?:[KMP]\d|GV)|Tesla\s*[KMPV]\d", re.I)
 MODELS = mf.MODELS  # what each model is for, its download and licence, its files (airemove/model_files.py)
 GPU_ONLY = ("flux", "osor", "qwen")  # not offered without a GPU (they fail on the processor)
 # models AI Remove had and no longer uses: their folders in the install's own models/ are removed at the next run (a
@@ -267,6 +276,26 @@ def choose_torch(gpus):
     return "cpu", None
 
 
+def nvidia_capability():
+    """The compute capability of the first NVIDIA card (6.1 for a GTX 1060, 12.0 for an RTX 5070), from nvidia-smi;
+    None if it cannot say (no nvidia-smi, or a driver older than 510)."""
+    if not shutil.which("nvidia-smi"):
+        return None
+    for line in output(["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"]).splitlines():
+        try:
+            return float(line.strip())
+        except ValueError:
+            continue
+    return None
+
+
+def cuda_build(gpu):
+    """PyTorch's CUDA build for this NVIDIA card (CUDA_BUILDS): "cu126" for a card before Turing, else "cu128"."""
+    cap = nvidia_capability()
+    old = cap < CUDA_TURING if cap is not None else bool(gpu and OLD_NVIDIA.search(gpu[1]))
+    return "cu126" if old else "cu128"
+
+
 def qwen_fits(flavour, gpu):
     """Qwen-Image runs on this GPU: NVIDIA or AMD, 16 GB or more (QWEN_VRAM)."""
     return flavour in QWEN_TORCH and ((gpu[2] if gpu else None) or 0) >= QWEN_VRAM
@@ -346,7 +375,9 @@ def venv_python(d):
     return d / "venv" / ("Scripts/python.exe" if system.system() == "windows" else "bin/python")
 
 
-def make_venv(d, flavour, reinstall=False):
+def make_venv(d, flavour, reinstall=False, build=None, retry=True):
+    """The venv with PyTorch for `flavour` (and for an NVIDIA card its CUDA build, cuda_build) and the packages; returns
+    the device PyTorch sees. retry: if that CUDA build has no code for the card after all, the other one, once."""
     uv, env = uv_exe(), uv_env(d)
     py = venv_python(d)
     if py.exists() and not reinstall:
@@ -357,25 +388,36 @@ def make_venv(d, flavour, reinstall=False):
         run([uv, "venv", "--python", PY_VERSION, "--seed", str(d / "venv")], env=dict(env, UV_VENV_CLEAR="1"))
     pip = [uv, "pip", "install", "--python", str(py)]
     have_torch = run([py, "-c", "import torch, sys; sys.exit(0)"], check=False, quiet=True)[0] == 0
-    if not have_torch or reinstall:
+    # an update keeps the PyTorch already there, unless it is the CUDA build for another card (#58: a GTX 10 card had
+    # the 12.8 one, made before the installer told them apart); replaced, also when the version is the same
+    replace = []
+    if have_torch and not reinstall and flavour == "cuda" and build:
+        txt = run([py, "-c", "import torch; print(torch.version.cuda or '')"], check=False, quiet=True)[1]
+        have = (txt.strip().splitlines() or [""])[-1].strip()
+        if have and have != CUDA_BUILDS[build]:
+            out.write("  " + _("PyTorch is the build for CUDA {have}; this card needs the one for CUDA {need}: "
+                               "replacing it", have=have, need=CUDA_BUILDS[build]))
+            replace = ["--reinstall-package", "torch", "--reinstall-package", "torchvision"]
+    if not have_torch or reinstall or replace:
         out.write("  " + _("PyTorch for {build} (~{gb} GB)…", build=_(TORCH_FLAVOURS[flavour][0]),
                                 gb=f"{TORCH_FLAVOURS[flavour][1]:.0f}"))
         if flavour == "rocm-win":
             run(pip + [AMD_WIN + f for f in AMD_WIN_FILES], env=env)
         else:
-            index = {"cuda": "https://download.pytorch.org/whl/cu128", "rocm": "https://download.pytorch.org/whl/rocm6.4",
-                     "xpu": "https://download.pytorch.org/whl/xpu", "cpu": "https://download.pytorch.org/whl/cpu",
-                     "mps": None}[flavour]
-            if flavour == "cuda" and system.system() == "linux":
-                index = None  # PyPI's Linux torch already carries CUDA
+            index = {"cuda": f"https://download.pytorch.org/whl/{build or 'cu128'}",
+                     "rocm": "https://download.pytorch.org/whl/rocm6.4", "xpu": "https://download.pytorch.org/whl/xpu",
+                     "cpu": "https://download.pytorch.org/whl/cpu", "mps": None}[flavour]
+            if flavour == "cuda" and system.system() == "linux" and build != "cu126":
+                index = None  # PyPI's Linux torch already carries CUDA (12.8)
             # uv asks an extra index before the default one (PyPI), and takes a package from the first index that has
             # it: PyTorch's index must be the extra one, else PyPI's torch wins (CUDA on Linux, processor-only on
             # Windows) whatever the build asked for
             idx = ["--extra-index-url", index] if index else []
-            code, __ = run(pip + idx + [f"torch=={TORCH}", f"torchvision=={TORCHVISION}"], env=env, check=False)
+            code, __ = run(pip + replace + idx + [f"torch=={TORCH}", f"torchvision=={TORCHVISION}"], env=env,
+                           check=False)
             if code:
                 out.write("  " + _("the pinned version is not available here: trying the newest"))
-                run(pip + idx + ["torch", "torchvision"], env=env)
+                run(pip + replace + idx + ["torch", "torchvision"], env=env)
     code, __ = run(pip + PACKAGES, env=env, check=False)
     if code:
         out.write("  " + _("some pinned versions are missing for this system: installing the newest"))
@@ -388,6 +430,19 @@ def make_venv(d, flavour, reinstall=False):
     out.write("  " + _("check: {result}", result=dev[7:] if dev else txt[-300:]))
     if code:
         raise Stop(_("the Python environment does not work:") + "\n" + txt[-800:])
+    if system.NO_GPU_CODE in dev:  # PyTorch sees the card but has no code for it (system.gpu_summary)
+        if flavour == "cuda" and build and retry:  # the card was not told apart rightly (cuda_build): the other build
+            other = "cu128" if build == "cu126" else "cu126"
+            out.write("  " + _("PyTorch's build for CUDA {have} has no code for this card: trying the one for CUDA "
+                               "{need}", have=CUDA_BUILDS[build], need=CUDA_BUILDS[other]))
+            return make_venv(d, flavour, False, other, retry=False)
+        out.write("  ! " + _("PyTorch has no code for this graphics card: AI Remove will work on the processor, "
+                               "slowly"))
+        if flavour == "rocm":  # PyTorch's ROCm builds for Linux leave out many Radeon cards: some pass for another
+            out.write("    " + _("Some Radeon RX 6000 cards and Radeon 700M graphics work as a supported card: set "
+                                 "HSA_OVERRIDE_GFX_VERSION to 10.3.0 (RX 6000) or 11.0.0 (700M) in the environment "
+                                 "AI Remove starts from"))
+        return "cpu"
     if flavour != "cpu" and " cpu " in f" {dev} ":
         out.write("  ! " + _("PyTorch does not see the graphics card: check its drivers (AI Remove will work, but "
                                "slowly)"))
@@ -1225,7 +1280,11 @@ def main():
     for g in gpus:
         out.write("  " + _("graphics: {name}", name=g[1]) + (f" ({num(g[2])} GB)" if g[2] else ""))
     flavour, gpu = choose_torch(gpus) if args.torch == "auto" else (args.torch, gpus[0] if gpus else None)
-    out.write(f"  PyTorch: {_(TORCH_FLAVOURS[flavour][0])}")
+    build = cuda_build(gpu) if flavour == "cuda" else None
+    out.write(f"  PyTorch: {_(TORCH_FLAVOURS[flavour][0])}" + (f", CUDA {CUDA_BUILDS[build]}" if build else ""))
+    if build == "cu126":
+        out.write("  " + _("an NVIDIA card older than the RTX 20 series: PyTorch's build for CUDA 12.6, the one that "
+                           "still supports it"))
     if flavour == "cpu":
         out.write("  ! " + _("no usable GPU: LaMa and the selection will work; SDXL would be very slow"))
     for h in system.HOSTS:
@@ -1342,7 +1401,7 @@ def main():
     (d / "work").mkdir(exist_ok=True)
 
     out.title(3, _("Python environment and PyTorch (the longest step)"))
-    device = make_venv(d, flavour, args.reinstall)
+    device = make_venv(d, flavour, args.reinstall, build)
     cfg.update({"torch": flavour, "device": device, "gpu": gpu[1] if gpu else None})
     write_cfg(d, cfg)
 
