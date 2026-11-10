@@ -588,7 +588,7 @@ def link_or_copy(src, dst):
     return "copy"
 
 
-NO_CUDA_CODE = "has no code for the"  # in gpu_summary's description: what the installer looks for
+NO_GPU_CODE = "has no code for the"  # in gpu_summary's description: what the installer looks for
 
 
 def cuda_has_code(capability, arch_list):
@@ -610,17 +610,36 @@ def cuda_has_code(capability, arch_list):
     return not found
 
 
+def rocm_has_code(gfx, arch_list, override=None):
+    """Whether a ROCm build of PyTorch can run on an AMD card of this architecture ("gfx1101" for an RX 7800 XT, maybe
+    with features: "gfx90a:sramecc+:xnack-"). arch_list (torch.cuda.get_arch_list()): the architectures it carries
+    code for, each one only: ROCm has nothing like CUDA's PTX. PyTorch's ROCm builds for Linux leave out many Radeon
+    cards (RX 6600 / 6700, RX 5000, integrated graphics) — the same failure as #58. override: HSA_OVERRIDE_GFX_VERSION,
+    with which such a card passes for a supported one: the user's choice, trusted. No name or an empty list: cannot
+    tell."""
+    gfx = (gfx or "").split(":")[0]
+    archs = {a.split(":")[0] for a in arch_list if a.startswith("gfx")}
+    return bool(override) or not gfx or not archs or gfx in archs
+
+
 def gpu_summary():
-    """torch's view of the accelerator: (device, description). Imports torch (only call it in the app's venv). An
-    NVIDIA card its PyTorch has no code for (cuda_has_code) is left out: the processor, which works."""
+    """torch's view of the accelerator: (device, description). Imports torch (only call it in the app's venv). A card
+    its PyTorch has no code for (cuda_has_code, rocm_has_code) is left out: the processor, which works."""
     import torch
     if torch.cuda.is_available():
         name = torch.cuda.get_device_name(0)
-        vram = torch.cuda.get_device_properties(0).total_memory / 2 ** 30
-        kind = "ROCm" if getattr(torch.version, "hip", None) else "CUDA"
-        if kind == "CUDA" and not cuda_has_code(torch.cuda.get_device_capability(0), torch.cuda.get_arch_list()):
-            return "cpu", (f"processor ({os.cpu_count()} cores): this PyTorch (CUDA {torch.version.cuda}) "
-                           f"{NO_CUDA_CODE} {name}, run the installer again")
+        props = torch.cuda.get_device_properties(0)
+        vram = props.total_memory / 2 ** 30
+        hip = getattr(torch.version, "hip", None)
+        kind = "ROCm" if hip else "CUDA"
+        cores = f"processor ({os.cpu_count()} cores)"
+        if hip:
+            gfx = getattr(props, "gcnArchName", "")
+            if not rocm_has_code(gfx, torch.cuda.get_arch_list(), os.environ.get("HSA_OVERRIDE_GFX_VERSION")):
+                return "cpu", f"{cores}: this PyTorch (ROCm {hip.split('-')[0]}) {NO_GPU_CODE} {name} ({gfx})"
+        elif not cuda_has_code(torch.cuda.get_device_capability(0), torch.cuda.get_arch_list()):
+            return "cpu", (f"{cores}: this PyTorch (CUDA {torch.version.cuda}) {NO_GPU_CODE} {name}, run the "
+                           f"installer again")
         return "cuda", f"{name} ({kind}, {vram:.0f} GB)"
     if getattr(torch, "xpu", None) is not None and torch.xpu.is_available():
         return "xpu", torch.xpu.get_device_name(0)

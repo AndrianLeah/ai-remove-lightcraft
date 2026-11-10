@@ -430,14 +430,18 @@ def make_venv(d, flavour, reinstall=False, build=None, retry=True):
     out.write("  " + _("check: {result}", result=dev[7:] if dev else txt[-300:]))
     if code:
         raise Stop(_("the Python environment does not work:") + "\n" + txt[-800:])
-    if flavour == "cuda" and build and system.NO_CUDA_CODE in dev:  # the card was not told apart rightly (cuda_build)
-        other = "cu128" if build == "cu126" else "cu126"
-        if retry:
+    if system.NO_GPU_CODE in dev:  # PyTorch sees the card but has no code for it (system.gpu_summary)
+        if flavour == "cuda" and build and retry:  # the card was not told apart rightly (cuda_build): the other build
+            other = "cu128" if build == "cu126" else "cu126"
             out.write("  " + _("PyTorch's build for CUDA {have} has no code for this card: trying the one for CUDA "
                                "{need}", have=CUDA_BUILDS[build], need=CUDA_BUILDS[other]))
             return make_venv(d, flavour, False, other, retry=False)
-        out.write("  ! " + _("no PyTorch build has code for this NVIDIA card: AI Remove will work on the processor, "
+        out.write("  ! " + _("PyTorch has no code for this graphics card: AI Remove will work on the processor, "
                                "slowly"))
+        if flavour == "rocm":  # PyTorch's ROCm builds for Linux leave out many Radeon cards: some pass for another
+            out.write("    " + _("Some Radeon RX 6000 cards and Radeon 700M graphics work as a supported card: set "
+                                 "HSA_OVERRIDE_GFX_VERSION to 10.3.0 (RX 6000) or 11.0.0 (700M) in the environment "
+                                 "AI Remove starts from"))
         return "cpu"
     if flavour != "cpu" and " cpu " in f" {dev} ":
         out.write("  ! " + _("PyTorch does not see the graphics card: check its drivers (AI Remove will work, but "
