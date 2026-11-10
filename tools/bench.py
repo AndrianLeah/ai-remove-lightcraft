@@ -10,7 +10,8 @@ in the DNG.
   bench.py run BENCH --name NAME       the cases made again with this checkout's code and an install's models
            [--models lama,rorem:2,flux:2,qwen:1]   models and variants per model (LaMa makes one)
            [--cases GLOB,...] [--seed 1] [--prompt TEXT] [--install DIR]
-           [--env KEY=VALUE ...]       a switch for an experiment, e.g. AIREMOVE_PREFILL_START=0.8
+           [--env KEY=VALUE ...]       environment variables for the run, read by the code under test (an
+                                       experiment's switches), recorded in run.json
   bench.py sheet BENCH [--runs A,B]    BENCH/sheet.html: per case the area before, the variant kept then and every
                                        run's variants; click one for 100 %, the arrow keys flip through them at the
                                        same spot
@@ -19,7 +20,16 @@ Run it with an install's Python, which has the models' libraries: <install>/venv
 <install>/venv/bin/python. It imports AI Remove from this checkout, so a run measures the code as it is here, with the
 install's models (--install, default the install that Python belongs to) and AI Remove's default settings. RAWs are
 read through lightcraft-cli (or Chromaforge's), once per photo: BENCH/cache keeps that export, so later runs start
-from the same data even after LightCraft is updated.
+from the same data even after LightCraft is updated. BENCH holds copies of your photos: keep it out of the
+repository.
+
+A case is a folder in BENCH/cases: selection.png, white where to remove, in the frame of the photo's base.png (the
+whole photo as developed, uncropped, long side 2400: BENCH/cache/<photo>/base.png); and case.json: {"photo": its
+file in BENCH/photos, "id": the removal's number (it seeds the variants), "kind": "real" or "synthetic", "hints": []}.
+Add your own the same way. A synthetic one covers only background: there the photo is the truth.
+Qwen-Image edits the area with its pixels still there rather than filling a blank hole: on a synthetic case it
+leaves the background as it was, or removes what it names there (a window, a tree), so its tone there does not
+compare with the other models'.
 
 Each variant is shown as it is written: the fill put into the sensor data with its noise (RawDNG.fill_region),
 rendered again, in base.png's look and upright. A run is resumable (variants made already are kept) and stops by
