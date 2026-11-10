@@ -10,6 +10,7 @@ in the DNG.
   bench.py run BENCH --name NAME       the cases made again with this checkout's code and an install's models
            [--models lama,rorem:2,flux:2,qwen:1]   models and variants per model (LaMa makes one)
            [--cases GLOB,...] [--seed 1] [--prompt TEXT] [--install DIR]
+           [--env KEY=VALUE ...]       a switch for an experiment, e.g. AIREMOVE_PREFILL_START=0.8
   bench.py sheet BENCH [--runs A,B]    BENCH/sheet.html: per case the area before, the variant kept then and every
                                        run's variants; click one for 100 %, the arrow keys flip through them at the
                                        same spot
@@ -373,6 +374,8 @@ def run(args):
     out = bench / "runs" / args.name
     out.mkdir(parents=True, exist_ok=True)
     install = find_install(args.install)
+    env = dict(e.split("=", 1) for e in args.env or [])  # the experiment's switches (AIREMOVE_PREFILL_START=0.8)
+    os.environ.update(env)
     A, cfg = load_app(install, out / "log.txt")
     models = parse_models(args.models)
     for m, __ in models:
@@ -383,12 +386,13 @@ def run(args):
             sys.exit(f"{m} is not installed in {install}")
     rj = out / "run.json"
     state = read_json(rj) or {"name": args.name, "started": time.strftime("%Y-%m-%d %H:%M"), "results": {}}
-    if state.get("seed", args.seed) != args.seed or state.get("prompt", args.prompt) != args.prompt:
-        sys.exit(f"run {args.name} was made with seed {state.get('seed')} and prompt {state.get('prompt')!r}: "
-                 "use another --name")
+    if (state.get("seed", args.seed), state.get("prompt", args.prompt), state.get("env", env)) != (
+            args.seed, args.prompt, env):
+        sys.exit(f"run {args.name} was made with seed {state.get('seed')}, prompt {state.get('prompt')!r}, "
+                 f"env {state.get('env')}: use another --name")
     state.update({"code": git_state(), "app_version": A.system.VERSION, "install": str(install),
                   "install_version": cfg.get("version"), "gpu": cfg.get("gpu"), "device": cfg.get("device"),
-                  "models": args.models, "seed": args.seed, "prompt": args.prompt})
+                  "models": args.models, "seed": args.seed, "prompt": args.prompt, "env": env})
     write_json(rj, state)
     cases = selected_cases(bench, [p for p in (args.cases or "").split(",") if p])
     by_photo = {}
@@ -535,6 +539,7 @@ def sheet(args):
         rows.append((d.name, what, tiles))
     page = SHEET.replace("{{runs}}", html.escape(", ".join(
         f"{rd.name} ({ri.get('code')}, {ri.get('models')}, seed {ri.get('seed')}"
+        + "".join(f", {k}={v}" for k, v in (ri.get("env") or {}).items())
         + (f", prompt {ri.get('prompt')!r}" if ri.get("prompt") else "") + ")" for rd, ri in runs)))
     body = []
     for name, what, tiles in rows:
@@ -616,6 +621,8 @@ def main():
     r.add_argument("--cases", help="comma-separated globs on the cases' names, e.g. IMG_30*,*-s")
     r.add_argument("--seed", type=int, default=1)
     r.add_argument("--prompt", default="")
+    r.add_argument("--env", action="append", metavar="KEY=VALUE",
+                   help="an environment variable for the run (an experiment's switch), recorded in run.json")
     r.add_argument("--install")
     sh = sub.add_parser("sheet")
     sh.add_argument("bench")
