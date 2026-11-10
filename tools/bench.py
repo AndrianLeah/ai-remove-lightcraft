@@ -87,7 +87,7 @@ def find_install(arg):
     for d in exe.parents:  # <install>/venv/Scripts/python.exe
         if (d / "airemove.json").exists() and (d / "venv").is_dir():
             return d
-    return Path.home() / "LightCraftAI"
+    sys.exit("run it with an AI Remove install's Python (<install>/venv), or pass --install DIR")
 
 
 def load_app(install, log_file):
