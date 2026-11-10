@@ -2238,7 +2238,12 @@ class Session:
             im = blend.seamless(raw_fill, r.src, r.reg_mask, r.membrane, seed=seed, texture=texture)
         else:
             im = blend.seamless(raw_fill, r.src, hole, seed=seed, texture=texture)
-        if model in SDXL_LIKE and r.flat is not None:
+        # SDXL only: its colours drift (a blue sky comes out grey) and seamless() over-corrects the held sky, which
+        # match_flat puts right. RORem keeps the photo's colours: there match_flat only pulled the region towards
+        # the colours spread in from the edge, and its border showed as a ghost of the selection's shape (a bin on a
+        # wall, a pole's band in the sky, curves in a doorway: 6 of 22 removals on the bench, gone without it; a held
+        # blue sky stays within 3 levels of the photo's)
+        if model == "sdxl" and r.flat is not None:
             im = blend.match_flat(im, r.flat[1], r.flat[0])
         r.scale[label] = self.enlarged(r, model, plan)
         self.add_candidate(r, label, im)
