@@ -13,7 +13,7 @@ How to use:
      installed, not open), a picture as it is; the result is written next to it.
   2. The AI Remove window (ui.py) shows the whole photo: select what to remove (SAM 3 clicks on the GPU, refine
      with Alt/Shift+click, brush/eraser). Masks named "Rimuovi..." made in LightCraft start the selection.
-  3. "Rimuovi selezione" makes a removal (like a Lightroom Generative Remove spot) with its own area and variants
+  3. "Rimuovi selezione" makes a removal with its own area and variants
      (LaMa + SDXL or FLUX; optional prompt IN ENGLISH). Each removal can get more variants, a different choice or
      be deleted without touching the others; fills are blended seamlessly (blend.py).
      The objects' shadows and reflections: "Includi l'ombra" adds the shadows SAM 3 finds touching the selection
@@ -1422,8 +1422,8 @@ LABEL_MODELS = {v: k for k, v in MODELS.items()}  # a variant label's first word
 
 # ------------------------------------------------------------------------------------------------ removals
 class Removal:
-    """One removal, like a Lightroom Generative Remove spot: its own area of the photo, its own variants and the
-    chosen one. Removals are applied in order; each sees the chosen fills of the earlier ones."""
+    """One removal: its own area of the photo, its own variants and the chosen one. Removals are applied in order;
+    each sees the chosen fills of the earlier ones."""
 
     def __init__(self, rid, mask_e):
         self.id, self.mask_e = rid, mask_e

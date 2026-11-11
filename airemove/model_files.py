@@ -25,8 +25,8 @@ TURBO_WEIGHTS = "diffusion_pytorch_model.safetensors"  # alimama's FLUX.1-Turbo-
 OSOR_WEIGHTS = "osor-fluxfill/weights/fluxfill_phase2.pth"
 SAM3_WEIGHTS = "model.safetensors"
 # "Remove reflections": how much of the reflection's light DAI found is taken away — a removal's strength, its slider
-# from 0 to REFLECTION_MAX. DAI takes away more than Lightroom: 1.4 times as much on a statue behind a shop window
-# (Lightroom's own result, from its .acr sidecar); at 75 % it came closest, there and over the whole photo
+# from 0 to REFLECTION_MAX. At 100 % DAI takes away more than a reference removal of the same reflection: 1.4 times
+# as much on a statue behind a shop window; at 75 % it came closest, there and over the whole photo
 REFLECTION_STRENGTH, REFLECTION_MAX = 0.75, 1.5
 
 

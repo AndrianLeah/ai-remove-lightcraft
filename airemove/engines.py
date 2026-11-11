@@ -1035,8 +1035,8 @@ class Qwen:
 DAI_SIZE = 1024  # the long side DAI sees an area at
 DAI_PROMPT = "remove glass reflection"  # the prompt it was trained with (its pipeline's own)
 # The light DAI takes away is subtracted as DAI found it, not blurred: blurred by 0.6 % of the area's long side it was
-# a little closer to Lightroom's on a statue behind a shop window (error 0.20 of its size instead of 0.21), but a sharp,
-# bright reflection (trees in a museum's window, the sky in a puddle) became black blotches with dark halos.
+# a little closer to the reference removal on a statue behind a shop window (error 0.20 of its size, not 0.21), but a
+# sharp, bright reflection (trees in a museum's window, the sky in a puddle) became black blotches with dark halos.
 
 
 def _resized(a, size, how):

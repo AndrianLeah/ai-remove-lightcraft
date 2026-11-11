@@ -12,11 +12,11 @@ Elsewhere it is an ordinary window beside it. Taller than the room the app leave
 Everything else goes through the app's control channel, as AI Remove's window does:
 - the app's active photo and its masks are watched; the mask selected in the app (or chosen here) is the selection
   (a SAM 3 Object or Describe mask is read from the develop settings, a brush or gradient one rendered:
-  airemove.extract, airemove.mask_selection); Reflections takes the whole photo, as Lightroom's Remove Reflections;
+  airemove.extract, airemove.mask_selection); Reflections takes the whole photo;
 - the window's tabs (ui.TABS), model menu (ModelPicker) and "What it does", the text field only for a model that reads
   one, the variants − N +, the action ("＋ N more for #id" once the selection has variants), the progress bar with
-  Stop; the variants as the window's tiles (right-click: delete one), a reflection's strength under them (Lightroom's
-  Amount, also afterwards), the photo's removals as the window's list;
+  Stop; the variants as the window's tiles (right-click: delete one), a reflection's strength under them (also
+  afterwards), the photo's removals as the window's list;
 - one Session per photo, as in the window, with one removal per selection (mask, tab), kept until the panel is
   closed (and found again in the photo's project, by its mask's name, once saved). Every removal with a chosen
   variant shows on the photo in the app, as its Layout Image (a PNG it draws over the photo, fitted to it: only while
@@ -310,7 +310,7 @@ class Panel:
                                   justify="left", wraplength=wrap)
         self.whole_box = tk.Frame(body, bg=CARD)
         self.head(self.whole_box, _("Selection"))
-        tk.Label(self.whole_box, text=_("Whole photo  ·  as Lightroom's Remove Reflections"), font=self.f_small, fg=FG,
+        tk.Label(self.whole_box, text=_("Whole photo"), font=self.f_small, fg=FG,
                  bg=SIDE, anchor="w", padx=int(8 * k), pady=int(5 * k)).pack(fill="x")
         # 3 · the model: the window's menu where there is a choice (Remove), else its one model on a line; what it does
         self.model_box = tk.Frame(body, bg=CARD)
@@ -1227,7 +1227,7 @@ class Panel:
             self.sync_cur()
 
     def on_strength(self, v):
-        """The strength moving (Lightroom's Amount): its number now; the variant and the photo in the app on release."""
+        """The strength moving: its number now; the variant and the photo in the app on release."""
         if not self._str_busy:
             self.str_lbl.configure(text=f"{round(float(v))} %")
 
