@@ -5,9 +5,9 @@
 <h1 align="center">AI Remove for LightCraft and Chromaforge</h1>
 
 Remove objects and people from photos with local AI, from inside [LightCraft](https://github.com/storytold/lightcraft)
-or [Chromaforge](https://github.com/emmertex/chromaforge), or on its own — like Lightroom's Generative Remove,
-but on your own computer. From a RAW the result goes back into a **RAW DNG**, so you keep developing it like any raw
-file. From a JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format.
+or [Chromaforge](https://github.com/emmertex/chromaforge), or on its own, and all of it runs on your own computer.
+From a RAW the result goes back into a **RAW DNG**, so you keep developing it like any raw file. From a JPEG, PNG,
+TIFF, WebP, HEIC or AVIF it is a copy in the same format.
 
 It works the same way in both apps, in one of them or in both at once: the installer asks which to set up (see
 [LightCraft and Chromaforge](#lightcraft-and-chromaforge)).
@@ -43,9 +43,9 @@ It works the same way in both apps, in one of them or in both at once: the insta
 
 **Reflections in glass.** For a photo through a shop window or a display case, choose **DAI** under *Remove
 reflections* in the model menu and press **Remove reflections**: with nothing selected it works on the whole photo,
-with a selection only there, fading out around it. Like Lightroom's Remove Reflections, it takes away the light the
-glass reflects (the street seen in the window, the veil over what is behind it), and it takes it off the raw values
-themselves: nothing is redrawn, every detail and the sensor's own noise stay. **Strength**, under the result, sets
+with a selection only there, fading out around it. It takes away the light the glass reflects (the
+street seen in the window, the veil over what is behind it), and it takes it off the raw values themselves: nothing
+is redrawn, every detail and the sensor's own noise stay. **Strength**, under the result, sets
 how much of it goes (0 to 150 %, 75 % at first), and the photo follows as you drag it.
 
 **Draw something new (generative fill).** Choose **Generative fill** under *Draw something new* in the model menu,
@@ -86,8 +86,7 @@ takes reflections away using the app's own masks, without leaving the app.
   with it. Drag it by its header to put it elsewhere: it opens there the next time. A double-click on the header docks
   it again, and **–** folds it. Ctrl+Shift+X again brings it forward.
 - **The selection is the app's mask.** Select a mask in the app and the panel takes it. It can be an Object mask made
-  with one click of the app's SAM 3, a brush, a gradient… In *Reflections* the panel works on the whole photo, as
-  Lightroom's Remove Reflections does.
+  with one click of the app's SAM 3, a brush, a gradient… In *Reflections* the panel works on the whole photo.
 - **The window's tabs:**
   - **Remove** has the model menu, with ⓘ *What it does*;
   - **Fill** asks what to draw (required);
@@ -135,11 +134,11 @@ Save is not affected. The first time the panel reads a photo, the photo's crop d
   not for people. Qwen-Image 2.1 (optional, 16 GB GPUs): people and objects on complex backgrounds; it first names
   everything selected ("the woman and her handbag"; what you described, such as "person", "bag", "umbrella", is
   named too), then removes it by name and redraws the scene behind it.
-- **Remove reflections,** like Lightroom's: DAI (Dereflection Any Image, AAAI 2026) finds the light a pane of glass
+- **Remove reflections:** DAI (Dereflection Any Image, AAAI 2026) finds the light a pane of glass
   reflects over the photo, in a few seconds on a GPU, and AI Remove subtracts it from the RAW's own values, so the
   photo keeps all of its detail. **Strength**, a slider under the result, says how much of what DAI found goes,
-  from 0 to 150 %, and the photo follows as you drag it. It starts at 75 %, which came closest to Lightroom's own
-  result on a shop window (measured against the reflection Lightroom took away, which it stores in its `.acr` file).
+  from 0 to 150 %, and the photo follows as you drag it. It starts at 75 %, which came closest to a reference
+  removal of the same reflection, measured on a shop window.
 - **Generative fill,** like Photoshop's, but into the RAW: FLUX Fill draws what you describe where you select.
   - **How FLUX sees the area:** upright, as the photo is seen, with your prompt alone, in one pass. On its side, as
     removals show it, a lemon tree in a pot came out as broken pots in 2 variants of 2. Upright it was drawn in 2 of 2.
@@ -177,7 +176,7 @@ Save is not affected. The first time the panel reads a photo, the photo's crop d
 ## LightCraft and Chromaforge
 
 [Chromaforge](https://github.com/emmertex/chromaforge) (first named "LightCraft Classic") is a fork of
-[LightCraft](https://github.com/storytold/lightcraft) with the Lightroom Classic layout. AI Remove works the same way
+[LightCraft](https://github.com/storytold/lightcraft) with a layout of its own. AI Remove works the same way
 in both: Ctrl/Cmd+Shift+X, the result stacked on the original, its masks named "Remove" as the starting selection, SAM 3
 shared with the app's Object masks. What differs is only how AI Remove reaches each one:
 
@@ -206,8 +205,8 @@ set-up gives it its own variable (and `LIGHTCRAFT_CLASSIC_CONTROL_PORT` stays, f
 afterwards. `airemove-cli --check` says `"clash"` while this is so.
 
 **Chromaforge's Subject model, if you install it.** Chromaforge can use BiRefNet for its Subject and Background
-masks. On Windows and Linux it runs on the processor, about 10 s each time a photo with such a mask (Lightroom's
-"Select Subject" ones included, when imported from XMP) is redrawn, and AI Remove waits for it when it reads that
+masks. On Windows and Linux it runs on the processor, about 10 s each time a photo with such a mask (those
+imported from XMP included) is redrawn, and AI Remove waits for it when it reads that
 photo. To turn it off, close Chromaforge and rename the `models\birefnet` folder in its settings folder (for example
 to `birefnet.disabled`): those masks then use the app's own quick analysis.
 

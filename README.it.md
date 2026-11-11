@@ -8,8 +8,7 @@
 
 Toglie oggetti e persone dalle foto con l'intelligenza artificiale, direttamente dentro
 [LightCraft](https://github.com/storytold/lightcraft) o [Chromaforge](https://github.com/emmertex/chromaforge),
-oppure da solo. Fa quello che in Lightroom è "Rimozione generativa", ma tutto gira sul tuo computer. Lavora sui RAW e
-anche su JPEG, PNG, TIFF, WebP, HEIC e AVIF.
+oppure da solo, e tutto gira sul tuo computer. Lavora sui RAW e anche su JPEG, PNG, TIFF, WebP, HEIC e AVIF.
 
 Funziona allo stesso modo in tutte e due le app, in una sola o in entrambe insieme: l'installer ti chiede quale
 configurare (vedi [LightCraft e Chromaforge](#lightcraft-e-chromaforge)).
@@ -42,9 +41,9 @@ configurare (vedi [LightCraft e Chromaforge](#lightcraft-e-chromaforge)).
 
 **Riflessi nel vetro.** Per una foto attraverso una vetrina o una teca, scegli **DAI** sotto *Rimuovi riflessi* nel
 menu dei modelli e premi **Rimuovi riflessi**: senza selezione lavora su tutta la foto, con una selezione solo lì,
-sfumando intorno. Come "Rimuovi riflessi" di Lightroom, toglie la luce che il vetro riflette (la strada vista nella
-vetrina, il velo su ciò che sta dietro), e la toglie dai valori del RAW stesso: niente viene ridisegnato, restano ogni
-dettaglio e il rumore del sensore. **Intensità**, sotto il risultato, dice quanto toglierne (da 0 a 150 %, 75 %
+sfumando intorno. Toglie la luce che il vetro riflette (la strada vista nella vetrina, il velo su ciò che sta
+dietro), e la toglie dai valori del RAW stesso: niente viene ridisegnato, restano ogni dettaglio e il rumore del
+sensore. **Intensità**, sotto il risultato, dice quanto toglierne (da 0 a 150 %, 75 %
 all'inizio), e la foto segue mentre trascini.
 
 **Disegnare qualcosa di nuovo (riempimento generativo).** Scegli **Riempimento generativo** sotto *Disegna qualcosa di
@@ -87,7 +86,7 @@ maschere dell'app toglie oggetti, riempie e toglie riflessi, senza uscire dall'a
   doppio clic sulla barra torna agganciato, e **–** lo chiude a metà. Premendo di nuovo Ctrl+Shift+X torna davanti.
 - **La selezione è la maschera dell'app.** Seleziona una maschera nell'app e il pannello la prende. Può essere una
   maschera Oggetto fatta con un clic del SAM 3 dell'app, un pennello, un gradiente… In *Riflessi* lavora su tutta la
-  foto, come "Rimuovi riflessi" di Lightroom.
+  foto.
 - **Le schede della finestra:**
   - **Rimuovi** ha il menu dei modelli, con ⓘ *A cosa serve*;
   - **Riempi** chiede cosa disegnare (obbligatorio);
@@ -129,7 +128,7 @@ Il salvataggio non ne risente. La prima volta che il pannello legge una foto, il
 ## LightCraft e Chromaforge
 
 [Chromaforge](https://github.com/emmertex/chromaforge) (prima "LightCraft Classic") è un fork di
-[LightCraft](https://github.com/storytold/lightcraft) con l'impostazione di Lightroom Classic. AI Remove funziona allo
+[LightCraft](https://github.com/storytold/lightcraft) con un'impostazione tutta sua. AI Remove funziona allo
 stesso modo in tutti e due: Ctrl/Cmd+Shift+X, il risultato impilato sull'originale, le maschere chiamate "Rimuovi"
 come selezione di partenza, SAM 3 in comune con le maschere Oggetto dell'app. Cambia solo il modo in cui AI Remove
 parla con ciascuna:
@@ -162,7 +161,7 @@ controllo lo ottiene solo la prima delle due che apri. La configurazione le dà 
 
 **Il modello Soggetto di Chromaforge, se lo installi.** Chromaforge può usare BiRefNet per le maschere Soggetto e
 Sfondo. Su Windows e Linux gira sul processore: circa 10 secondi ogni volta che va ridisegnata una foto con una di
-queste maschere (anche quelle "Seleziona soggetto" di Lightroom, importate dagli XMP), e AI Remove lo aspetta quando
+queste maschere (anche quelle importate dagli XMP), e AI Remove lo aspetta quando
 legge quella foto. Per spegnerlo, chiudi Chromaforge e rinomina la cartella `models\birefnet` nella sua cartella
 delle impostazioni (per esempio in `birefnet.disabled`): quelle maschere useranno di nuovo l'analisi rapida dell'app.
 
@@ -257,7 +256,7 @@ l'installazione, le [Impostazioni](#impostazioni) fanno lo stesso un modello all
 | **SAM 3** | La selezione con un clic, o descrivendo cosa selezionare ("people"). Senza, si usa il pennello. | | 3,2 GB, oppure 0 GB se è già in LightCraft o in Chromaforge | SAM License (Meta) |
 | **OSOR** (facoltativo, su FLUX) | Trova le ombre e i riflessi accanto a ciò che selezioni, per "Includi l'ombra" (insieme a SAM 3). | | 0,6 GB | FLUX.1 [dev] Non-Commercial |
 | **Qwen-Image 2.1 Turbo** (facoltativo) | Persone e oggetti su sfondi complessi (una persona davanti a una scalinata, un palo davanti alle colonne): riconosce cosa hai selezionato e lo toglie chiamandolo per nome. Circa 30 s a variante a 1024 px. Serve una GPU NVIDIA o AMD da 16 GB. | Quando hai fretta: circa un minuto per la prima variante di una rimozione | 14,4 GB | Qwen Research License (non commerciale); il suo encoder del testo Qwen3-VL: Apache-2.0 |
-| **DAI** (facoltativo) | I riflessi nel vetro, "Rimuovi riflessi": su tutta la foto o su una selezione, in pochi secondi con una GPU; il riflesso si toglie dai valori del RAW, niente viene ridisegnato. **Intensità**, sotto il risultato, dice quanto toglierne, da 0 a 150 % (75 % all'inizio: il più vicino al risultato di Lightroom, misurato su una vetrina). | Riempire qualcosa; un riflesso nitido e luminoso (alberi specchiati in una vetrina, il cielo in una pozzanghera) si toglie solo in parte | 5,7 GB | Apache-2.0, ritocco di Stable Diffusion 2 (CreativeML Open RAIL++-M) |
+| **DAI** (facoltativo) | I riflessi nel vetro, "Rimuovi riflessi": su tutta la foto o su una selezione, in pochi secondi con una GPU; il riflesso si toglie dai valori del RAW, niente viene ridisegnato. **Intensità**, sotto il risultato, dice quanto toglierne, da 0 a 150 % (75 % all'inizio: il più vicino a una rimozione di riferimento dello stesso riflesso, misurato su una vetrina). | Riempire qualcosa; un riflesso nitido e luminoso (alberi specchiati in una vetrina, il cielo in una pozzanghera) si toglie solo in parte | 5,7 GB | Apache-2.0, ritocco di Stable Diffusion 2 (CreativeML Open RAIL++-M) |
 
 **Modelli tolti.** SDXL Inpainting non è più nel menu: ridisegnava una persona o un oggetto strano dove RORem non ne
 ridisegnava nessuno (11 rimozioni di prova su 12, contro 0), e RORem, che usa i suoi file, fa il suo lavoro. ObjectClear

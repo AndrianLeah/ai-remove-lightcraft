@@ -71,8 +71,8 @@ def doc(name):
 # ------------------------------------------------------------------------------------------------ guide
 GUIDE = {
     "overview": """AI Remove is an unofficial plug-in for LightCraft (the raw photo editor by the ArtCraft team; this
-plug-in is not made or endorsed by them). It removes objects and people from photos with AI (Lightroom's
-Generative Remove, but local): select with one click (SAM 3), generate variants (LaMa, SDXL or FLUX Fill), pick one;
+plug-in is not made or endorsed by them). It removes objects and people from photos with local AI: select
+with one click (SAM 3), generate variants (LaMa, SDXL or FLUX Fill), pick one;
 from a RAW the result is written back into a RAW DNG (<name>-AIRemove.dng) stacked on the original in LightCraft, so
 all the development still works on it; from a JPEG, PNG, TIFF, WebP, HEIC or AVIF it is a copy in the same format
 (<name>-AIRemove.jpg...). Every removal stays editable in a project file next to the photo (<photo>.airemove). It also
@@ -520,7 +520,7 @@ TOOLS = [
      {"type": "object", "properties": {
          "strength": {"type": "integer", "minimum": 0, "maximum": REFLECTION_MAX,
                       "description": f"% of the reflection DAI found that is taken away (default "
-                                     f"{REFLECTION_STRENGTH}: closest to Lightroom's Reflection Removal where "
+                                     f"{REFLECTION_STRENGTH}: closest to a reference removal where "
                                      f"measured; DAI alone takes more)"},
          "app": APP, "photo_id": {"type": "integer", "description": "default: the app's active photo"}}},
      remove_reflections, False),

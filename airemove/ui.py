@@ -1,4 +1,4 @@
-"""AI Remove window, organised like Lightroom's Generative Remove.
+"""AI Remove window: the photo on the left, its removals and their variants on the right.
 
 The photo fills the left side and always shows the result: every removal with its chosen variant. Select what to
 remove (Clic SAM: SAM 3 outlines the whole object · Alt/Option+click / Shift+click refine it · Pennello + / Gomma −;
@@ -456,8 +456,7 @@ def model_infos():
                  "street in a shop window, a veil over what is behind it) and takes it away from the RAW itself: "
                  "every detail stays, nothing is redrawn. With nothing selected, the whole photo; with a "
                  "selection, there, fading out around it. ~{time}; then Strength, under the result, says how much "
-                 "of it goes, 0 to 150 % (75 % at first: the closest to Lightroom's Remove Reflections). Licence "
-                 "Apache-2.0.",
+                 "of it goes, 0 to 150 % (75 % at first). Licence Apache-2.0.",
                  time=App.fmt_s(A.expected("dai_variant"))),
         "fill": _("Generative fill — FLUX Fill draws what you describe (in English) in the selection, with the "
                   "photo's light and focus, and it is written into the RAW like a removal. The selection is the "
