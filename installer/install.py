@@ -83,6 +83,8 @@ RETIRED = {"objectclear": ("objectclear",)}
 # take a 16 GB card, next to what the desktop and LightCraft keep on it (2-4 GB). Measured on an RX 7800 XT 16 GB; the
 # runtimes it needs (CUDA, ROCm) are NVIDIA's and AMD's.
 QWEN_VRAM, QWEN_TORCH = 15.5, ("cuda", "rocm", "rocm-win")
+SDXL_VRAM = 7.5  # SDXL Inpainting / RORem: an 8 GB card (7.98 GB reported) fits with the CPU offload, a 6 GB one
+# does not (the peak measured: ~6.2 GB, and a driver holds some too)
 SHORTCUT = "Cmd+Shift+X"  # LightCraft's notation: Cmd = Ctrl on Windows and Linux
 APP_KEY = "Cmd+Shift+X" if system.system() == "macos" else "Ctrl+Shift+X"  # the same, as the user presses it
 EDIT_COMMAND = "photo.openOriginalInExternal"
@@ -323,9 +325,10 @@ def retire_models(models_dir):
 
 
 def recommended_models(flavour, gpu):
+    """The models picked by default: LaMa and SAM 3, and RORem when the GPU can run it (SDXL_VRAM)."""
     vram = (gpu[2] if gpu else None) or 0
     picks = ["lama", "sam3"]
-    if flavour != "cpu" and (vram >= 6 or flavour == "mps" and vram >= 16 or flavour == "rocm-win"):
+    if flavour != "cpu" and (vram >= SDXL_VRAM or flavour == "mps" and vram >= 16 or flavour == "rocm-win"):
         picks.append("rorem")  # with SDXL's files
     return picks
 
