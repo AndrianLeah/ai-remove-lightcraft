@@ -193,7 +193,8 @@ MODELS = {
                                         "areas with detail."),
                   "CreativeML Open RAIL++-M", ["sdxl-inpaint", "sdxl-vae-fp16-fix"], offered=False),
     "rorem": Model("RORem", N_("Removes people and objects without drawing anyone back: SDXL Inpainting retrained "
-                               "only to remove (SDXL's files come with it). ~7 s per variant on a GPU."),
+                               "only to remove (SDXL's files come with it). ~7 s per variant on a GPU. Needs a GPU "
+                               "with 8 GB or more."),
                    "Apache-2.0; on SDXL Inpainting (CreativeML Open RAIL++-M)",
                    ["sdxl-inpaint", "sdxl-vae-fp16-fix", "rorem"]),
     "flux": Model("FLUX.1 Fill [dev] + Turbo", N_("The most realistic fill: it respects light, perspective and "

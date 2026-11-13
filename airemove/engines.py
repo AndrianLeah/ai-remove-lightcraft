@@ -6,7 +6,8 @@ pane of glass reflects ("Remove reflections").
 
 The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by torch as "cuda"), Intel Arc (xpu),
 Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and Qwen-Image
-don't fit together: the session unloads one before loading another."""
+don't fit together: the session unloads one before loading another. Up to 12 GB (SDXL_NEEDS_GIB) SDXL's and RORem's
+weights stay in RAM and move to the GPU part by part (SDXL.offload)."""
 import os
 import numpy as np
 from PIL import Image, ImageFilter
@@ -106,6 +107,36 @@ def _free_gpu():
         torch.mps.empty_cache()
     elif dev == "xpu":
         torch.xpu.empty_cache()
+
+
+def _vram_gib():
+    """The GPU's memory in GiB (0.0 when it cannot be read: Apple, processor, a driver that does not answer)."""
+    import torch
+    dev = device()
+    try:
+        if dev == "cuda":
+            return torch.cuda.get_device_properties(0).total_memory / 2**30
+        if dev == "xpu":
+            return torch.xpu.get_device_properties(0).total_memory / 2**30
+    except Exception:
+        pass
+    return 0.0
+
+
+# SDXL Inpainting in fp16 all on the GPU: ~6.6 GB of weights, and a 1024 px step peaks at 9.15 GB (measured on an RX
+# 7800 XT; the VAE's decode), plus SAM 3's ~1 GB and what the desktop and the app keep on the card: a 10 or 12 GB
+# card is too tight. Up to 12 GB the weights stay in RAM (peak 5.3 GB, ~3 s more a variant, the same fills)
+SDXL_NEEDS_GIB = 12.5
+
+
+def _low_vram():
+    """True when the GPU has less memory than SDXL Inpainting needs while SAM 3 stays there too (an 8 GB card:
+    the weights alone leave no room for a step). AIREMOVE_CPU_OFFLOAD=1 / 0 forces the answer."""
+    forced = (os.environ.get("AIREMOVE_CPU_OFFLOAD") or "").strip().lower()
+    if forced:
+        return forced not in ("0", "false", "no", "off")
+    vram = _vram_gib()
+    return 0.0 < vram < SDXL_NEEDS_GIB
 
 
 # ------------------------------------------------------------------------------------------------ what is installed
@@ -414,8 +445,18 @@ class SDXL:
         dt = torch.float32 if dev == "cpu" else torch.float16  # the fp16-fix VAE makes half precision safe
         vae = AutoencoderKL.from_pretrained(mf.part_dir("sdxl-vae-fp16-fix"), torch_dtype=dt)
         own = {} if unet is None else {"unet": UNet2DConditionModel.from_pretrained(unet, torch_dtype=dt)}
-        self.pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-            mf.part_dir("sdxl-inpaint"), vae=vae, variant="fp16", torch_dtype=dt, **own).to(dev)
+        pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
+            mf.part_dir("sdxl-inpaint"), vae=vae, variant="fp16", torch_dtype=dt, **own)
+        # On a card with 12 GB or less (SDXL_NEEDS_GIB: SDXL Inpainting's fp16 weights are ~6.6 GB, a step peaks at
+        # ~9.2 GB) the pipeline stays in RAM and each part moves to the GPU for its turn (accelerate's own offload):
+        # a few seconds more a variant, the same fills, no out-of-memory. 16 GB cards keep it all on the GPU.
+        self.offload = dev != "cpu" and _low_vram()
+        if self.offload:
+            pipe.enable_model_cpu_offload()
+            log(f"{self.name}: {_vram_gib():.1f} GB of video memory, weights kept in RAM and moved per step")
+        else:
+            pipe = pipe.to(dev)
+        self.pipe = pipe
         if dev == "mps":
             self.pipe.enable_attention_slicing()  # lower peak memory on unified-memory Macs
         # DPM++ 2M with Karras sigmas: in 12 steps the same fills (same seed, same picture) the model's own Euler
@@ -428,6 +469,12 @@ class SDXL:
         self.held = (None, None)  # (key, latents) of the last held pre-fill (fill hold=)
         log(f"{self.name} ready ({dev})")
 
+    def vae_device(self):
+        """Where a tensor the VAE gets must be made. With the CPU offload the parts sit on the CPU between steps while
+        the VAE stays where it ran, and accelerate's hook moves the model, not what it is handed: the execution device
+        (the GPU) is the one device that suits both cases."""
+        return getattr(self.pipe, "_execution_device", self.pipe.device)
+
     def masked_latents(self, image: Image.Image, mask: Image.Image):
         """The VAE latents of the photo with the hole blanked out, which the inpainting UNet sees next to the noise.
         They are the same for every variant of a removal, so they are encoded once: ~1.3 s of a ~7.3 s variant on an
@@ -439,7 +486,7 @@ class SDXL:
         if self.masked[0] != key:
             init = pipe.image_processor.preprocess(image, height=image.height, width=image.width)
             hole = pipe.mask_processor.preprocess(mask, height=mask.height, width=mask.width)
-            masked = (init * (hole < 0.5)).to(pipe.device, pipe.vae.dtype)
+            masked = (init * (hole < 0.5)).to(self.vae_device(), pipe.vae.dtype)
             with torch.no_grad():
                 lat = pipe.vae.encode(masked).latent_dist.mode() * pipe.vae.config.scaling_factor
             self.masked = (key, lat)
@@ -478,7 +525,7 @@ class SDXL:
         S = image.width
         key = hashlib.sha1(image.tobytes()).digest()
         if self.held[0] != key:
-            x = pipe.image_processor.preprocess(image, height=S, width=S).to(pipe.device, pipe.vae.dtype)
+            x = pipe.image_processor.preprocess(image, height=S, width=S).to(self.vae_device(), pipe.vae.dtype)
             with torch.no_grad():
                 self.held = (key, pipe.vae.encode(x).latent_dist.mode() * pipe.vae.config.scaling_factor)
         lat = self.held[1]

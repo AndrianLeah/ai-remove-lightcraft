@@ -217,6 +217,9 @@ to `birefnet.disabled`): those masks then use the app's own quick analysis.
   GPU only LaMa is practical.
 - **macOS 12+** on Apple Silicon (M1 or later; 16 GB of memory recommended). Intel Macs are not supported.
 - **Linux x86-64** with NVIDIA (GTX 750 or later), or AMD with ROCm.
+- **Graphics memory:** 8 GB for RORem, the default model (up to 12 GB its weights stay in RAM and move to the GPU
+  part by part: a little slower; `AIREMOVE_CPU_OFFLOAD=1` in the environment does the same on a larger card that
+  runs out of memory); 12 GB for FLUX, 16 GB for Qwen-Image. With less, LaMa and the selection still work.
 - **Disk:** 5 to 30 GB, depending on the models.
 - **Internet:** while installing. Afterwards only a check for a new AI Remove on GitHub, at most once a day: it
   sends nothing about you or your photos, and `"update_check": false` in `work/settings.json` turns it off.
@@ -309,7 +312,7 @@ installation, [Settings](#settings) does the same for one model at a time.
 | Model | Best for | Not for | Size | Licence |
 |---|---|---|---|---|
 | LaMa | Small and medium objects on plain backgrounds; runs on the processor in seconds | Large areas and structures (doors, windows): it blurs them | 0.2 GB | Apache-2.0 |
-| RORem (with SDXL Inpainting's files) | People and objects, the default: SDXL Inpainting retrained only to remove, no person or odd object drawn back where SDXL draws one; ~7 s per variant on a GPU | Long thin holes (a pole): it can leave a seam, LaMa or FLUX are cleaner | 11.6 GB (SDXL 6.8 + RORem 4.8) | Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M |
+| RORem (with SDXL Inpainting's files) | People and objects, the default: SDXL Inpainting retrained only to remove, no person or odd object drawn back where SDXL draws one; ~7 s per variant on a GPU with 8 GB or more (~10 s on one with 12 GB or less, which keeps its weights in RAM) | Long thin holes (a pole): it can leave a seam, LaMa or FLUX are cleaner | 11.6 GB (SDXL 6.8 + RORem 4.8) | Apache-2.0, on SDXL Inpainting's CreativeML Open RAIL++-M |
 | FLUX.1 Fill [dev] + Turbo | The most realistic (light, perspective, architecture); large or hard areas; needs a 12+ GB GPU. Also **Generative fill** (Draw something new): what you describe, drawn in the selection | People: in a street or a crowd it draws people back where they were. Drawing: no shadow on the ground; large selections come out soft | 16.4 GB | FLUX.1 [dev] Non-Commercial |
 | SAM 3 | One-click selection, and selecting by describing ("people"); without it: the brush | | 3.2 GB (0 if LightCraft or Chromaforge has it) | SAM License (Meta) |
 | OSOR (optional, on FLUX) | Finds the shadows and reflections next to what you select, for "Include the shadow" (with SAM 3) | | 0.6 GB | FLUX.1 [dev] Non-Commercial |
