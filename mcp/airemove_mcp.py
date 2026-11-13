@@ -131,8 +131,9 @@ masks, else the whole photo).""",
   (check_system says "clash"): run configure_lightcraft(apps=chromaforge), then restart Chromaforge.
 - "Chromaforge non ha accettato AI Remove": its control channel wants the token it writes at every start
   (control-token-<port> in its settings folder): restart Chromaforge.
-- First FLUX/SDXL variant slow on AMD: the GPU compiles its kernels once (minutes), then it is fast.
-- Out of GPU memory: use SDXL instead of FLUX, fewer variants, close other GPU apps.
+- First FLUX/RORem variant slow on AMD: the GPU compiles its kernels once (minutes), then it is fast.
+- Out of GPU memory: use RORem instead of FLUX (it needs 8 GB; up to 12 GB its weights stay in RAM, and
+  AIREMOVE_CPU_OFFLOAD=1 does the same on a larger card), fewer variants, close other GPU apps.
 - Windows SmartScreen / macOS Gatekeeper warnings on the install files: they are unsigned scripts. Windows: More info
   > Run anyway. macOS blocks a double-click on a downloaded unsigned script and macOS 15 dropped right-click > Open:
   run `sh "Install on Mac.command"` in Terminal (Gatekeeper does not check scripts started that way), or use System

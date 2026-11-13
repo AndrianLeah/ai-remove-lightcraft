@@ -602,6 +602,11 @@ def choose_models(flavour, gpu, installed, given, sam_host):
         out.write("")
         para(_("Qwen-Image needs an NVIDIA or AMD graphics card with 16 GB or more: not offered on this computer "
                "(--models installs it anyway)."))
+    vram = (gpu[2] if gpu else None) or 0
+    if flavour not in ("cpu", "mps", "rocm-win") and 0 < vram < SDXL_VRAM and "rorem" not in wanted + installed:
+        out.write("")  # recommended_models leaves it out: say why
+        para(_("RORem needs a graphics card with 8 GB or more: not selected by default on this computer (answer y "
+               "to install it anyway)."))
     return wanted
 
 

@@ -6,7 +6,8 @@ pane of glass reflects ("Remove reflections").
 
 The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by torch as "cuda"), Intel Arc (xpu),
 Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and Qwen-Image
-don't fit together: the session unloads one before loading another."""
+don't fit together: the session unloads one before loading another. Up to 12 GB (SDXL_NEEDS_GIB) SDXL's and RORem's
+weights stay in RAM and move to the GPU part by part (SDXL.offload)."""
 import os
 import numpy as np
 from PIL import Image, ImageFilter
@@ -122,7 +123,10 @@ def _vram_gib():
     return 0.0
 
 
-SDXL_NEEDS_GIB = 9.0  # SDXL Inpainting in fp16: ~6.6 GB of weights, plus a step's activations and SAM 3
+# SDXL Inpainting in fp16 all on the GPU: ~6.6 GB of weights, and a 1024 px step peaks at 9.15 GB (measured on an RX
+# 7800 XT; the VAE's decode), plus SAM 3's ~1 GB and what the desktop and the app keep on the card: a 10 or 12 GB
+# card is too tight. Up to 12 GB the weights stay in RAM (peak 5.3 GB, ~3 s more a variant, the same fills)
+SDXL_NEEDS_GIB = 12.5
 
 
 def _low_vram():
@@ -443,9 +447,9 @@ class SDXL:
         own = {} if unet is None else {"unet": UNet2DConditionModel.from_pretrained(unet, torch_dtype=dt)}
         pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
             mf.part_dir("sdxl-inpaint"), vae=vae, variant="fp16", torch_dtype=dt, **own)
-        # On a card with little memory (8 GB: SDXL Inpainting's fp16 weights are ~6.6 GB, and a step needs more than
-        # the rest) the pipeline stays in RAM and each part moves to the GPU for its turn (accelerate's own offload):
-        # ~2 s a step instead of ~0.6 s, and no out-of-memory. 16 GB cards keep it all on the GPU, as before.
+        # On a card with 12 GB or less (SDXL_NEEDS_GIB: SDXL Inpainting's fp16 weights are ~6.6 GB, a step peaks at
+        # ~9.2 GB) the pipeline stays in RAM and each part moves to the GPU for its turn (accelerate's own offload):
+        # a few seconds more a variant, the same fills, no out-of-memory. 16 GB cards keep it all on the GPU.
         self.offload = dev != "cpu" and _low_vram()
         if self.offload:
             pipe.enable_model_cpu_offload()

@@ -173,6 +173,7 @@ delle impostazioni (per esempio in `birefnet.disabled`): quelle maschere userann
 | **Windows 10/11** | scheda NVIDIA (GeForce GTX 750 o successive), AMD Radeon RX 7000/9000 o Intel Arc; senza GPU funziona solo LaMa |
 | **macOS 12+** | Mac con chip Apple (M1 o successivi); meglio con almeno 16 GB di memoria |
 | **Linux x86-64** | scheda NVIDIA (GTX 750 o successive), oppure AMD con ROCm |
+| **Memoria della GPU** | 8 GB per RORem, il modello predefinito (fino a 12 GB i suoi pesi restano nella RAM e passano alla GPU un pezzo alla volta: un po' più lento); 12 GB per FLUX, 16 GB per Qwen-Image. Con meno funzionano comunque LaMa e la selezione |
 | **Spazio su disco** | da 5 GB (solo LaMa) a circa 30 GB (tutti i modelli) |
 | **Internet** | durante l'installazione; poi solo un controllo di nuove versioni su GitHub, al massimo una volta al giorno (non invia nulla su di te o sulle foto; si spegne con `"update_check": false` in `work/settings.json`) |
 
@@ -251,7 +252,7 @@ l'installazione, le [Impostazioni](#impostazioni) fanno lo stesso un modello all
 | Modello | Quando usarlo | Non per | Peso | Licenza |
 |---|---|---|---|---|
 | **LaMa** | Oggetti piccoli e medi su sfondi semplici (muro, cielo, prato, asfalto). Gira sul processore, un solo risultato in pochi secondi. | Aree grandi e strutture (porte, finestre): le sfoca | 0,2 GB | Apache-2.0 |
-| **RORem** (con i file di SDXL Inpainting) | Persone e oggetti, il modello predefinito: SDXL riaddestrato solo per togliere; dove SDXL ridisegna una persona o un oggetto strano nel buco (l'altra di due persone vicine, chi porta una borsa rimasta fuori dalla selezione), disegna lo sfondo. Circa 7 s a variante con una GPU NVIDIA o AMD da 8 GB. | Buchi lunghi e sottili (un palo): può lasciare una giuntura, LaMa o FLUX sono più puliti | 11,6 GB (SDXL 6,8 + RORem 4,8) | Apache-2.0, su CreativeML Open RAIL++-M di SDXL |
+| **RORem** (con i file di SDXL Inpainting) | Persone e oggetti, il modello predefinito: SDXL riaddestrato solo per togliere; dove SDXL ridisegna una persona o un oggetto strano nel buco (l'altra di due persone vicine, chi porta una borsa rimasta fuori dalla selezione), disegna lo sfondo. Circa 7 s a variante con una GPU da 8 GB o più (circa 10 s con una da 12 GB o meno, che tiene i pesi nella RAM). | Buchi lunghi e sottili (un palo): può lasciare una giuntura, LaMa o FLUX sono più puliti | 11,6 GB (SDXL 6,8 + RORem 4,8) | Apache-2.0, su CreativeML Open RAIL++-M di SDXL |
 | **FLUX Fill + Turbo** | Il più realistico: rispetta luce, prospettiva e architettura. Per aree grandi o difficili. Serve una GPU da 12 GB o più. Fa anche il **Riempimento generativo** (Disegna qualcosa di nuovo): quello che descrivi, disegnato nella selezione. | Le persone: in una strada o tra la folla ridisegna persone dove c'erano. Quando disegna: niente ombra a terra; le selezioni grandi vengono morbide | 16,4 GB | FLUX.1 [dev] Non-Commercial |
 | **SAM 3** | La selezione con un clic, o descrivendo cosa selezionare ("people"). Senza, si usa il pennello. | | 3,2 GB, oppure 0 GB se è già in LightCraft o in Chromaforge | SAM License (Meta) |
 | **OSOR** (facoltativo, su FLUX) | Trova le ombre e i riflessi accanto a ciò che selezioni, per "Includi l'ombra" (insieme a SAM 3). | | 0,6 GB | FLUX.1 [dev] Non-Commercial |
@@ -381,7 +382,8 @@ istruzioni in [AGENTS.md](AGENTS.md).
 - **Mac: "Python vorrebbe accedere a…"**: se i RAW sono su un disco esterno, sulla Scrivania o in Documenti, macOS
   chiede una volta il permesso. Rispondi *Consenti*.
 - **Memoria della GPU esaurita**: usa RORem invece di FLUX, oppure meno varianti, e chiudi gli altri programmi che
-  usano la GPU.
+  usano la GPU. Se finisce anche con RORem su una scheda da 16 GB o più (altri programmi ne tengono una parte),
+  `AIREMOVE_CPU_OFFLOAD=1` nell'ambiente gli fa tenere i pesi nella RAM, come su una scheda da 8 GB.
 - **LightCraft o Chromaforge in Flatpak (Linux)**: l'installer dà all'app i permessi necessari: rete locale, cartella
   `AIRemove`, avvio di programmi esterni. Si possono togliere con
   `flatpak override --user --reset ai.storyteller.lightcraft` (LightCraft) o
