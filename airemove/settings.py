@@ -399,7 +399,7 @@ class Window:
     def button(self, master, text, cmd, accent=False, small=True):
         ui = self.ui
         bg, fg, hi = (ui.ACCENT, "#1b1b1b", ui.ACCENT_HI) if accent else (ui.BTN, ui.FG, ui.BTN_HI)
-        b = self.tk.Button(master, text=text, command=cmd, relief="flat", bd=0, cursor="hand2",
+        b = ui.Button(master, text=text, command=cmd, relief="flat", bd=0, cursor="hand2",  # macOS: a Label
                            font=self.f_bold if accent else (self.f_small if small else self.f_txt), bg=bg, fg=fg,
                            activebackground=hi, activeforeground=fg, disabledforeground=ui.OFF,
                            padx=int(9 * self.k), pady=int(3 * self.k))
