@@ -357,6 +357,8 @@ class LabelButton(tk.Label):
         self.bind("<ButtonRelease-1>", self._release, add="+")
 
     def configure(self, cnf=None, **kw):
+        if isinstance(cnf, str):  # one option asked for (configure("bg")), as tkinter allows: a Button's answer
+            return ("command", "command", "Command", "", self._command) if cnf == "command" else super().configure(cnf)
         kw = {**(cnf or {}), **kw}
         if "command" in kw:
             self._command = kw.pop("command")
