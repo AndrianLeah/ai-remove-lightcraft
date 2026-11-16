@@ -8,7 +8,9 @@ Python. DIR's app code is imported; the Session is a stand-in (no photo yet, no 
   - the top bar's hysteresis (fit_header, HEAD_HYSTERESIS): two rows below the width one row needs, one row again only
     HEAD_HYSTERESIS px wider; widths wavering inside that band change nothing, a width going back and forth across one
     of its edges changes it once;
-  - opened from the panel (master, on_close), back to the panel and reopened (reopen): zoomed again, the top bar still.
+  - opened from the panel (master, on_close), back to the panel and reopened (reopen): zoomed again, the top bar still;
+  - the buttons (#66): Labels on macOS, in the window's colours (Aqua draws a Button its own grey), and a LabelButton
+    behaves as a button on every system.
 One Tk for the whole test, the app's own window's (macOS's Tk does not take a second one, nor a new one after it): the
 other windows are on it, as the panel's are. Exit status 1 at the first check that fails; 0 with "skipped" when there is
 no display to open a window on.
@@ -48,6 +50,50 @@ class Stand(types.SimpleNamespace):
 def session():
     return Stand(app="LightCraft", standalone=False, removals=[], info={"file_name": "DSC_0042.NEF", "develop": {}},
                  out_format="DNG", prompt="", shadow_model=lambda: None, refine_model=lambda: None)
+
+
+def buttons(tk, ui, app, r):
+    """The window's buttons (#66): on macOS Tk's Aqua theme draws a Button as the system's own, light grey whatever
+    bg says, and the window's light text could not be read on it; there they are Labels (ui.LabelButton), in the
+    colours asked for. And a LabelButton behaves as a button, here on every system: its command on a click released
+    over it, not on one released outside it nor when it is disabled; command set and read again, invoke()."""
+    b = app.lang_btn  # one of the window's own (App.button)
+    want = "Label" if ui.MAC else "Button"
+    expect(b.winfo_class() == want and str(b.cget("bg")).lower() == ui.BTN.lower(),
+           f"the window's buttons are {want}s, in the window's colours (bg {b.cget('bg')}, text {b.cget('fg')})")
+    calls = []
+    top = tk.Toplevel(r)
+    lb = ui.LabelButton(top, text="Undo", command=lambda: calls.append(1), bg=ui.BTN, fg=ui.FG,
+                        disabledforeground=ui.OFF, overrelief="raised", repeatdelay=0, padx=12, pady=7)
+    lb.pack()
+    for _ in range(300):  # shown (wait_visibility can miss its event on Windows and never return)
+        top.update()
+        if lb.winfo_viewable():
+            break
+        time.sleep(0.01)
+    expect(lb.winfo_viewable() and lb.winfo_class() == "Label", "a LabelButton is shown, a Label")
+
+    def click(x=3, y=3, rx=None):
+        lb.event_generate("<ButtonPress-1>", x=x, y=y)
+        lb.event_generate("<ButtonRelease-1>", x=x if rx is None else rx, y=y)
+        top.update()
+    click()
+    expect(calls == [1], "a LabelButton runs its command on a click released over it")
+    click(rx=-20)
+    expect(calls == [1], "a press released outside it runs nothing")
+    lb.configure(state="disabled")
+    click()
+    expect(calls == [1] and lb.invoke() is None and calls == [1], "disabled, it runs nothing (click or invoke)")
+    lb["state"] = "normal"
+    lb.configure(command=lambda: calls.append(2))
+    click()
+    expect(calls == [1, 2] and callable(lb.cget("command")) and lb["command"] is lb.cget("command"),
+           "its command changed (configure) and read back (cget, [])")
+    lb.invoke()
+    expect(calls == [1, 2, 2] and lb.configure("command")[-1] is lb.cget("command")
+           and lb.configure("bg")[-1].lower() == ui.BTN.lower(),
+           "invoke() runs it; configure(option) answers as a Button's")
+    top.destroy()
 
 
 def main(app_dir):
@@ -121,6 +167,8 @@ def main(app_dir):
     quiet(r, 0.5)
     expect(0.8 * sw <= r.winfo_width() <= 0.95 * sw,
            f"restored, it keeps a size of its own: {r.winfo_width()} px of {sw} ({r.wm_geometry()})")
+    begin("the buttons")
+    buttons(tk, ui, app, r)
 
     # --- sized by its content from its first layout: as in 1.8.0 before the zoom (its size and the zoom left out)
     begin("a window sized by its content")

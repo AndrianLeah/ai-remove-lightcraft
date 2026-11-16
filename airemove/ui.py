@@ -338,7 +338,61 @@ class Stepper(tk.Frame):
         self.set(v)
 
 
-class FlatButton(tk.Button):
+class LabelButton(tk.Label):
+    """macOS: a button drawn as a Label. Tk's Aqua button is the system's own, light grey whatever bg says, so the
+    window's light text (FG) on it, and a disabled one's (OFF) above all, could not be read; a Label takes the
+    colours it is given. It runs its command on a click released over it, as a button does, and only when it is
+    not disabled."""
+
+    _BUTTON_ONLY = ("command", "overrelief", "default", "repeatdelay", "repeatinterval")
+
+    def __init__(self, master=None, cnf=None, **kw):
+        kw = {**(cnf or {}), **kw}
+        self._command = kw.pop("command", None)
+        for o in self._BUTTON_ONLY[1:]:
+            kw.pop(o, None)
+        super().__init__(master, **kw)
+        self._down = False
+        self.bind("<ButtonPress-1>", self._press, add="+")
+        self.bind("<ButtonRelease-1>", self._release, add="+")
+
+    def configure(self, cnf=None, **kw):
+        if isinstance(cnf, str):  # one option asked for (configure("bg")), as tkinter allows: a Button's answer
+            return ("command", "command", "Command", "", self._command) if cnf == "command" else super().configure(cnf)
+        kw = {**(cnf or {}), **kw}
+        if "command" in kw:
+            self._command = kw.pop("command")
+        for o in self._BUTTON_ONLY[1:]:
+            kw.pop(o, None)
+        return super().configure(**kw) if kw else super().configure()
+
+    config = configure
+
+    def cget(self, key):
+        return self._command if key == "command" else super().cget(key)
+
+    __getitem__ = cget
+
+    def __setitem__(self, key, value):
+        self.configure(**{key: value})
+
+    def invoke(self):
+        if str(self["state"]) != "disabled" and self._command is not None:
+            return self._command()
+
+    def _press(self, e):
+        self._down = str(self["state"]) != "disabled"
+
+    def _release(self, e):
+        down, self._down = self._down, False
+        if down and 0 <= e.x < self.winfo_width() and 0 <= e.y < self.winfo_height():
+            self.invoke()
+
+
+Button = LabelButton if MAC else tk.Button  # the window's buttons (and the Settings window's): coloured as asked
+
+
+class FlatButton(Button):
     """App.button's: its colour follows its state. Disabled, a coloured one (accent, green) turns grey (_off), its
     text dimmed on it: dimmed on the colour itself it could not be read."""
 
