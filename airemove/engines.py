@@ -7,7 +7,9 @@ pane of glass reflects ("Remove reflections").
 The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by torch as "cuda"), Intel Arc (xpu),
 Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and Qwen-Image
 don't fit together: the session unloads one before loading another. Up to 12 GB (SDXL_NEEDS_GIB) SDXL's and RORem's
-weights stay in RAM and move to the GPU part by part (SDXL.offload)."""
+weights stay in RAM and move to the GPU part by part (SDXL.offload), and so do DAI's UNet and ControlNet
+(DAI.offload)."""
+import contextlib
 import os
 import numpy as np
 from PIL import Image, ImageFilter
@@ -1081,6 +1083,7 @@ class Qwen:
 # ------------------------------------------------------------------------------------------------ DAI (reflections)
 DAI_SIZE = 1024  # the long side DAI sees an area at
 DAI_PROMPT = "remove glass reflection"  # the prompt it was trained with (its pipeline's own)
+DAI_OUT_ROWS = 128  # vae_2's last convolution, in bands of this many rows (DAI._conv_out)
 # The light DAI takes away is subtracted as DAI found it, not blurred: blurred by 0.6 % of the area's long side it was
 # a little closer to the reference removal on a statue behind a shop window (error 0.20 of its size, not 0.21), but a
 # sharp, bright reflection (trees in a museum's window, the sky in a puddle) became black blotches with dark halos.
@@ -1116,7 +1119,13 @@ class DAI:
     """DAI, Dereflection Any Image (Hu et al., AAAI 2026): Stable Diffusion 2 retrained to see through glass, in one
     step. Its ControlNet reads the photo's latents, the UNet draws the scene behind the glass from nothing (zero
     latents, t = 0) with the fixed prompt, and a second VAE decoder (vae_2) gets the photo's own detail through skip
-    connections from its encoder. ~2 GB on the GPU in bf16, a few seconds for an area at 1024 px.
+    connections from its encoder. ~2.9 GB of weights (bf16; vae_2 in float32), a few seconds for an area at 1024 px.
+
+    vae_2 works in float32 at full resolution, where its layers are large: a whole photo (1024 x 688) peaked at 7.75 GB
+    (RX 7800 XT), which an 8 GB card with SAM 3 and LightCraft on it too did not have (#69). Its skip connections are
+    now freed as they are used and its last convolution runs in bands of rows: 5.1 GB, the same result, faster. On a
+    card with 12 GB or less (_low_vram) the UNet and the ControlNet (~2.4 GB) also stay in RAM and move to the GPU for
+    their one step only (offload): 3.2 GB, ~0.5 s more.
 
     It sees the area at DAI_SIZE on its long side; what it took away is measured there and subtracted from the area at
     its full resolution (reflection_light), so nothing of the photo is redrawn. Its pipeline (DAIPipeline, with its own
@@ -1138,8 +1147,10 @@ class DAI:
         self.torch, self.dev = torch, dev
         self.dtype = torch.float32 if dev == "cpu" else torch.bfloat16
         d = mf.part_dir("dai")
-        self.unet = UNet2DConditionModel.from_pretrained(d, subfolder="unet", torch_dtype=self.dtype).to(dev).eval()
-        self.cn = ControlNetModel.from_pretrained(d, subfolder="controlnet", torch_dtype=self.dtype).to(dev).eval()
+        self.offload = dev != "cpu" and _low_vram()
+        home = "cpu" if self.offload else dev  # where the UNet and the ControlNet wait between removals
+        self.unet = UNet2DConditionModel.from_pretrained(d, subfolder="unet", torch_dtype=self.dtype).to(home).eval()
+        self.cn = ControlNetModel.from_pretrained(d, subfolder="controlnet", torch_dtype=self.dtype).to(home).eval()
         self.vae = AutoencoderKL.from_pretrained(d, subfolder="vae", variant="fp16",
                                                  torch_dtype=self.dtype).to(dev).eval()
         # vae_2 in float32: its picture is what the reflection is measured against (reflection_light), and in bf16
@@ -1162,6 +1173,8 @@ class DAI:
             self.prompt = te(ids)[0]
         del te
         _free_gpu()
+        if self.offload:
+            log(f"DAI: {_vram_gib():.1f} GB of video memory, the UNet and the ControlNet kept in RAM")
         log(f"DAI ready ({dev}, {str(self.dtype).split('.')[-1]})")
 
     def _control(self, z, t):
@@ -1179,22 +1192,54 @@ class DAI:
             res += list(r)
         return res, cn.mid_block(s, emb, encoder_hidden_states=self.prompt)
 
+    @contextlib.contextmanager
+    def _on_gpu(self, *parts):
+        """With the weights in RAM (offload): `parts` on the GPU for the block, back in RAM after it, so vae_2's decode
+        has the card's memory without them."""
+        if self.offload:
+            for m in parts:
+                m.to(self.dev)
+        try:
+            yield
+        finally:
+            if self.offload:
+                for m in parts:
+                    m.to("cpu")
+                _free_gpu()
+
     def _decode(self, z, x):
-        """vae_2's decoder on z, with the skip connections its encoder takes from picture x (CustomAutoencoderKL)."""
-        torch = self.torch
+        """vae_2's decoder on z, with the skip connections its encoder takes from picture x (CustomAutoencoderKL).
+        In float32 at full resolution its layers are large (a 128-channel one at 1024 x 688: 344 MB), so a skip is kept
+        at its encoder block's size until its decoder block takes it (then enlarged, as the model's own code does
+        first), and freed there."""
+        F = self.torch.nn.functional
         enc, dec = self.vae2.encoder, self.vae2.decoder
         s, skips = enc.conv_in(x), []
         for i, blk in enumerate(enc.down_blocks):
             s = blk(s)
-            o = self.zero[i](s)
-            skips.append(o if i == len(enc.down_blocks) - 1 else
-                         torch.nn.functional.interpolate(o, scale_factor=2, mode="bilinear", align_corners=False))
+            skips.append(self.zero[i](s))
+        del s
         if self.vae2.post_quant_conv is not None:
             z = self.vae2.post_quant_conv(z)
         s = dec.mid_block(dec.conv_in(z), None)
         for i, blk in enumerate(dec.up_blocks):
-            s = blk(s + skips[-(i + 1)])
-        return dec.conv_out(dec.conv_act(dec.conv_norm_out(s)))
+            o = skips.pop()  # the last encoder block's goes in as it is, the others twice as large
+            s = blk(s.add_(o if i == 0 else F.interpolate(o, scale_factor=2, mode="bilinear", align_corners=False)))
+            del o
+        return self._conv_out(dec.conv_act(dec.conv_norm_out(s)))
+
+    def _conv_out(self, s):
+        """vae_2's last convolution (128 channels to 3, 3 x 3) on s in bands of DAI_OUT_ROWS rows, each with the row
+        above and below it: in one piece at 1024 px ROCm's MIOpen took a 3.2 GB workspace for it."""
+        torch, conv = self.torch, self.vae2.decoder.conv_out
+        F = torch.nn.functional
+        h, p = s.shape[2], conv.padding[0]
+        bands = []
+        for a in range(0, h, DAI_OUT_ROWS):
+            b = min(h, a + DAI_OUT_ROWS)
+            band = F.pad(s[:, :, max(0, a - p):b + p], (0, 0, max(0, p - a), max(0, b + p - h)))
+            bands.append(F.conv2d(band, conv.weight, conv.bias, padding=(0, p)))
+        return torch.cat(bands, 2)
 
     def remove(self, src, progress=None):
         """src (an area: floats HxWx3, sRGB-encoded 0..1, or a PIL picture) without its reflection, drawn at DAI_SIZE
@@ -1216,9 +1261,11 @@ class DAI:
         with torch.no_grad():
             z = self.vae.encode(x.to(self.dtype)).latent_dist.mode() * self.vae.config.scaling_factor
             t = torch.zeros((1,), device=self.dev, dtype=torch.long)
-            down, mid = self._control(z, t)
-            out = self.unet(torch.zeros_like(z), t, encoder_hidden_states=self.prompt,
-                            down_block_additional_residuals=down, mid_block_additional_residual=mid).sample
+            with self._on_gpu(self.cn, self.unet):
+                down, mid = self._control(z, t)
+                out = self.unet(torch.zeros_like(z), t, encoder_hidden_states=self.prompt,
+                                down_block_additional_residuals=down, mid_block_additional_residual=mid).sample
+                del down, mid, z
             y = self._decode(out.float() / self.vae2.config.scaling_factor, x)[0, :, :sh, :sw]
         y = ((y.clamp(-1, 1) + 1) / 2).permute(1, 2, 0).cpu().numpy()
         _free_gpu()
