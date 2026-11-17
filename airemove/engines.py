@@ -7,8 +7,8 @@ pane of glass reflects ("Remove reflections").
 The accelerator is whatever PyTorch finds: NVIDIA (CUDA), AMD (ROCm, reported by torch as "cuda"), Intel Arc (xpu),
 Apple Silicon (mps) — else the processor, where only LaMa is practical. On a 16 GB card SDXL, FLUX and Qwen-Image
 don't fit together: the session unloads one before loading another. Up to 12 GB (SDXL_NEEDS_GIB) SDXL's and RORem's
-weights stay in RAM and move to the GPU part by part (SDXL.offload), and so do DAI's UNet and ControlNet
-(DAI.offload)."""
+weights stay in RAM and move to the GPU part by part (SDXL.offload) — layer by layer when other programs leave too
+little of the card free (SDXL_PARTS_GIB) —, and so do DAI's UNet and ControlNet (DAI.offload)."""
 import contextlib
 import os
 import numpy as np
@@ -129,16 +129,45 @@ def _vram_gib():
 # 7800 XT; the VAE's decode), plus SAM 3's ~1 GB and what the desktop and the app keep on the card: a 10 or 12 GB
 # card is too tight. Up to 12 GB the weights stay in RAM (peak 5.3 GB, ~3 s more a variant, the same fills)
 SDXL_NEEDS_GIB = 12.5
+# Moved part by part, the UNet's 4.8 GB still sit on the GPU for all the steps: a RORem variant peaked at 5.3 GB. An
+# 8 GB card with LightCraft on it too (~2 GB) and SAM 3 has ~4.2 GB free (#69): with less than this free the parts move
+# layer by layer instead, each layer while the one before computes (diffusers' group offload, streamed). Measured on
+# an RX 7800 XT at 1024 px: peak 2.6 GB (the VAE's encode and decode; the steps 0.3 GB), 10.4 s a variant instead of
+# 7.3, the same fills (bit for bit), ~6.6 GB of RAM pinned while it is loaded.
+SDXL_PARTS_GIB = 6.0
 
 
 def _low_vram():
     """True when the GPU has less memory than SDXL Inpainting needs while SAM 3 stays there too (an 8 GB card:
-    the weights alone leave no room for a step). AIREMOVE_CPU_OFFLOAD=1 / 0 forces the answer."""
+    the weights alone leave no room for a step). AIREMOVE_CPU_OFFLOAD=1 / 0 forces the answer (=layers: True, and
+    SDXL moves its weights layer by layer, SDXL.offload)."""
     forced = (os.environ.get("AIREMOVE_CPU_OFFLOAD") or "").strip().lower()
     if forced:
         return forced not in ("0", "false", "no", "off")
     vram = _vram_gib()
     return 0.0 < vram < SDXL_NEEDS_GIB
+
+
+def _free_vram_gib():
+    """What the GPU has free, in GiB, after this process gave back what PyTorch kept for later — what other programs
+    (LightCraft) and this process's models (SAM 3) hold is not free. None when it cannot be read (only NVIDIA and AMD
+    answer). On Linux the driver counts every process. On Windows it counts this one alone, and lends it system memory
+    when the card is full instead of failing (ROCm, an RX 7800 XT with 11.6 GB held by another process: 15.8 GB "free",
+    RORem's parts at 14.6 s a variant instead of 7.3): there a full card slows down, it does not stop."""
+    import torch
+    if device() != "cuda":
+        return None
+    _free_gpu()
+    try:
+        return torch.cuda.mem_get_info()[0] / 2**30
+    except Exception:
+        return None
+
+
+def _out_of_memory(e):
+    """True for the GPU out of memory (torch.OutOfMemoryError; a RuntimeError saying so on other backends)."""
+    import torch
+    return isinstance(e, getattr(torch, "OutOfMemoryError", ())) or "out of memory" in str(e).lower()
 
 
 # ------------------------------------------------------------------------------------------------ what is installed
@@ -447,18 +476,21 @@ class SDXL:
         dt = torch.float32 if dev == "cpu" else torch.float16  # the fp16-fix VAE makes half precision safe
         vae = AutoencoderKL.from_pretrained(mf.part_dir("sdxl-vae-fp16-fix"), torch_dtype=dt)
         own = {} if unet is None else {"unet": UNet2DConditionModel.from_pretrained(unet, torch_dtype=dt)}
-        pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
+        self.pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
             mf.part_dir("sdxl-inpaint"), vae=vae, variant="fp16", torch_dtype=dt, **own)
+        self.log = log
         # On a card with 12 GB or less (SDXL_NEEDS_GIB: SDXL Inpainting's fp16 weights are ~6.6 GB, a step peaks at
         # ~9.2 GB) the pipeline stays in RAM and each part moves to the GPU for its turn (accelerate's own offload):
-        # a few seconds more a variant, the same fills, no out-of-memory. 16 GB cards keep it all on the GPU.
-        self.offload = dev != "cpu" and _low_vram()
-        if self.offload:
-            pipe.enable_model_cpu_offload()
-            log(f"{self.name}: {_vram_gib():.1f} GB of video memory, weights kept in RAM and moved per step")
+        # a few seconds more a variant, the same fills, no out-of-memory. With less than SDXL_PARTS_GIB free (another
+        # program on the card) its layers move one by one instead. 16 GB cards keep it all on the GPU.
+        self.offload = None  # None: all on the GPU; "parts" / "layers": in RAM, moved part by part / layer by layer
+        if dev != "cpu" and _low_vram():
+            free = _free_vram_gib()
+            layers = dev == "cuda" and ((os.environ.get("AIREMOVE_CPU_OFFLOAD") or "").strip().lower() == "layers"
+                                        or free is not None and free < SDXL_PARTS_GIB)  # NVIDIA and AMD: measured
+            self._offload("layers" if layers else "parts", free)
         else:
-            pipe = pipe.to(dev)
-        self.pipe = pipe
+            self.pipe = self.pipe.to(dev)
         if dev == "mps":
             self.pipe.enable_attention_slicing()  # lower peak memory on unified-memory Macs
         # DPM++ 2M with Karras sigmas: in 12 steps the same fills (same seed, same picture) the model's own Euler
@@ -470,6 +502,27 @@ class SDXL:
         self.masked = (None, None)  # (key, latents) of the last removal's photo with the hole blanked out
         self.held = (None, None)  # (key, latents) of the last held pre-fill (fill hold=)
         log(f"{self.name} ready ({dev})")
+
+    def _offload(self, kind, free=None):
+        """The weights in RAM, moved to the GPU part by part ("parts": accelerate's model offload, each part whole for
+        its turn) or layer by layer ("layers": diffusers' group offload, the next layer copied while one computes) —
+        also from parts to layers, after an out-of-memory (fill)."""
+        torch, pipe = self.torch, self.pipe
+        if self.offload is not None:
+            pipe.remove_all_hooks()
+            for part in pipe.components.values():  # back in RAM part by part (pipe.to("cpu") warns per part)
+                if isinstance(part, torch.nn.Module):
+                    part.to("cpu")
+            _free_gpu()
+        if kind == "layers":
+            pipe.enable_group_offload(onload_device=torch.device(device()), offload_device=torch.device("cpu"),
+                                      offload_type="leaf_level", use_stream=True)
+        else:
+            pipe.enable_model_cpu_offload()
+        self.offload = kind
+        self.log(f"{self.name}: {_vram_gib():.1f} GB of video memory"
+                 + (f", {free:.1f} GB free" if free is not None else "") + ", weights kept in RAM and moved "
+                 + ("layer by layer" if kind == "layers" else "per step"))
 
     def vae_device(self):
         """Where a tensor the VAE gets must be made. With the CPU offload the parts sit on the CPU between steps while
@@ -501,7 +554,20 @@ class SDXL:
         hold=(image, region): at strength 1, the region of the hole (bool, src size: the sky it continues) follows
         `image` for the first SDXL_HOLD of the steps, then SDXL finishes it freely. What goes where is settled in the
         first steps, so nothing is drawn into that sky (a bush where a hat stood against it, an animal on a
-        skyline, the mottled ghost of the object), and the sky still meets the rest of the fill."""
+        skyline, the mottled ghost of the object), and the sky still meets the rest of the fill.
+        Out of memory with the parts moved whole (another program took more of the card since this engine loaded):
+        from then on they move layer by layer, and the fill runs again — the same fill."""
+        try:
+            return self._fill(src, mask, prompt, seed, steps, strength, progress, hold)
+        except Exception as e:
+            if self.offload != "parts" or device() != "cuda" or not _out_of_memory(e):
+                raise
+            self.log(f"{self.name}: out of video memory ({str(e).splitlines()[0][:120]})")
+        # out of the except: its traceback no longer holds the step's tensors on the GPU
+        self._offload("layers", _free_vram_gib())
+        return self._fill(src, mask, prompt, seed, steps, strength, progress, hold)
+
+    def _fill(self, src, mask, prompt, seed, steps, strength, progress, hold):
         S = self.S
         image = src.resize((S, S), Image.LANCZOS)
         mask_image = mask.resize((S, S), Image.NEAREST).filter(ImageFilter.MaxFilter(9))

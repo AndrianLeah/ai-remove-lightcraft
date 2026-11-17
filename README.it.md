@@ -173,7 +173,7 @@ delle impostazioni (per esempio in `birefnet.disabled`): quelle maschere userann
 | **Windows 10/11** | scheda NVIDIA (GeForce GTX 750 o successive), AMD Radeon RX 7000/9000 o Intel Arc; senza GPU funziona solo LaMa |
 | **macOS 12+** | Mac con chip Apple (M1 o successivi); meglio con almeno 16 GB di memoria |
 | **Linux x86-64** | scheda NVIDIA (GTX 750 o successive), oppure AMD con ROCm |
-| **Memoria della GPU** | 8 GB per RORem, il modello predefinito, e per DAI ("Rimuovi riflessi") (fino a 12 GB i loro pesi restano nella RAM e passano alla GPU un pezzo alla volta: un po' più lento); 12 GB per FLUX, 16 GB per Qwen-Image. Con meno funzionano comunque LaMa e la selezione |
+| **Memoria della GPU** | 8 GB per RORem, il modello predefinito, e per DAI ("Rimuovi riflessi") (fino a 12 GB i loro pesi restano nella RAM e passano alla GPU un pezzo alla volta: un po' più lento; quando altri programmi lasciano meno di 6 GB liberi sulla scheda, quelli di RORem passano uno strato alla volta: circa 3 s in più a variante); 12 GB per FLUX, 16 GB per Qwen-Image. Con meno funzionano comunque LaMa e la selezione |
 | **Spazio su disco** | da 5 GB (solo LaMa) a circa 30 GB (tutti i modelli) |
 | **Internet** | durante l'installazione; poi solo un controllo di nuove versioni su GitHub, al massimo una volta al giorno (non invia nulla su di te o sulle foto; si spegne con `"update_check": false` in `work/settings.json`) |
 
@@ -383,7 +383,8 @@ istruzioni in [AGENTS.md](AGENTS.md).
   chiede una volta il permesso. Rispondi *Consenti*.
 - **Memoria della GPU esaurita**: usa RORem invece di FLUX, oppure meno varianti, e chiudi gli altri programmi che
   usano la GPU. Se finisce anche con RORem su una scheda da 16 GB o più (altri programmi ne tengono una parte),
-  `AIREMOVE_CPU_OFFLOAD=1` nell'ambiente gli fa tenere i pesi nella RAM, come su una scheda da 8 GB.
+  `AIREMOVE_CPU_OFFLOAD=1` nell'ambiente gli fa tenere i pesi nella RAM, come su una scheda da 8 GB
+  (`AIREMOVE_CPU_OFFLOAD=layers`: sempre uno strato alla volta, il minimo di memoria della GPU).
 - **LightCraft o Chromaforge in Flatpak (Linux)**: l'installer dà all'app i permessi necessari: rete locale, cartella
   `AIRemove`, avvio di programmi esterni. Si possono togliere con
   `flatpak override --user --reset ai.storyteller.lightcraft` (LightCraft) o

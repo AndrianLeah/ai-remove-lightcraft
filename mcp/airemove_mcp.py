@@ -132,8 +132,9 @@ masks, else the whole photo).""",
 - "Chromaforge non ha accettato AI Remove": its control channel wants the token it writes at every start
   (control-token-<port> in its settings folder): restart Chromaforge.
 - First FLUX/RORem variant slow on AMD: the GPU compiles its kernels once (minutes), then it is fast.
-- Out of GPU memory: use RORem instead of FLUX (it needs 8 GB; up to 12 GB its weights stay in RAM, and
-  AIREMOVE_CPU_OFFLOAD=1 does the same on a larger card), fewer variants, close other GPU apps.
+- Out of GPU memory: use RORem instead of FLUX (it needs 8 GB; up to 12 GB its weights stay in RAM, layer by layer
+  when other programs leave less than 6 GB free, and AIREMOVE_CPU_OFFLOAD=1 does the same on a larger card,
+  =layers always layer by layer), fewer variants, close other GPU apps.
 - Windows SmartScreen / macOS Gatekeeper warnings on the install files: they are unsigned scripts. Windows: More info
   > Run anyway. macOS blocks a double-click on a downloaded unsigned script and macOS 15 dropped right-click > Open:
   run `sh "Install on Mac.command"` in Terminal (Gatekeeper does not check scripts started that way), or use System
