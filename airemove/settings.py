@@ -352,6 +352,7 @@ class Window:
         self.tk, self.ui, self.on_change = tk, ui, on_change
         self.own_root = master is None
         top = self.top = tk.Tk(className="airemove") if master is None else tk.Toplevel(master)
+        ui.check_fonts(top)  # the symbols in the texts: ui.glyphs()
         self.k = k = max(1.0, top.winfo_fpixels("1i") / 96.0)
         win = sys.platform == "win32"
         fam = "Segoe UI" if win else ("Helvetica" if sys.platform == "darwin" else "TkDefaultFont")
@@ -399,7 +400,7 @@ class Window:
     def button(self, master, text, cmd, accent=False, small=True):
         ui = self.ui
         bg, fg, hi = (ui.ACCENT, "#1b1b1b", ui.ACCENT_HI) if accent else (ui.BTN, ui.FG, ui.BTN_HI)
-        b = ui.Button(master, text=text, command=cmd, relief="flat", bd=0, cursor="hand2",  # macOS: a Label
+        b = ui.Button(master, text=ui.glyphs(text), command=cmd, relief="flat", bd=0, cursor="hand2",  # macOS: a Label
                            font=self.f_bold if accent else (self.f_small if small else self.f_txt), bg=bg, fg=fg,
                            activebackground=hi, activeforeground=fg, disabledforeground=ui.OFF,
                            padx=int(9 * self.k), pady=int(3 * self.k))
@@ -608,7 +609,7 @@ class Window:
         m = tk.Menu(self.top, tearoff=0, bg=ui.CARD, fg=ui.FG, activebackground=ui.ACCENT,
                     activeforeground="#1b1b1b", bd=0, relief="flat", font=self.f_small)
         for p, how in a.get("apps") or []:
-            mark = "✓  " if _same(p, a.get("app")) else "     "
+            mark = ui.glyphs("✓  ") if _same(p, a.get("app")) else "     "
             m.add_command(label=f"{mark}{p}   ({_(HOW.get(how, how), variable='')})",
                           command=lambda p=p: self.do("program", h, p))
         if a.get("apps"):

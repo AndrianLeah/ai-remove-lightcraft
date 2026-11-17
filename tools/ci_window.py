@@ -10,7 +10,9 @@ Python. DIR's app code is imported; the Session is a stand-in (no photo yet, no 
     of its edges changes it once;
   - opened from the panel (master, on_close), back to the panel and reopened (reopen): zoomed again, the top bar still;
   - the buttons (#66): Labels on macOS, in the window's colours (Aqua draws a Button its own grey), and a LabelButton
-    behaves as a button on every system.
+    behaves as a button on every system;
+  - the symbols in the texts (#69), where Tk draws with the X server's own fonts (Linux): each drawn at every size, not
+    the server's dotted box (symbols()).
 One Tk for the whole test, the app's own window's (macOS's Tk does not take a second one, nor a new one after it): the
 other windows are on it, as the panel's are. Exit status 1 at the first check that fails; 0 with "skipped" when there is
 no display to open a window on.
@@ -96,9 +98,119 @@ def buttons(tk, ui, app, r):
     top.destroy()
 
 
+BOX = ""  # in no misc-fixed font: the X server draws its default glyph for it, the dotted box
+BOLD = "›–—…"  # what the bold texts (the main action, titles, model names) have outside Latin-1
+
+
+def symbols(tk, ui, app, r, begin):
+    """The symbols in the texts (#69). Where Tk draws with the X server's own fonts (X11 without Xft: the Tk of uv's
+    Python on Linux), a character shows only if the misc-fixed font Tk takes for its size has it, else the server's
+    dotted box. There every character outside Latin-1 that the app's texts can show (its string literals and the
+    catalogs, as ui.glyphs() gives them) is drawn at each size from 8 to 26 px and compared with the box (and with Tk's
+    \\uXXXX, for one that no font has): none is either, nor in bold the ones bold texts have. The box is seen: the
+    symbols ui.CORE_GLYPHS stands in for are boxes at some size. And no text in the window has one of those.
+    Elsewhere (Windows, macOS, a Tk with Xft) the symbols stay as they are: skipped. AIREMOVE_CI_SHOTS=DIR: the window
+    and the characters drawn, as PNGs there."""
+    import ast
+    import json
+    import unicodedata
+    from tkinter import font as tkfont
+    try:
+        fs = r.tk.call("::tk::pkgconfig", "get", "fontsystem")
+    except tk.TclError:
+        fs = "?"
+    if not ui.CORE_FONTS:
+        print(f"  --  the symbols stay as they are: Tk draws with its system's fonts ({fs})")
+        return
+    from PIL import Image, ImageGrab
+    print(f"  Tk's font system: {fs}; the window's text: {r.tk.call('font', 'actual', app.f_txt)}")
+    code = Path(ui.__file__).resolve().parent
+    texts = []
+    for f in sorted(code.glob("*.py")):
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        doc = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr)}  # docstrings: not shown
+        texts += [n.value for n in ast.walk(tree)
+                  if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in doc]
+    for f in sorted((code / "locales").glob("*.json")):
+        texts += [v for v in json.loads(f.read_text(encoding="utf-8")).values() if isinstance(v, str)]
+    shown = sorted({c for t in texts for c in ui.glyphs(t)
+                    if ord(c) > 0xFF and not unicodedata.category(c).startswith("C")})
+    replaced = sorted({c for s in ui.CORE_GLYPHS for c in s})
+
+    def walk(w):
+        yield w
+        for c in w.winfo_children():
+            yield from walk(c)
+    left = []
+    for w in walk(r):
+        try:
+            t = str(w.cget("text"))
+        except tk.TclError:
+            continue
+        if any(c in t for c in replaced):
+            left.append(t)
+    expect(not left, f"no text in the window has a symbol ui.CORE_GLYPHS stands in for {left[:4]}")
+
+    top = tk.Toplevel(r, bg="#000000")
+    top.overrideredirect(True)
+    top.geometry("+0+0")
+    lbl = tk.Label(top, text=BOX, bg="#000000", fg="#ffffff", width=8, anchor="w", padx=2, pady=2)
+    lbl.pack()
+    for _ in range(300):
+        top.update()
+        if lbl.winfo_viewable():
+            break
+        time.sleep(0.01)
+
+    def shot(text):
+        lbl.configure(text=text)
+        top.update()
+        x, y = lbl.winfo_rootx(), lbl.winfo_rooty()
+        return ImageGrab.grab((x, y, x + lbl.winfo_width(), y + lbl.winfo_height()))
+
+    boxes, rows = {}, []  # (character, weight) -> the sizes it is a box at; the pictures, for AIREMOVE_CI_SHOTS
+    for weight in ("normal", "bold"):
+        begin(f"the symbols, {weight}")
+        for px in range(8, 27):
+            f = tkfont.Font(root=r, family=app.font(10)[0], size=-px, weight=weight)
+            lbl.configure(font=f)
+            box = shot(BOX).tobytes()
+            row = []
+            for c in shown + replaced:
+                im = shot(c)
+                row.append(im)
+                if im.tobytes() == box or f.measure(c) == f.measure(f"\\u{ord(c):04X}"):
+                    boxes.setdefault((c, weight), []).append(px)
+            rows.append(row)
+    top.destroy()
+
+    def sizes(c, weight):
+        s = boxes.get((c, weight), [])
+        return f"{c} {s[0]}-{s[-1]} px" if len(s) == s[-1] - s[0] + 1 else f"{c} {s}" if s else ""
+    bad = [sizes(c, "normal") for c in shown if (c, "normal") in boxes]
+    bad += [sizes(c, "bold") + " bold" for c in BOLD if (c, "bold") in boxes]
+    expect(not bad, f"the {len(shown)} characters the texts can show ({''.join(shown)}) drawn at 8 to 26 px, none a "
+                    f"box" + (f": boxes {bad} (xfonts-base installed?)" if bad else ""))
+    seen = [sizes(c, "normal") for c in replaced if (c, "normal") in boxes]
+    expect(seen, f"the box is seen: of the symbols ui.CORE_GLYPHS stands in for, boxes {', '.join(seen) or 'none'}")
+    out = os.environ.get("AIREMOVE_CI_SHOTS")
+    if out:  # the characters (a row per size, normal then bold; the ones stood in for on the right) and the window
+        Path(out).mkdir(parents=True, exist_ok=True)
+        w, h = max(i.width for row in rows for i in row), max(i.height for row in rows for i in row)
+        sheet = Image.new("RGB", (w * len(rows[0]), h * len(rows)))
+        for j, row in enumerate(rows):
+            for i, im in enumerate(row):
+                sheet.paste(im, (i * w, j * h))
+        sheet.save(Path(out) / "symbols.png")
+        r.update()
+        ImageGrab.grab((r.winfo_rootx(), r.winfo_rooty(), r.winfo_rootx() + r.winfo_width(),
+                        r.winfo_rooty() + r.winfo_height())).save(Path(out) / "window.png")
+        print(f"  the characters and the window: {out}")
+
+
 def main(app_dir):
     faulthandler.enable()  # a crash inside Tk: where it was, on stderr
-    sys.stdout.reconfigure(line_buffering=True)
+    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")  # the symbols (ci_smoke.py reads UTF-8)
     sys.path.insert(0, str(Path(app_dir) / "airemove"))
     import tkinter as tk
     import ui
@@ -169,6 +281,8 @@ def main(app_dir):
            f"restored, it keeps a size of its own: {r.winfo_width()} px of {sw} ({r.wm_geometry()})")
     begin("the buttons")
     buttons(tk, ui, app, r)
+    begin("the symbols")
+    symbols(tk, ui, app, r, begin)
 
     # --- sized by its content from its first layout: as in 1.8.0 before the zoom (its size and the zoom left out)
     begin("a window sized by its content")

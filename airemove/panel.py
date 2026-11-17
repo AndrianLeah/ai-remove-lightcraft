@@ -193,6 +193,7 @@ class Panel:
             except Exception:
                 pass
         r = self.root = tk.Tk(className="airemove")
+        ui.check_fonts(r)  # the symbols in the texts: ui.glyphs()
         r.title("AI Remove")
         r.configure(bg=BG)
         self.k = k = max(1.0, r.winfo_fpixels("1i") / 96.0)
@@ -229,7 +230,7 @@ class Panel:
     # -------------------------------------------------------------- layout: the design file's order, the window's words
     def button(self, master, text, cmd, accent=False, small=False, green=False):
         bg, fg = (ACCENT, "#1b1b1b") if accent else (GREEN, "#ffffff") if green else (BTN, FG)
-        return tk.Button(master, text=text, command=cmd, relief="flat", bd=0, cursor="hand2",
+        return tk.Button(master, text=ui.glyphs(text), command=cmd, relief="flat", bd=0, cursor="hand2",
                          font=self.f_bold if accent or green else (self.f_small if small else self.f_txt),
                          bg=bg, fg=fg, activebackground=ACCENT_HI if accent else GREEN_HI if green else BTN_HI,
                          activeforeground=fg, disabledforeground=OFF, padx=int(8 * self.k),
@@ -525,7 +526,7 @@ class Panel:
     def show_model_info(self):
         """"What it does": the window's description of the model, under it, open or closed as in the window."""
         m = self.model_key()
-        self.info_btn.configure(text="ⓘ  " + (_("Hide") if self.show_info else _("What it does")))
+        self.info_btn.configure(text=ui.glyphs("ⓘ  " + (_("Hide") if self.show_info else _("What it does"))))
         if self.show_info and m:
             self.info_lbl.configure(text=model_infos()[m])
             self.info_lbl.pack(fill="x", pady=(int(5 * self.k), 0))
@@ -599,7 +600,7 @@ class Panel:
         has_sel = bool(self.mask_options()) or self.mode == "reflect" or listed
         on = bool(ready and has_sel and self.model_key() and can)
         # off, the accent and green buttons are grey, as the window's (FlatButton): never dimmed text on a colour
-        self.gen_btn.configure(text=text, state="normal" if on else "disabled", bg=ACCENT if on else BTN)
+        self.gen_btn.configure(text=ui.glyphs(text), state="normal" if on else "disabled", bg=ACCENT if on else BTN)
         s = self.session_for(self.photo[0])[1] if self.photo else None
         live = self.chosen_removals(s)
         on = bool(live and ready)
@@ -919,7 +920,7 @@ class Panel:
                     self.events.put(("progress", (_("{file} updated in {app}", file=out.name, app=self.host.name)
                                                   if updated else
                                                   _("{file} created and stacked on the original in {app}",
-                                                    file=out.name, app=self.host.name)) + " ✓"))
+                                                    file=out.name, app=self.host.name)) + ui.glyphs(" ✓")))
                 elif job[0] == "window":
                     self.prepare_window(*job[1:])
                 elif job[0] == "split":
@@ -1116,7 +1117,7 @@ class Panel:
             cell.grid(row=i // 2, column=i % 2, padx=2, pady=2, sticky="n")
             img = tk.Label(cell, image=ph, bg=CARD_HI, bd=0)
             img.pack(padx=2, pady=(2, 0))
-            cap = tk.Label(cell, text=("✓  " if on else "") + A.variant_text(r, label), font=self.f_small,
+            cap = tk.Label(cell, text=(ui.glyphs("✓  ") if on else "") + A.variant_text(r, label), font=self.f_small,
                            fg=ACCENT if on else FG, bg=CARD_HI)
             cap.pack(pady=(1, 2))
             for w in (cell, img, cap):
@@ -1124,8 +1125,8 @@ class Panel:
                 w.bind("<Button-3>", lambda e, i=i: self.variant_menu(e, i))
         if not r.candidates:
             self.var_note.configure(text=_("Generating the variants…") if self.busy else
-                                    _("No variants: add some with \"＋ more for #{id}\" under \"Remove selection\"",
-                                      id=r.id))
+                                    ui.glyphs(_("No variants: add some with \"＋ more for #{id}\" under "
+                                                "\"Remove selection\"", id=r.id)))
             self.var_note.pack(fill="x")
         elif r.draws():
             f = s.enlarged(r, "fill")
