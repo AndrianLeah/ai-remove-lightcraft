@@ -173,7 +173,7 @@ delle impostazioni (per esempio in `birefnet.disabled`): quelle maschere userann
 | **Windows 10/11** | scheda NVIDIA (GeForce GTX 750 o successive), AMD Radeon RX 7000/9000 o Intel Arc; senza GPU funziona solo LaMa |
 | **macOS 12+** | Mac con chip Apple (M1 o successivi); meglio con almeno 16 GB di memoria |
 | **Linux x86-64** | scheda NVIDIA (GTX 750 o successive), oppure AMD con ROCm |
-| **Memoria della GPU** | 8 GB per RORem, il modello predefinito (fino a 12 GB i suoi pesi restano nella RAM e passano alla GPU un pezzo alla volta: un po' più lento); 12 GB per FLUX, 16 GB per Qwen-Image. Con meno funzionano comunque LaMa e la selezione |
+| **Memoria della GPU** | 8 GB per RORem, il modello predefinito, e per DAI ("Rimuovi riflessi") (fino a 12 GB i loro pesi restano nella RAM e passano alla GPU un pezzo alla volta: un po' più lento); 12 GB per FLUX, 16 GB per Qwen-Image. Con meno funzionano comunque LaMa e la selezione |
 | **Spazio su disco** | da 5 GB (solo LaMa) a circa 30 GB (tutti i modelli) |
 | **Internet** | durante l'installazione; poi solo un controllo di nuove versioni su GitHub, al massimo una volta al giorno (non invia nulla su di te o sulle foto; si spegne con `"update_check": false` in `work/settings.json`) |
 
