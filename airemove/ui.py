@@ -18,6 +18,7 @@ Windows, macOS and Linux: modifiers, mouse buttons and the wheel differ between 
 import ctypes
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -49,6 +50,39 @@ ALT = "Option" if MAC else "Alt"
 ICON = A.ROOT / "assets" / "icon" / "airemove-256.png"
 # px (times the screen's scale) more than one row needs, for the top bar to go back to one row from two (fit_header)
 HEAD_HYSTERESIS = 24
+# The symbols in the texts where Tk draws with the X server's own fonts: Tk on X11 without Xft, as uv's Python has it on
+# Linux (its Tk's build says "no-xft"). The X server's fonts are bitmaps, misc-fixed on a stock Ubuntu (xfonts-base),
+# and a character outside Latin-1 shows only if the misc-fixed font Tk takes for that size has it: for one it lacks
+# the server answers with its default glyph, a dotted box, and Tk looks no further (#69: the Brush's ✎, the gear).
+# Which font of a size Tk takes depends on the order the server lists them in (7x13 or 12x13ja at 13 px). So there each
+# of these is drawn as a symbol that every misc-fixed font from 5x8 to 10x20 has (the bold ones too, for the ones a
+# bold text has: › »), or left out ("") where none of those says the same. Elsewhere (Windows, macOS, Tk with Xft:
+# fontconfig finds a font for each character) they stay as they are.
+CORE_GLYPHS = {"▶▶": "»", "▶": "›", "＋": "+", "↶": "←", "☀": "☼", "✦": "◆", "▾": "▼", "⚙": "≡", "⚠": "!",
+               "✓": "√", "ⓘ": "(i)", "◎": "", "✎": "", "⌫": "", "◐": "", "✂": "", "⏎": "", "⟳": ""}
+CORE_GLYPHS_RE = re.compile("|".join(re.escape(s) for s in sorted(CORE_GLYPHS, key=len, reverse=True)))
+CORE_FONTS = False  # whether Tk draws with the X server's fonts: check_fonts()
+
+
+def check_fonts(w):
+    """Whether this Tk draws text with the X server's own fonts (X11 without Xft), as Tk's own default fonts ask
+    (ttk/fonts.tcl): sets CORE_FONTS, for glyphs(). Called once a Tk is there (the window, the panel, Settings)."""
+    global CORE_FONTS
+    try:
+        fs = w.tk.call("::tk::pkgconfig", "get", "fontsystem")
+    except tk.TclError:  # as Tk itself takes it: not Xft
+        fs = ""
+    CORE_FONTS = X11 and fs != "xft"
+    return CORE_FONTS
+
+
+def glyphs(text):
+    """text as this Tk can draw it: with the X server's fonts its symbols as CORE_GLYPHS says (one left out takes the
+    spaces that set it apart with it); elsewhere as it is."""
+    if not CORE_FONTS or not text:
+        return text
+    out = CORE_GLYPHS_RE.sub(lambda m: CORE_GLYPHS[m.group()] or "\0", text)
+    return re.sub(r" *\0 *", " ", out).strip() if "\0" in out else out
 
 
 def mods(e):
@@ -556,7 +590,7 @@ class ModelPicker(tk.Frame):
         k, pad = app.k, int(9 * app.k)
         self.name = tk.Label(self, font=app.f_bold, fg=FG, bg=BTN, anchor="w")
         self.time = tk.Label(self, font=app.f_small, fg=DIM, bg=BTN, anchor="e")
-        self.arrow = tk.Label(self, text="▾", font=app.f_txt, fg=FG, bg=BTN)
+        self.arrow = tk.Label(self, text=glyphs("▾"), font=app.f_txt, fg=FG, bg=BTN)
         self.use = tk.Label(self, font=app.f_small, fg=DIM, bg=BTN, anchor="w")
         # what the model is not for, always in sight (model_caveat): FLUX Fill draws people back into a crowd
         self.caveat = tk.Label(self, font=app.f_small, fg=WARN, bg=BTN, anchor="w", justify="left")
@@ -588,7 +622,8 @@ class ModelPicker(tk.Frame):
         self.use.configure(text=use)
         self.time.configure(text=t)
         caveat = self.app.model_caveat(m) if m in self.meta else ""
-        self.caveat.configure(text="⚠  " + caveat if caveat else "", wraplength=self.app.side_w - int(90 * self.k))
+        self.caveat.configure(text=glyphs("⚠  " + caveat) if caveat else "",
+                              wraplength=self.app.side_w - int(90 * self.k))
         if caveat:
             self.caveat.grid()
         else:
@@ -650,7 +685,7 @@ class ModelPicker(tk.Frame):
         c.pack(fill="x")
         ws = (f, txt, head, a, b, c)
         if app.model_caveat(m):  # what it is not for, in the list too: chosen knowing it
-            d = tk.Label(txt, text="⚠  " + app.model_caveat(m), font=app.f_small, fg=WARN, bg=bg, anchor="w",
+            d = tk.Label(txt, text=glyphs("⚠  " + app.model_caveat(m)), font=app.f_small, fg=WARN, bg=bg, anchor="w",
                          justify="left", wraplength=wrap)
             d.pack(fill="x", pady=(int(2 * k), 0))
             ws += (d,)
@@ -721,6 +756,7 @@ class App:
             pass
         # WM_CLASS "Airemove": the Linux menu entry matches it
         r = self.root = tk.Toplevel(master, class_="airemove") if master is not None else tk.Tk(className="airemove")
+        check_fonts(r)  # the symbols in the texts: glyphs()
         k = self.k = max(1.0, r.winfo_fpixels("1i") / 96.0)
         self.side_w = int(min(372 * k, max(300 * k, 0.34 * r.winfo_screenwidth())))  # narrower on a narrow screen
         self.THUMB, self.ROWTHUMB = (self.side_w - int(96 * k)) // 2, int(52 * k)
@@ -766,7 +802,7 @@ class App:
         """Flat button with a hover colour. kind: grey | accent | green | ghost."""
         bg, fg, hi = {"grey": (BTN, FG, BTN_HI), "accent": (ACCENT, "#1b1b1b", ACCENT_HI),
                       "green": (GREEN, "#ffffff", GREEN_HI), "ghost": (SIDE, DIM, CARD)}[kind]
-        b = FlatButton(parent, text=text, command=cmd, bg=bg, fg=fg, activebackground=hi, activeforeground=fg,
+        b = FlatButton(parent, text=glyphs(text), command=cmd, bg=bg, fg=fg, activebackground=hi, activeforeground=fg,
                        relief="flat", bd=0, cursor="hand2", font=self.f_small if small else self.f_txt,
                        padx=int(12 * self.k), pady=int((4 if small else 7) * self.k), disabledforeground=OFF,
                        **kw)
@@ -812,7 +848,7 @@ class App:
         def width(lbl, text, pad):  # what a label takes with this text: the text, its own border, its padding
             f = tkfont.Font(font=lbl.cget("font"))
             return (f.measure(text) + lbl.winfo_reqwidth() - f.measure(lbl.cget("text")) + int(pad * k)) if text else 0
-        ver, gh_full, gh_short = A.system.VERSION, "ⓘ  GitHub", "ⓘ"
+        ver, gh_full, gh_short = A.system.VERSION, glyphs("ⓘ  GitHub"), glyphs("ⓘ")
         title_w = width(self.title, self.title_text, 12)
         fixed = self.app_lbl.winfo_reqwidth() + int(18 * k) + (
             self.open_btn.winfo_reqwidth() if self.open_btn.winfo_manager() else 0)
@@ -976,7 +1012,7 @@ class App:
         self.model_lbl = tk.Label(mrow, text=_("Model"), font=self.f_small, fg=DIM, bg=CARD)
         self.model_lbl.pack(side="left")
         # what the model is good at: one click away (the menu itself says it in a few words)
-        self.info_btn = tk.Label(mrow, text="ⓘ  " + _("What it does"), font=self.f_small, fg=DIM, bg=CARD,
+        self.info_btn = tk.Label(mrow, text=glyphs("ⓘ  " + _("What it does")), font=self.f_small, fg=DIM, bg=CARD,
                                  cursor="hand2")
         self.info_btn.pack(side="right")
         self.info_btn.bind("<Button-1>", lambda e: self.toggle_model_info())
@@ -1087,7 +1123,8 @@ class App:
         self.version_lbl = tk.Label(head, text=A.system.VERSION, font=self.f_small, fg=DIM, bg=BG)
         self.version_lbl.pack(side="left", anchor="s", padx=(int(6 * k), 0), pady=(0, int(2 * k)))
         # where AI Remove lives: the code, the releases and where to report a problem
-        repo = self.repo_lbl = tk.Label(head, text="ⓘ  GitHub", font=self.f_small, fg=DIM, bg=BG, cursor="hand2")
+        repo = self.repo_lbl = tk.Label(head, text=glyphs("ⓘ  GitHub"), font=self.f_small, fg=DIM, bg=BG,
+                                        cursor="hand2")
         repo.pack(side="left", anchor="s", padx=(int(10 * k), 0), pady=(0, int(2 * k)))
         repo.bind("<Enter>", lambda e: repo.configure(fg=ACCENT))
         repo.bind("<Leave>", lambda e: repo.configure(fg=DIM))
@@ -1384,15 +1421,15 @@ class App:
                                    model=_(MODEL_NAMES[m]))
             accent = first and on  # dark text on the accent colour: never greyed out on it
             b._bg, b._hi = (ACCENT, ACCENT_HI) if accent else (BTN, BTN_HI)
-            b.configure(text=text, state="normal" if on else "disabled", bg=b._bg, activebackground=b._hi,
+            b.configure(text=glyphs(text), state="normal" if on else "disabled", bg=b._bg, activebackground=b._hi,
                         fg="#1b1b1b" if accent else FG, font=self.f_bold if accent else self.f_small)
             if not b.winfo_manager():
                 b.pack(fill="x", pady=(int(6 * self.k), 0),
                        after=self.split_btn if self.split_btn.winfo_manager() else self.gen_btn)
         rest = self.waiting_for(m)
         if len(rest) >= 2 and not self.writing:
-            self.all_btn.configure(text="▶▶  " + _("Generate all {n} waiting with {model}", n=len(rest),
-                                                   model=_(MODEL_NAMES[m])))
+            self.all_btn.configure(text=glyphs("▶▶  " + _("Generate all {n} waiting with {model}", n=len(rest),
+                                                          model=_(MODEL_NAMES[m]))))
             self.all_btn.pack(fill="x", pady=(int(6 * self.k), 0), after=b if b.winfo_manager() else
                               self.split_btn if self.split_btn.winfo_manager() else self.gen_btn)
         else:
@@ -1482,8 +1519,8 @@ class App:
         reflect = self.model_key() in A.REFLECTION_MODELS  # the whole photo with nothing selected; never in parts
         draw = self.model_key() in A.DRAW_MODELS  # the selection is the shape of what is drawn: never in parts
         self.gen_btn.configure(state="normal" if ((has or reflect) and ready) else "disabled",
-                               text=(_("Remove reflections") if reflect else _("Draw in the selection") if draw
-                                     else _("Remove selection")) + "  ⏎")
+                               text=glyphs((_("Remove reflections") if reflect else _("Draw in the selection")
+                                            if draw else _("Remove selection")) + "  ⏎"))
         self.split_btn.configure(state="normal" if (has and ready and not reflect and not draw) else "disabled")
         if reflect or draw:  # parts are for removing only: not in Fill nor Reflections
             self.split_btn.pack_forget()
@@ -2055,7 +2092,7 @@ class App:
         else:
             msg = (_("{file} updated in {app}", file=out.name, app=self.s.app) if updated else
                    _("{file} created and stacked on the original in {app}", file=out.name, app=self.s.app))
-        self.set_idle_status(msg + " ✓")
+        self.set_idle_status(msg + glyphs(" ✓"))
         self.update_buttons()
         if getattr(self, "open_after_save", None) is not None:
             self.root.after(800, lambda: self.open_now(self.open_after_save))
@@ -2239,7 +2276,7 @@ class App:
         if not r.candidates:
             text = (_("Not made yet: choose a model above, then \"Generate #{id}\"", id=r.id) if self.waiting(r) else
                     _("Generating the variants…") if self.busy else
-                    _("No variants: add some with \"＋ more for #{id}\" under \"Remove selection\"", id=r.id))
+                    glyphs(_("No variants: add some with \"＋ more for #{id}\" under \"Remove selection\"", id=r.id)))
             tk.Label(self.vars.inner, text=text, font=self.f_small, fg=DIM, bg=CARD, justify="left",
                      wraplength=self.side_w - int(80 * self.k)).pack(anchor="w")
             return
@@ -2254,7 +2291,7 @@ class App:
             lb = tk.Label(f, image=ph, bg=CARD_HI, bd=0)
             lb.image = ph
             lb.pack(padx=3, pady=(3, 0))
-            cap = tk.Label(f, text=("✓  " if on else "") + A.variant_text(r, label), font=self.f_small,
+            cap = tk.Label(f, text=(glyphs("✓  ") if on else "") + A.variant_text(r, label), font=self.f_small,
                            fg=ACCENT if on else FG, bg=CARD_HI)
             cap.pack(pady=(2, 3))
             for w in (f, lb, cap):
@@ -2305,7 +2342,7 @@ class App:
         for f, (label, __) in zip(self.tiles, r.candidates):  # the tile's caption: its strength
             for w in f.winfo_children():
                 if isinstance(w, tk.Label) and w.cget("text").endswith("%"):
-                    w.configure(text=("✓  " if label == r.chosen_label() else "") + A.variant_text(r, label))
+                    w.configure(text=(glyphs("✓  ") if label == r.chosen_label() else "") + A.variant_text(r, label))
 
     def strength_done(self):
         """The slider let go: the tiles redrawn and the project saved (the DNG on the next save)."""
@@ -2385,7 +2422,7 @@ class App:
         else:
             self.model_info.pack_forget()
             self.info_pad.pack(after=above, fill="x")
-        self.info_btn.configure(text="ⓘ  " + (_("Hide") if self.show_info else _("What it does")))
+        self.info_btn.configure(text=glyphs("ⓘ  " + (_("Hide") if self.show_info else _("What it does"))))
 
     def toggle_model_info(self):
         self.show_info = not self.show_info

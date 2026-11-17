@@ -12,7 +12,9 @@
 # area upright, the fill in the sensor data), the MCP server over stdio, and the uninstaller
 # (tools/ci_smoke.py), Chromaforge's old and new names and the Settings window's logic (tools/ci_settings.py, made-up
 # apps and install), the window opening zoomed with its top bar still, also sized by its content and from the panel
-# (tools/ci_window.py, the install's Tk: Tk 9 on the Mac). Before the install: a program
+# (tools/ci_window.py, the install's Tk: Tk 9 on the Mac), and on Linux, where that Tk draws with the X server's own
+# fonts (xfonts-base, as on a desktop), every symbol of its texts drawn, no dotted box (#69; the window and the symbols
+# as drawn: the "window-linux" artifact). Before the install: a program
 # reading install-status.json cannot stop the installer's writes of it (tools/ci_status.py).
 # No secrets, no photos.
 name: CI
@@ -74,6 +76,7 @@ jobs:
             echo "AIREMOVE_DIR=${RUNNER_TEMP}${sep}AI Remove CI"
             echo "MCP_BEFORE_DIR=${RUNNER_TEMP}${sep}mcp-before"
             echo "UV_CACHE_DIR=${RUNNER_TEMP}${sep}uv-cache"
+            echo "AIREMOVE_CI_SHOTS=${RUNNER_TEMP}${sep}window"
           } >> "$GITHUB_ENV"
           echo "uv on the PATH: $(command -v uv || echo none) (the bootstrap must fetch its own)"
       - name: Restore uv's cache
@@ -84,6 +87,11 @@ jobs:
           key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('installer/install.py') }}
           restore-keys: uv-${{ runner.os }}-${{ runner.arch }}-
 
+      # the X server's own fonts, which the install's Tk draws with on Linux (no Xft): a desktop has them, the runner
+      # may not
+      - name: X server fonts (xfonts-base)
+        if: runner.os == 'Linux'
+        run: dpkg -s xfonts-base >/dev/null 2>&1 || { sudo apt-get update -q && sudo apt-get install -y -q xfonts-base; }
       - name: install-status.json read while the installer writes it (tools/ci_status.py)
         run: python tools/ci_status.py
       - name: MCP server, before the install
@@ -103,6 +111,13 @@ jobs:
           key: ${{ steps.uv-cache.outputs.cache-primary-key }}
       - name: airemove-cli --check
         run: python tools/ci_smoke.py check "$AIREMOVE_DIR"
+      - name: The window and its symbols, as drawn (tools/ci_window.py)
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: window-linux
+          path: ${{ env.AIREMOVE_CI_SHOTS }}
+          if-no-files-found: ignore
       - name: A model from the user's own folder (--model-dir)
         run: python tools/ci_smoke.py folder "$AIREMOVE_DIR"
       - name: Removals end to end, in tiles, on each picture format (tools/ci_removal, ci_tiles, ci_pictures)
