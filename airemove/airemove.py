@@ -2119,8 +2119,9 @@ class Session:
     def get_engine(self, model):
         """SDXL, RORem, FLUX or Qwen-Image on the GPU — one at a time (16 GB): switching unloads the
         others, and SAM 3 for FLUX and Qwen-Image. OSOR is FLUX's engine with OSOR's adapter (loaded the first time).
-        A card with less memory keeps SDXL's and RORem's weights in RAM and moves them per step (engines.SDXL.offload),
-        and DAI's UNet and ControlNet (engines.DAI.offload), so SAM 3 stays there and a removal still runs."""
+        A card with less memory keeps SDXL's and RORem's weights in RAM and moves them per step, or layer by layer
+        when another program leaves too little free (engines.SDXL.offload), and DAI's UNet and ControlNet
+        (engines.DAI.offload), so SAM 3 stays there and a removal still runs."""
         with self._engine_lock:
             cls = ENGINES[model].engine
             name = ENGINE_ATTRS[cls]  # OSOR: FLUX's

@@ -218,9 +218,10 @@ to `birefnet.disabled`): those masks then use the app's own quick analysis.
 - **macOS 12+** on Apple Silicon (M1 or later; 16 GB of memory recommended). Intel Macs are not supported.
 - **Linux x86-64** with NVIDIA (GTX 750 or later), or AMD with ROCm.
 - **Graphics memory:** 8 GB for RORem, the default model, and for DAI ("Remove reflections") (up to 12 GB their
-  weights stay in RAM and move to the GPU part by part: a little slower; `AIREMOVE_CPU_OFFLOAD=1` in the environment
-  does the same on a larger card that runs out of memory); 12 GB for FLUX, 16 GB for Qwen-Image. With less, LaMa and
-  the selection still work.
+  weights stay in RAM and move to the GPU part by part: a little slower; when other programs leave less than 6 GB of
+  the card free, RORem's weights move layer by layer instead: ~3 s more a variant. `AIREMOVE_CPU_OFFLOAD=1` in the
+  environment does the same on a larger card that runs out of memory, `=layers` always layer by layer); 12 GB for
+  FLUX, 16 GB for Qwen-Image. With less, LaMa and the selection still work.
 - **Disk:** 5 to 30 GB, depending on the models.
 - **Internet:** while installing. Afterwards only a check for a new AI Remove on GitHub, at most once a day: it
   sends nothing about you or your photos, and `"update_check": false` in `work/settings.json` turns it off.
