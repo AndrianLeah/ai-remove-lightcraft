@@ -4,6 +4,14 @@
 
 <h1 align="center">AI Remove for LightCraft and Chromaforge</h1>
 
+<p align="center">
+  <a href="https://github.com/AndrianLeah/ai-remove-lightcraft/actions/workflows/ci.yml"><img src="https://github.com/AndrianLeah/ai-remove-lightcraft/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/AndrianLeah/ai-remove-lightcraft/releases/latest"><img src="https://img.shields.io/github/v/release/AndrianLeah/ai-remove-lightcraft?sort=semver&amp;label=release&amp;color=f5c518" alt="Latest release"></a>
+  <a href="https://github.com/AndrianLeah/ai-remove-lightcraft/releases"><img src="https://img.shields.io/github/downloads/AndrianLeah/ai-remove-lightcraft/total?color=f5c518" alt="Downloads"></a>
+  <a href="LICENSE.txt"><img src="https://img.shields.io/github/license/AndrianLeah/ai-remove-lightcraft?color=0b0b0c" alt="MIT licence"></a>
+  <a href="#requirements"><img src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-0b0b0c" alt="Windows, macOS, Linux"></a>
+</p>
+
 Remove objects and people from photos with local AI, from inside [LightCraft](https://github.com/storytold/lightcraft)
 or [Chromaforge](https://github.com/emmertex/chromaforge), or on its own, and all of it runs on your own computer.
 From a RAW the result goes back into a **RAW DNG**, so you keep developing it like any raw file. From a JPEG, PNG,
@@ -16,6 +24,19 @@ It works the same way in both apps, in one of them or in both at once: the insta
 
 > AI Remove is an **unofficial** plug-in. It is not made, sponsored or endorsed by the ArtCraft team, who make
 > LightCraft, nor by Chromaforge's contributors.
+
+## Contents
+
+- [How it works](#how-it-works) · [The panel](#the-panel) · [Features](#features)
+- [LightCraft and Chromaforge](#lightcraft-and-chromaforge)
+- [Requirements](#requirements) · [Install](#install): [Hugging Face token](#hugging-face-token), [models you already have](#models-you-already-have)
+- [Models](#models)
+- [Using it](#using-it): [files it writes](#files-it-writes)
+- [Settings](#settings) · [Languages](#languages)
+- [For AI assistants](#for-ai-assistants)
+- [Uninstall](#uninstall)
+- [Privacy and security](#privacy-and-security)
+- [Development](#development) ([contributing](CONTRIBUTING.md)) · [Licences](#licences)
 
 ## How it works
 
