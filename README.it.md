@@ -4,6 +4,14 @@
 
 <h1 align="center">AI Remove per LightCraft e Chromaforge</h1>
 
+<p align="center">
+  <a href="https://github.com/AndrianLeah/ai-remove-lightcraft/actions/workflows/ci.yml"><img src="https://github.com/AndrianLeah/ai-remove-lightcraft/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/AndrianLeah/ai-remove-lightcraft/releases/latest"><img src="https://img.shields.io/github/v/release/AndrianLeah/ai-remove-lightcraft?sort=semver&amp;label=release&amp;color=f5c518" alt="Ultima versione"></a>
+  <a href="https://github.com/AndrianLeah/ai-remove-lightcraft/releases"><img src="https://img.shields.io/github/downloads/AndrianLeah/ai-remove-lightcraft/total?color=f5c518" alt="Download"></a>
+  <a href="LICENSE.txt"><img src="https://img.shields.io/github/license/AndrianLeah/ai-remove-lightcraft?color=0b0b0c" alt="Licenza MIT"></a>
+  <a href="#cosa-serve"><img src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-0b0b0c" alt="Windows, macOS, Linux"></a>
+</p>
+
 [English](README.md)
 
 Toglie oggetti e persone dalle foto con l'intelligenza artificiale, direttamente dentro
@@ -12,6 +20,19 @@ oppure da solo, e tutto gira sul tuo computer. Lavora sui RAW e anche su JPEG, P
 
 Funziona allo stesso modo in tutte e due le app, in una sola o in entrambe insieme: l'installer ti chiede quale
 configurare (vedi [LightCraft e Chromaforge](#lightcraft-e-chromaforge)).
+
+## Indice
+
+- [Come funziona](#come-funziona) · [Il pannello](#il-pannello)
+- [LightCraft e Chromaforge](#lightcraft-e-chromaforge)
+- [Cosa serve](#cosa-serve) · [Installazione](#installazione): [token di Hugging Face](#sam-3-e-flux-token-di-hugging-face), [modelli che hai già](#modelli-che-hai-già)
+- [I modelli](#i-modelli)
+- [Uso](#uso) · [Impostazioni](#impostazioni) · [Lingua](#lingua) · [Dove finiscono i file](#dove-finiscono-i-file)
+- [Con un assistente AI (MCP)](#con-un-assistente-ai-mcp)
+- [Aggiornare e disinstallare](#aggiornare-e-disinstallare) · [Problemi frequenti](#problemi-frequenti)
+- [Privacy e sicurezza](#privacy-e-sicurezza) · [Licenze](#licenze) · [Contribuire](CONTRIBUTING.md) (in inglese)
+
+## Come funziona
 
 1. In LightCraft o in Chromaforge scegli una foto e premi **Ctrl+Shift+X** (**Cmd+Shift+X** su Mac). Su Windows si
    apre il **pannello di AI Remove** accanto alla finestra dell'app e lavora sulla maschera che selezioni nell'app (vedi

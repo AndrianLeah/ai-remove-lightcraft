@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ideas and questions
+    url: https://github.com/AndrianLeah/ai-remove-lightcraft/discussions
+    about: A model, a feature, a way of working you'd like, or a question about how to do something.
+  - name: Report a security problem
+    url: https://github.com/AndrianLeah/ai-remove-lightcraft/security/advisories/new
+    about: Privately, not in a public issue.

@@ -1,0 +1,78 @@
+name: Something doesn't work
+description: An error, a crash, a result that looks wrong, memory that runs out, or the installer stops
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: For a result that looks wrong, a screenshot of the photo and the selection helps most.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - From LightCraft
+        - From Chromaforge
+        - AI Remove on its own
+        - The installer
+        - An AI assistant (MCP server)
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card and its memory
+      description: Most problems with the models depend on it. `gpu` in the report below says it too.
+      placeholder: NVIDIA RTX 3060 12 GB · Apple M2 16 GB · none
+    validations:
+      required: true
+  - type: dropdown
+    id: models
+    attributes:
+      label: Models involved
+      multiple: true
+      options:
+        - LaMa
+        - RORem
+        - FLUX Fill
+        - Qwen-Image
+        - SAM 3 (selection)
+        - OSOR (shadows)
+        - DAI (reflections)
+        - None, it isn't about a model
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: At the top of AI Remove's window, or `version` in the report below.
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: Output of `airemove-cli --check`
+      description: |
+        Windows: `%USERPROFILE%\AIRemove\venv\Scripts\airemove-cli --check`
+        macOS and Linux: `~/AIRemove/venv/bin/airemove-cli --check`
+        It lists folders on your computer, so read it before posting.
+      render: json
+  - type: textarea
+    id: log
+    attributes:
+      label: The end of the log
+      description: |
+        The app: `AIRemove/work/last-run.log` in your home folder. The installer: `AIRemove/install.log`.
+        Read it before posting: it has file names and folders from your computer.
+      render: text
